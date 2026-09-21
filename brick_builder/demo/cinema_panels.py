@@ -227,6 +227,15 @@ class Readout:
     reference: float | None = None
     """A value worth a dashed line across the plot, in the plot's own units."""
 
+    references: Sequence[float] = field(default_factory=tuple)
+    """Several such values, when one line is not enough -- a yield stress and a strength, say.
+    Each is drawn as its own dashed line and labelled with its own value in the gutter.  Set
+    this or :attr:`reference`, not both."""
+
+    value_text: str | None = None
+    """A readout whose value is a word rather than a number -- a state name.  When it is set it
+    is what the cell prints, and :attr:`value`, :attr:`fmt` and :attr:`unit` are not used."""
+
     marks: Sequence[float] = field(default_factory=tuple)
     """Fractions along the trace (0..1) worth a thin vertical rule -- where one step ended and
     the next began."""
@@ -235,7 +244,16 @@ class Readout:
     """Draw this one as the strip's full-width time plot.  At most one readout may ask for it;
     the rest are drawn as compact title-and-number cells."""
 
+    def lines(self) -> tuple[float, ...]:
+        """Every value that gets a dashed line, from whichever of the two fields was set."""
+
+        if self.references:
+            return tuple(float(v) for v in self.references)
+        return () if self.reference is None else (float(self.reference),)
+
     def text(self) -> str:
+        if self.value_text is not None:
+            return self.value_text
         if self.value is None:
             return "—"
         return f"{self.fmt.format(self.value)} {self.unit}".strip()
@@ -701,21 +719,28 @@ class Overlay:
         draw.text((right, plot.y1 - self._usable_height(plot)), top_text,
                   font=self.f_small, fill=DIM_TEXT, anchor="rm")
         draw.text((right, plot.y1), bottom_text, font=self.f_small, fill=DIM_TEXT, anchor="rm")
-        if readout.reference is None:
+        lines = readout.lines()
+        if not lines:
             return
         span = max(readout.hi - readout.lo, 1e-9)
-        frac = float(np.clip((readout.reference - readout.lo) / span, 0.0, 1.0))
-        y = plot.y1 - frac * self._usable_height(plot)
-        # Nudged clear of the scale ends rather than dropped: the dashed line is the tolerance
-        # and the number on it is the point of the plot, so it is always drawn.
         room = self._line_height(self.f_small)
         top_y = plot.y1 - self._usable_height(plot)
-        if abs(y - plot.y1) < room:
-            y = plot.y1 - room
-        elif abs(y - top_y) < room:
-            y = top_y + room
-        draw.text((right, y), readout.fmt.format(readout.reference),
-                  font=self.f_small, fill=REFERENCE, anchor="rm")
+        placed: list[float] = []
+        for value in sorted(lines, reverse=True):
+            frac = float(np.clip((value - readout.lo) / span, 0.0, 1.0))
+            y = plot.y1 - frac * self._usable_height(plot)
+            # Nudged clear of the scale ends and of each other rather than dropped: a dashed
+            # line whose value is not on it is a stray rule, so every one of them is labelled.
+            if abs(y - plot.y1) < room:
+                y = plot.y1 - room
+            elif abs(y - top_y) < room:
+                y = top_y + room
+            for other in placed:
+                if abs(y - other) < room:
+                    y = other + room
+            placed.append(y)
+            draw.text((right, y), readout.fmt.format(value),
+                      font=self.f_small, fill=REFERENCE, anchor="rm")
 
     def _trace_width(self) -> int:
         return max(int(round(0.0028 * self.height)), 3)
@@ -724,7 +749,7 @@ class Overlay:
         return (rect.height - self._trace_width()) * (1.0 - TRACE_HEADROOM)
 
     def _draw_trace(self, draw, rect: Rect, readout: Readout, colour) -> None:
-        """A time trace: one line, a baseline, the step rules and one dashed reference.
+        """A time trace: one line, a baseline, the step rules and the dashed references.
 
         The plot is inset from the top of its box by :data:`TRACE_HEADROOM`, so a reading at the
         very top of its range does not draw flush against the line above it.
@@ -749,8 +774,8 @@ class Overlay:
                       joint="curve")
         # Drawn last, so that a trace which has arrived at the reference does not hide it: the
         # dashes stay visible over the line, which is what "it got there" looks like.
-        if readout.reference is not None:
-            y = y_of(readout.reference)
+        for value in readout.lines():
+            y = y_of(value)
             dash, gap = 4 * width, 3 * width
             x = rect.x0
             while x < rect.x1:

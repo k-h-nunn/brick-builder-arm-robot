@@ -664,6 +664,15 @@ class ReadoutSpec:
     reference: float | None = None
     """Drawn as a dashed line across the plot: the value the number is heading for."""
 
+    references: tuple[float, ...] = ()
+    """Several such lines, each labelled with its own value -- an allowable and a strength, say.
+    Set this or :attr:`reference`, not both.  With it set, the auto scale also keeps every line
+    on screen, because a labelled line the trace has not reached yet is the point of drawing it."""
+
+    text: bool = False
+    """The value is a word, not a number: the tick supplies a string under :attr:`key` and the
+    cell prints it as it stands.  A text readout carries no trace, so it cannot be the plot."""
+
     plot: bool = False
     """Draw this one as the strip's full-width time plot.  At most one spec may ask for it;
     the rest are compact title-and-number cells along the bottom of the strip."""
@@ -778,7 +787,8 @@ class Film:
         self._marks: list[float] = []
         """Video times where the step on screen changed -- the vertical rules on the trace."""
         self._last_phase: str | None = None
-        self._history: dict[str, list[tuple[float, float]]] = {r.key: [] for r in self.readouts}
+        self._history: dict[str, list[tuple[float, float | str]]] = {
+            r.key: [] for r in self.readouts}
 
     @property
     def panel_size(self) -> tuple[int, int]:
@@ -857,9 +867,16 @@ class Film:
             t_end = series[-1][0] if series else 0.0
             t_start = t_end - self.trace_seconds
             trace = [v for t, v in series if t >= t_start]
+            if spec.text:
+                readouts.append(Readout(label=spec.label, value=None, unit="",
+                                        value_text=value, lo=spec.lo, hi=spec.hi or 1.0,
+                                        fmt=spec.fmt))
+                continue
             hi = spec.hi
             if hi is None:
                 hi = max(max(trace, default=0.0) * 1.08, spec.lo + 1e-6)
+                if spec.references:
+                    hi = max(hi, max(spec.references) * 1.15)
             marks = ()
             if trace and self._marks:
                 # `window`, not `span`: `span` is the subject's share of the frame width, which
@@ -870,7 +887,8 @@ class Film:
                 marks = tuple((t - t0) / window for t in self._marks if t >= t0)
             readouts.append(Readout(label=spec.label, value=value, unit=spec.unit, trace=trace,
                                     lo=spec.lo, hi=hi, fmt=spec.fmt, plot=spec.plot,
-                                    suffix=spec.suffix, reference=spec.reference, marks=marks))
+                                    suffix=spec.suffix, reference=spec.reference,
+                                    references=spec.references, marks=marks))
 
         show_title = video_t < self.title_seconds
         composed, rects = self.overlay.draw(
@@ -942,7 +960,9 @@ class Film:
                 video_t = t_sim - sim_t0
                 for spec in self.readouts:
                     if spec.key in tick.data:
-                        self._history[spec.key].append((video_t, float(tick.data[spec.key])))
+                        reading = (str(tick.data[spec.key]) if spec.text
+                                   else float(tick.data[spec.key]))
+                        self._history[spec.key].append((video_t, reading))
                 if tick.phase != self._last_phase:
                     if self._last_phase is not None:
                         self._marks.append(video_t)
