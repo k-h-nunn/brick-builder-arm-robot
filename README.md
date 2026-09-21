@@ -63,7 +63,9 @@ CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python scripts/make_demo_video.p
 ```
 
 `--cnn-drives` runs the loop on the convolutional scene model, which is what the published film
-shows; `--quality hd1080` is the 1920x1080 version and takes considerably longer.
+shows; `--quality hd1080` is the 1920x1080 version and takes considerably longer. Add `--pick`
+for the whole job -- fetch the brick off the table, then place it -- which is the second
+[film](docs/demos/videos.md).
 
 The docs:
 

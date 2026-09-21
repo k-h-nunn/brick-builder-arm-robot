@@ -91,3 +91,88 @@ The film uses checkpoint `3e07a382`, which is the shipped
 `brick_builder/perception/weights/vision_model.pt`. A local copy at
 `results/film/vision_model_frozen.pt` (git-ignored) takes precedence when present; without it the
 script loads the shipped weights.
+
+# Closed-loop pick-and-place film
+
+<video controls preload="metadata" width="100%"
+       poster="../../media/hd/closed-loop-pick-press.png">
+  <source src="../../media/hd/brick-builder-arm-robot-closed-loop-pick-and-place-1080p.mp4" type="video/mp4">
+</video>
+
+[1920x1080 file](../media/hd/brick-builder-arm-robot-closed-loop-pick-and-place-1080p.mp4)
+
+| Step | Frame |
+|---|---|
+| Approach | [closed-loop-pick-approach.png](../media/hd/closed-loop-pick-approach.png) |
+| Align | [closed-loop-pick-align.png](../media/hd/closed-loop-pick-align.png) |
+| Press the brick down | [closed-loop-pick-press.png](../media/hd/closed-loop-pick-press.png) |
+
+## Run conditions
+
+| Item | Value |
+|---|---|
+| Task | Whole job: fetch a DUPLO 2x2 off the table and place it; two bricks already on the baseplate, one spare brick beside the one to pick |
+| Baseplate offset from nominal | 6.1 mm, 2.2 deg (unknown to the controller) |
+| Brick offset from the supply row | 11.3 mm, 12.6 deg (unknown to the controller) |
+| Scene model (control input) | Simulator ground truth |
+| Scene model (panels) | Convolutional scene model, checkpoint `3e07a382` |
+| Controller | Target-sequence tracking at 10 Hz: feed-forward target action plus feedback on target minus observed scene state |
+| Target sequence | Recorded in the digital twin from the goal and nominal parameters |
+| Dwells that estimate | Hover 55 mm above the brick, second dwell 20 mm above it, lift dwell over the bare table, align dwell over the target cell |
+| Unknown per dwell | Where the brick lies (both approach dwells), how it sits in the jaws (lift), where the baseplate is (align) |
+| Open-loop steps | Final descent onto the brick, Press the brick down, Release, Retract |
+| Video | 1920x1080, 30 fps, H.264, 38.4 s, 1152 frames, single take |
+
+On-screen elements are the same as the placement film.
+
+## Results
+
+Filmed run: brick seated on the target cell; lateral error 0.04 mm; depth error 0.25 mm; Align converged to 0.44 mm over 69 vision ticks.
+
+Ten seeds, identical displaced worlds:
+
+| Control input | Seated on target cell | Lateral error |
+|---|---|---|
+| Ground-truth scene model | 8/10 | 0.02-0.23 mm on seated runs |
+| Convolutional scene model | see below | 0.10-0.33 mm on seated runs |
+| Camera corrections off | 0/10 | median 16.2 mm |
+
+The camera-off column is a clean zero here, unlike the placement task's. The brick's own
+8-15 mm offset on the table is added to the baseplate's, and the grasp is scripted from the
+supply row rather than from where the brick is, so the errors land outside the stud-and-tube
+joint's capture basin instead of partly inside it.
+
+Per-seed, ground truth driving, with the brick's pose in the jaws measured at the lift:
+
+| Seed | Seated | On cell | Lateral [mm] | In the jaws, across / along [mm] |
+|---|---|---|---|---|
+| 0 | yes | yes | 0.15 | -0.30 / 3.28 |
+| 1 | no | yes | 0.19 | -0.16 / 7.71 |
+| 2 | yes | yes | 0.17 | -0.26 / 6.26 |
+| 3 | yes | yes | 0.23 | -0.21 / -7.87 |
+| 4 | no | no | 16.09 | 0.03 / -8.49 |
+| 5 | yes | yes | 0.05 | -0.27 / 2.42 |
+| 6 | yes | yes | 0.08 | -0.26 / -0.44 |
+| 7 | yes | yes | 0.02 | -0.28 / 1.92 |
+| 8 | yes | yes | 0.20 | -0.30 / -1.70 |
+| 9 | yes | yes | 0.11 | -0.29 / -3.48 |
+
+What the jaws close on is what decides a run. Every seed that misses closes on a brick sitting
+more than 8 mm along the jaws; the approach's second dwell is what brought that from 8.3-13.7 mm
+down to 0.4-7.9 and the count from 5/10 to 8/10.
+
+## Reproduction
+
+```
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=3 \
+  python scripts/make_demo_video.py --quality hd1080 --seed 0 --pick \
+    --lead 2.2 --hold 3.0 --stills 6 \
+    --stills-dir media_out/hd/closed_loop_pick_stills \
+    --out media_out/hd/brick_builder_arm_robot_closed_loop_pick_and_place_1080p.mp4
+```
+
+One run of the same loop, headless:
+
+```
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl python scripts/run_placement.py --pick --seed 0
+```

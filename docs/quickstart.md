@@ -58,7 +58,8 @@ RESULT: placed
 
 `--cnn` drives the loop from the trained convolutional scene model, which is what the film shows.
 Without it the same loop runs on simulator ground truth instead. `--seed` redraws the baseplate
-offset and the brick's offset in the jaws; `--pick` fetches the brick from the table first.
+offset and the brick's offset in the jaws; `--pick` fetches the brick from the table first,
+which is the whole job and the second [film](demos/videos.md).
 
 ## Watch a scripted press
 
