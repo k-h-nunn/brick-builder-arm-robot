@@ -171,14 +171,30 @@ class PlaceConfig:
     At 10 mm the grasp reaches its commanded height in a nominal world but still misses on
     displaced ones; at 16 mm, eight on each side, four of five seeds that had missed twice each
     reached it, and three of them landed on the target cell."""
-    pick_freeze_below: float = 0.030
+    pick_low: float = 0.020
+    """Height above the brick of the second, low dwell before the grasp [m].
+
+    The approach is two dwells, not one. The high one at `pick_approach` finds the brick from far
+    enough away that it is certainly in view; this one is as close above it as the view allows,
+    and the estimate that decides the grasp is the one made here. Measured in the twin with the
+    jaws open to `pick_clearance`, the brick's blob stays whole all the way down -- border
+    fraction 0.000 at every height -- while its mass grows from 0.0074 at the high hover to
+    0.0118 here and the weaker singular value of the step's inverse from 4.81 to 5.83 per metre,
+    which is a floor of 0.69 mm against 0.83 mm for the same feature noise. The rest of what it
+    buys is that the correction is frozen 20 mm above the brick rather than 55."""
+
+    pick_low_settle: float = 1.0
+    """Seconds the script stands still at the low dwell [s]."""
+
+    pick_freeze_below: float = 0.034
     """Tool height above the table below which the grasp's correction stops updating [m].
 
-    Below about this the open jaws straddle the brick and cut its blob in two in the wrist view,
-    so the centre the scene model reports stops being the centre of the brick and becomes the
-    centre of whatever slice of it is still visible. Acting on that does not refine the grasp,
-    it shoves the brick sideways out of the gripper -- measured: the brick ended 232 mm away.
-    The loop lines up at the hover, then holds while it comes down."""
+    Just below the low dwell's own tool height, so the last thing the correction sees is that
+    dwell and the final descent is a straight drop on a frozen estimate. It also has to stay
+    above the height at which the open jaws would straddle the brick and cut its blob in two:
+    the centre of a cut blob is the centre of whatever slice is still visible, and acting on
+    that shoves the brick sideways out of the gripper -- measured at 4 mm of clearance, where
+    the brick ended 232 mm away."""
     stall_load: float = 0.45
     """Gripper load, as a fraction of the servo's limit, that counts as closed on the brick."""
 
@@ -386,6 +402,9 @@ class Script:
             yield from self._move("Approach", g.pick_tcp(cfg.pick_approach),
                                   speed=cfg.travel_speed, grip=g.grip_open, spin=0.0)
             yield from self._hold("Approach", cfg.pick_settle)
+            yield from self._move("Approach", g.pick_tcp(cfg.pick_low),
+                                  speed=cfg.descend_speed)
+            yield from self._hold("Approach", cfg.pick_low_settle)
             yield from self._move("Approach", g.pick_tcp(0.0), speed=cfg.descend_speed)
             yield from self._close_on_the_brick("Grasp")
             yield from self._move("Lift", np.array([self._cmd[0], self._cmd[1], g.carry_z]),
@@ -610,6 +629,8 @@ class TrackingEpisode:
         self.correction = np.zeros(3)
         self.k = 0
         self.holds = 0
+        self.blind_holds = 0
+        """Ticks of the current hold where nothing was measured at all."""
         self.max_hold_seen = 0
         self.matched = 0
         self.lag = 0
@@ -861,12 +882,27 @@ class TrackingEpisode:
                 else:
                     self.k += 1
                 self.holds = 0
+                self.blind_holds = 0
             else:
                 settled = 0
                 self.holds += 1
+                if err_mm != err_mm:
+                    self.blind_holds += 1
                 self.max_hold_seen = max(self.max_hold_seen, self.holds)
                 if self.holds > cfg.max_hold:
-                    self.failure = f"stalled at {frame.step} with {err_mm:.2f} mm to make up"
+                    # Two different faults wear the same number of held ticks. One is an error
+                    # the loop can see and cannot reduce; the other is a reference that has left
+                    # the window, where there is nothing to reduce it with. They want different
+                    # answers, so the record says which it was.
+                    if self.blind_holds * 2 > self.holds:
+                        self.failure = (
+                            f"stalled at {frame.step}: nothing to line up on for "
+                            f"{self.blind_holds} of {self.holds} ticks, "
+                            f"{seen} reference blob(s) matched")
+                    else:
+                        self.failure = (
+                            f"stalled at {frame.step} with {err_mm:.2f} mm to make up, "
+                            f"{seen} reference blob(s) matched")
                     break
         for index, errs in self.step_errors.items():
             title = next(f.step for f in frames if f.step_index == index)
