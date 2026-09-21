@@ -115,8 +115,3 @@ The factory returns anything satisfying `perception.scene_model.SceneModelSource
 A source whose row layout is not a documented set of named fields publishes
 `scene_model.opaque_schema(W)` rather than claiming `PLACEHOLDER_SLOT_SCHEMA`'s fields; consumers
 ask the schema what is available. See [Perception](docs/guide/06-perception.md).
-
-
-## Code of conduct
-
-See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). It is short.
