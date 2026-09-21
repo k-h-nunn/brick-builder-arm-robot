@@ -274,7 +274,7 @@ class VisualServo:
         if blind:
             return {
                 "delta": np.zeros(3), "err_m": float("nan"), "err_mm": float("nan"),
-                "done": False, "seen": len(names), "found": found, "blind": True,
+                "done": False, "seen": len(names), "found": found, "want": want, "blind": True,
                 "d_r": np.zeros(3), "d_b": np.zeros(2),
             }
 
@@ -289,8 +289,8 @@ class VisualServo:
             if len(names) < self.min_refs:
                 return {
                     "delta": np.zeros(3), "err_m": float("nan"), "err_mm": float("nan"),
-                    "done": False, "seen": len(names), "found": found, "blind": True,
-                    "d_r": np.zeros(3), "d_b": np.zeros(2),
+                    "done": False, "seen": len(names), "found": found, "want": want,
+                    "blind": True, "d_r": np.zeros(3), "d_b": np.zeros(2),
                 }
             idx = []
             for n in names:
@@ -403,5 +403,8 @@ class VisualServo:
         return {
             "delta": delta, "err_m": err_m, "err_mm": 1e3 * err_m,
             "done": self._hits >= self.settle_ticks, "seen": len(names),
-            "found": found, "blind": False, "d_r": d_r, "d_b": d_b,
+            # `want` is the target frame read through the same feature extraction as `found`,
+            # which is what a learned inverse differences against; nothing on the analytic path
+            # reads it.
+            "found": found, "want": want, "blind": False, "d_r": d_r, "d_b": d_b,
         }

@@ -143,6 +143,15 @@ class PlaceConfig:
     closed_loop: bool = True
     """Off: the recorded actions are replayed and nothing is corrected. The control condition."""
 
+    inverse: str = "analytic"
+    """Which one-step inverse turns the scene-state difference into a tool correction.
+
+    `"analytic"` is `-lambda * J^+ (s - s*)` with `J` measured in the twin. `"learned"` loads
+    `action/weights/inverse.npz` and calls that instead, behind the same gates, the same
+    saturation and the same integrator; everything else -- the feed-forward, the progress index,
+    the dwells, the end conditions -- is untouched, so the two are measurable against each other
+    on the same seeds. The default is the analytic one until the learned one matches it."""
+
     hover: float = 0.020
     low: float = 0.006
     align_hold: float = 4.0
@@ -596,9 +605,20 @@ class TrackingEpisode:
 
     def __init__(self, scene: Scene, ideal: IdealSequence, *, cfg: PlaceConfig = PlaceConfig(),
                  seed: int = 0, target=TARGET_CELL, twin_prepare=None,
-                 build_decode: bool = False, source=None) -> None:
+                 build_decode: bool = False, source=None, inverse=None, observer=None) -> None:
         self.cfg = cfg
         self.ideal = ideal
+        # `inverse` overrides `cfg.inverse`; `None` means "whatever the config asks for". The
+        # learned one is a few thousand multiply-accumulates on slot-row differences and is
+        # loaded here, once, so the tick itself only runs the forward pass.
+        if inverse is None and cfg.inverse == "learned":
+            from .models.inverse import LearnedInverse
+
+            inverse = LearnedInverse.load()
+        self.inverse = inverse
+        self.observer = observer
+        """Called once per vision tick with everything a tuple log needs. Off the control path:
+        the loop's own behaviour does not depend on it (see `action/learn/collect.py`)."""
         self.world = WorldAdapter(scene, rng=np.random.default_rng(seed),
                                   build_decode=build_decode, source=source)
         held = HeldBrick(nx=WANTED[0], ny=WANTED[1], colour=WANTED[2])
@@ -1063,8 +1083,13 @@ class TrackingEpisode:
             self._pred_mm = 1e3 * float(np.linalg.norm(measured[:2] - self._predicted[:2]))
             self.pred_errors.append(self._pred_mm)
 
+        analytic = -self.cfg.lam * measured
         if self.cfg.closed_loop and not self.frozen and self.dwelling and self.trusted:
-            delta = -self.cfg.lam * measured
+            # The one substitution: where the correction increment comes from. The saturation,
+            # the integrator and its ceiling are the same either way, and so is everything that
+            # reads `measured` -- the reported tracking error, the tube the progress index waits
+            # on, and the prediction error.
+            delta = analytic.copy() if self.inverse is None else self._learned(frame, out, analytic)
             n = float(np.linalg.norm(delta[:2]))
             if n > 0.0012:
                 delta[:2] *= 0.0012 / n
@@ -1075,9 +1100,24 @@ class TrackingEpisode:
                 self.correction[:2] *= self.cfg.max_correction / n_c
         else:
             delta = np.zeros(3)
+        if self.observer is not None:
+            self.observer(self, frame, best, out, measured, analytic, delta)
 
         self._predicted = measured + delta
         return best, 1e3 * float(np.linalg.norm(measured[:2])), delta, int(out["seen"])
+
+    def _learned(self, frame: ReferenceFrame, out: dict, analytic: np.ndarray) -> np.ndarray:
+        """`G(observed scene state, target scene state, mechanical state)`, in metres and radians.
+
+        Slot-row differences and what the servo bus reports, and nothing else: the same two
+        readings the analytic inverse takes, minus the Jacobian.
+        """
+        mech = np.concatenate([self.world.joint_position, self.world.joint_speed])
+        return np.asarray(self.inverse.delta(
+            state=self._state, target=self.ideal.frames[self.matched].state,
+            found=out["found"], want=out["want"], mech=mech,
+            in_hand=self.ideal.held_by_step.get(frame.step_index) is not None,
+            analytic=analytic), dtype=float)
 
     # -- bookkeeping -------------------------------------------------------------------------------
 
