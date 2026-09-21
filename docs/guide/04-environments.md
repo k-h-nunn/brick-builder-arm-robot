@@ -7,6 +7,13 @@ first task built on them, used to prove the whole multi-rate loop end to end.
 `brick_builder/control/` that it is built on; both have their own sections below.
 `AlignFromTokens-v0` subclasses the same `ArmEnv` described here.
 
+!!! note "Measurement status"
+    Results on this page that depend on arm positioning or press success (scripted press,
+    `PressFromHeld`, `AlignFromTokens`, the positioning dead band, deflection under load) were
+    measured before the servo model's encoder was moved to the output shaft
+    ([Robot and servo model](03-robot-and-servo-model.md)) and have not been re-measured.
+    Current closed-loop results are in [Closed-loop films](../demos/videos.md).
+
 ## Purpose
 
 Brick Builder Arm Robot's RL tasks are [Gymnasium](https://gymnasium.farama.org/) environments:

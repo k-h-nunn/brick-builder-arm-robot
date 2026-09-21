@@ -9,6 +9,13 @@ run](#reproducing-the-example-run) and [SAC: the off-policy fallback
 recipe](#sac-the-off-policy-fallback-recipe)) — tests of the implementations themselves, predating
 any brick_builder environment.
 
+!!! note "Measurement status"
+    Results on this page that depend on arm positioning or press success (scripted press,
+    `PressFromHeld`, `AlignFromTokens`, the positioning dead band, deflection under load) were
+    measured before the servo model's encoder was moved to the output shaft
+    ([Robot and servo model](03-robot-and-servo-model.md)) and have not been re-measured.
+    Current closed-loop results are in [Closed-loop films](../demos/videos.md).
+
 ## Purpose
 
 A policy is trained here (reinforcement learning) and a trained policy is scored against the
