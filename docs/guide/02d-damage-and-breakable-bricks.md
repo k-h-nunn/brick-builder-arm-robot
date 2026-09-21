@@ -70,21 +70,21 @@ insertion path against a 10 to 14 N press, and a contact 25 times stiffer needs 
 to close by the same amount. **A press-fit insertion in a rigid-body simulator runs on contact
 compliance**, and this one is calibrated, through the placement policy, to MuJoCo's default.
 
-So the derivation is not applied to brick-on-brick or brick-on-baseplate at all. Those two keep
-MuJoCo's shipped `solref` and `solimp`, and the derived setting stays selectable as
-`contact_model: derived` so the measurement can be repeated. That is a real limit on how far the
-material model reaches into this simulator, and it is stated rather than papered over.
+The derivation is therefore not applied to brick-on-brick or brick-on-baseplate. The same holds for
+brick-on-table: with the derived table contact the nominal closed-loop pick-and-place ends 0.39 mm
+short of full depth (not seated); with MuJoCo's settings it seats at 0.00 mm, because the grasp off
+the table is calibrated against that pair. These pairs keep MuJoCo's shipped `solref` and `solimp`;
+the derived setting stays selectable as `contact_model: derived`.
 
 | Pair | Applied solref [ms] | Applied solimp | Times softer than the material |
 |---|---|---|---|
 | brick on brick / baseplate | 20.0 (MuJoCo's) | 0.9 0.95 0.001 | 3.8e5 |
 | jaw on brick | 4.0 | 0.95 0.999 0.0005 | 1.6e4 |
-| brick on table | 4.0 | 0.95 0.999 0.0005 | 6.4e4 |
+| brick on table | 20.0 (MuJoCo's); 4.0 with `derived` | 0.9 0.95 0.001; 0.95 0.999 0.0005 with `derived` | 1.6e6; 6.4e4 with `derived` |
 | arm link on anything | 4.0 | 0.95 0.999 0.0005 | 1.6e4 |
 
-The table and the jaw pads carry `priority = 1`, so their own settings decide a contact with a
-brick outright instead of being averaged with the brick's, which belong to a different question.
-The jaw pads already carried these numbers; the table is what this change added.
+The jaw pads carry `priority = 1`, so their own settings decide a contact with a brick outright
+instead of being averaged with the brick's. Under `derived` the table carries `priority = 1` too.
 
 ### 2.3 Measured penetration
 
@@ -111,8 +111,8 @@ so the force-against-depth curve and the bench's penetration and energy checks
 
 `bricks.contact_model` in `configs/params/default.yaml`, or `SceneConfig.contact_model`:
 
-- `material` — the default. Solver floor on the table, the jaw pads and the arm links;
-  MuJoCo's own settings on brick-on-brick.
+- `material` — the default. Solver floor on the jaw pads and the arm links; MuJoCo's own settings
+  on brick-on-brick, brick-on-baseplate and brick-on-table.
 - `derived` — solver floor only. What the material asks for; stops the press 4.50 mm short.
 - `mujoco` — MuJoCo's shipped defaults, so the change can be switched off and measured against.
 

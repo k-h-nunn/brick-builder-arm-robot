@@ -702,6 +702,12 @@ def scene_contact(cfg: SceneConfig, pair: str = "brick_on_brick") -> ContactMode
 
     if cfg.contact_model == "mujoco":
         return MUJOCO_CONTACT
+    if cfg.contact_model == "material" and pair == "brick_on_table":
+        # Measured: with the derived table contact the nominal closed-loop pick-and-place ends
+        # 0.39 mm short of full depth (not seated); with MuJoCo's own it seats at 0.00 mm. The
+        # grasp off the table is calibrated against this pair the same way the press is against
+        # brick on brick, so the default keeps it; "derived" still applies the material value.
+        return MUJOCO_CONTACT
     return material_contact(pair=pair, press_limited=cfg.contact_model == "material")
 
 

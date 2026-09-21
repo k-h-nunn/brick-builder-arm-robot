@@ -78,22 +78,30 @@ def test_a_dissimilar_pair_uses_the_series_contact_modulus():
 # ---------------------------------------------------------------------------
 
 
-def test_the_scene_default_writes_the_material_contact_onto_the_table():
-    """The table is where the derivation lands in a composed scene.
+def test_the_derived_model_writes_the_material_contact_onto_the_table():
+    """The derived model applies the material value to the table, with priority 1 so the table
+    decides a brick-on-table contact outright."""
 
-    Brick on brick and brick on baseplate keep MuJoCo's own settings, because the derived one
-    stops the press dead; the table, the jaw pads and the arm links do not carry a press.
-    """
-
-    scene = build_scene(SceneConfig())
-    table = material_contact(pair="brick_on_table")
+    scene = build_scene(SceneConfig(contact_model="derived"))
+    table = material_contact(pair="brick_on_table", press_limited=False)
     ref, imp = _geom_solref(scene.model, TABLE_GEOM)
     assert ref == pytest.approx(table.solref)
     assert imp == pytest.approx(table.solimp)
     gid = mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_GEOM, TABLE_GEOM)
-    # Priority 1, so the table decides a brick-on-table contact outright rather than being
-    # averaged with the brick's own settings, which belong to the press.
     assert int(scene.model.geom_priority[gid]) == 1
+
+
+def test_the_scene_default_keeps_mujocos_contact_on_the_table():
+    """The default keeps MuJoCo's own settings on the table as it does on the press pair: the
+    closed-loop pick-and-place's grasp and seating depth were measured against them (derived
+    table contact: 0.39 mm short of full depth; MuJoCo's: 0.00 mm)."""
+
+    scene = build_scene(SceneConfig())
+    ref, imp = _geom_solref(scene.model, TABLE_GEOM)
+    assert tuple(ref) == pytest.approx((0.02, 1.0))
+    assert tuple(imp)[:3] == pytest.approx((0.9, 0.95, 0.001))
+    gid = mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_GEOM, TABLE_GEOM)
+    assert int(scene.model.geom_priority[gid]) == 0
 
 
 def test_the_press_pair_keeps_mujocos_own_settings_and_says_so():
