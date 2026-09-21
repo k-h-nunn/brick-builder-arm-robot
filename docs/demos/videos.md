@@ -103,8 +103,7 @@ script loads the shipped weights.
 
 | Step | Frame |
 |---|---|
-| Approach | [closed-loop-pick-approach.png](../media/hd/closed-loop-pick-approach.png) |
-| Align | [closed-loop-pick-align.png](../media/hd/closed-loop-pick-align.png) |
+| Grasp | [closed-loop-pick-grasp.png](../media/hd/closed-loop-pick-grasp.png) |
 | Press the brick down | [closed-loop-pick-press.png](../media/hd/closed-loop-pick-press.png) |
 
 ## Run conditions
@@ -112,22 +111,21 @@ script loads the shipped weights.
 | Item | Value |
 |---|---|
 | Task | Whole job: fetch a DUPLO 2x2 off the table and place it; two bricks already on the baseplate, one spare brick beside the one to pick |
-| Baseplate offset from nominal | 6.1 mm, 2.2 deg (unknown to the controller) |
-| Brick offset from the supply row | 11.3 mm, 12.6 deg (unknown to the controller) |
-| Scene model (control input) | Simulator ground truth |
-| Scene model (panels) | Convolutional scene model, checkpoint `3e07a382` |
+| Baseplate offset from nominal | 6.5 mm, 2.9 deg (unknown to the controller) |
+| Brick offset from the supply row | 13.4 mm, 15.8 deg (unknown to the controller) |
+| Scene model (control input and panels) | Convolutional scene model, checkpoint `3e07a382` |
 | Controller | Target-sequence tracking at 10 Hz: feed-forward target action plus feedback on target minus observed scene state |
 | Target sequence | Recorded in the digital twin from the goal and nominal parameters |
 | Dwells that estimate | Hover 55 mm above the brick, second dwell 20 mm above it, lift dwell over the bare table, align dwell over the target cell |
 | Unknown per dwell | Where the brick lies (both approach dwells), how it sits in the jaws (lift), where the baseplate is (align) |
 | Open-loop steps | Final descent onto the brick, Press the brick down, Release, Retract |
-| Video | 1920x1080, 30 fps, H.264, 38.4 s, 1152 frames, single take |
+| Video | 1920x1080, 30 fps, H.264, 38.3 s, 1150 frames, single take, seed 1 |
 
 On-screen elements are the same as the placement film.
 
 ## Results
 
-Filmed run: brick seated on the target cell; lateral error 0.04 mm; depth error 0.25 mm; Align converged to 0.44 mm over 69 vision ticks.
+Filmed run (seed 1, convolutional scene model driving): brick seated on the target cell; lateral error 0.08 mm; depth error 0.00 mm; Align converged to 0.71 mm over 71 vision ticks.
 
 Ten seeds, identical displaced worlds:
 
@@ -140,7 +138,7 @@ Ten seeds, identical displaced worlds:
 Both scene models reach the same count on these ten seeds, and they do not fail on the same
 ones: ground truth misses seeds 1 and 4, the convolutional model seeds 0 and 2, and on three of
 those four the brick is on the target cell but short of full depth rather than on the wrong
-cell. The take above is driven by ground truth.
+cell. The take above is driven by the convolutional scene model.
 
 The camera-off column is a clean zero here, unlike the placement task's. The brick's own
 8-15 mm offset on the table is added to the baseplate's, and the grasp is scripted from the
@@ -170,7 +168,7 @@ down to 0.4-7.9 and the count from 5/10 to 8/10.
 
 ```
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=3 \
-  python scripts/make_demo_video.py --quality hd1080 --seed 0 --pick \
+  python scripts/make_demo_video.py --quality hd1080 --seed 1 --pick --cnn-drives \
     --lead 2.2 --hold 3.0 --stills 6 \
     --stills-dir media_out/hd/closed_loop_pick_stills \
     --out media_out/hd/brick_builder_arm_robot_closed_loop_pick_and_place_1080p.mp4
