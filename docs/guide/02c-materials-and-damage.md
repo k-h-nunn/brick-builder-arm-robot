@@ -1,17 +1,18 @@
 # Materials and damage
 
-**Status: analysis, plus three modules that implement it, none wired in.** Sections 1-5 cover
+**Status: analysis, plus three modules that implement it.** Sections 1-5 cover
 plastic behaviour at room temperature, the press-fit mechanics, and brick failure thresholds.
 Section 6 is now code: `brick_builder/bricks/materials.py` (sourced property database and every
 derivation on this page), `damage.py` (cheap per-step estimate), and `breakable.py` (a brick built
 from separable pieces), described under "Using the material and damage models" at the end.
 Section 7 lists the measurements needed to replace the remaining assumptions with facts.
 
-**All three modules are opt-in.** No scene, env or training run in this repository constructs a
-`DamageModel` or calls `derived_snap_params()`. A scene that never imports them behaves exactly as
-before, and the simulator's `f_clutch` stays at the 1.0 N placeholder rather than the 4.8 N this
-page derives. Damage is not in any reward, failure class or termination condition yet; section 6.3
-specifies what wiring it in would require.
+**Default wiring.** Every composed scene attaches a damage monitor (`damage.py`), and the contact
+settings of the brick-table and jaw-brick pairs come from `materials.contact_settings`; breakable
+bricks (`breakable.py`) are a parameter, off by default. Details, switches and measured costs:
+[Damage and breakable bricks](02d-damage-and-breakable-bricks.md). The simulator's `f_clutch`
+default stays at the assumed 1.0 N per stud, not the 4.8 N this page derives, and damage is not in
+any reward or termination condition; section 6.3 specifies what that would require.
 
 Units are SI at 23 °C unless stated otherwise. Every number carries its source; an assumption is
 labelled as such, and an unresearched quantity is labelled unknown.
@@ -348,9 +349,9 @@ wrong direction, to 302.7 µm.
 
 | Pair | condim | solref | solimp | friction | Confidence |
 |---|---|---|---|---|---|
-| brick on brick, brick on baseplate | 3 | (0.004, 1.0) | (0.95, 0.999, 0.0005) | 0.35 | friction has **no source**; randomize 0.2 to 0.5 |
+| brick on brick, brick on baseplate | 3 | press bench: (0.004, 1.0); composed scene: (0.02, 1.0) | bench: (0.95, 0.999, 0.0005); scene: (0.9, 0.95, 0.001) | 0.35 | friction has **no source**; randomize 0.2 to 0.5. The scene keeps MuJoCo's default on this pair: at 4 ms the closed-loop press stops 4.50 mm short of seating ([Damage and breakable bricks](02d-damage-and-breakable-bricks.md), section 2.2) |
 | jaw pad on brick (PLA on ABS) | 4, priority 1 | (0.004, 1.0) | (0.95, 0.999, 0.0005) | currently 1.0 | 1.0 is a modelling choice to make the grasp hold, not a measurement. PLA is reported to have *lower* friction than ABS, so the physical value is more likely 0.3 to 0.5. Randomize 0.3 to 1.0 and keep the priority so the pad's value wins |
-| brick on table | 3 | (0.004, 1.0) | same | 0.4 | depends entirely on the table; randomize 0.2 to 0.8 |
+| brick on table | 3, priority 1 | (0.004, 1.0) | same | 0.4 | depends entirely on the table; randomize 0.2 to 0.8 |
 | arm link on anything | 3 | (0.004, 1.0) | same | default | collisions, not manipulation; nothing rests on these |
 
 The `condim 4` / `priority 1` setting on the pads is correct and should stay: it gives the pad
@@ -1035,9 +1036,9 @@ anchors that end of the ladder, and no policy will get near it.
 
 ## Using the material and damage models
 
-Sections 0 to 7 are the analysis; this section is the code that implements it. Three modules, all
-opt-in — nothing in them changes a default, and a scene that never imports them behaves exactly as
-before.
+Sections 0 to 7 are the analysis; this section is the code that implements it. The damage monitor
+is attached to every composed scene by default; breakable bricks and the fully derived contact
+model are parameters. Damage states: intact, marked, loosened, yielded, cracked, broken.
 
 | Module | What it is | When you want it |
 |---|---|---|
