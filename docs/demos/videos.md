@@ -87,5 +87,7 @@ CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=4 \
     --out media_out/hd/brick_builder_arm_robot_closed_loop_placement_1080p.mp4
 ```
 
-The checkpoint is frozen at `results/film/vision_model_frozen.pt` (sha256 `3e07a382...`) so the
-film and the seed tables are reproducible while training continues.
+The film uses checkpoint `3e07a382`, which is the shipped
+`brick_builder/perception/weights/vision_model.pt`. A local copy at
+`results/film/vision_model_frozen.pt` (git-ignored) takes precedence when present; without it the
+script loads the shipped weights.

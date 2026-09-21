@@ -314,13 +314,14 @@ class VisualServo:
         d_r = np.array([d_r[0], d_r[1], 0.0])
         self.last_yaw_weight = 0.0
         if st.spin_gain is not None and abs(st.spin_gain) > 0.2:
-            from .twin import blob_orientation, orientation_error, pair_orientation
+            from .twin import _pair_angle, _wrap, blob_orientation, orientation_error
 
             z_obs = z_star = None
             fold = int(st.angle_period)
             if st.angle_mode == "pair" and len(names) >= 2:
-                z_obs = pair_orientation(s)
-                z_star = st.spin_star if want is None else pair_orientation(target)
+                star = st.spin_star if want is None else _pair_angle(target)
+                d_r[2] = _wrap(_pair_angle(s) - float(star)) / st.spin_gain
+                self.last_yaw_weight = 1.0
             elif st.angle_mode == "blob" and found.slots.get(st.angle_slot) is not None:
                 z_obs, fold = blob_orientation(actual, found.slots[st.angle_slot])
                 z_star = st.spin_star
@@ -339,7 +340,9 @@ class VisualServo:
                 and found.slots.get(self.brick_ref.name) is not None:
             from .twin import brick_features
 
-            b = brick_features(actual, found.slots[self.brick_ref.name])
+            # Only as many features as the Jacobian was built from: the placement task keeps
+            # the two-column centre-only form it was measured with, the pick uses the full row.
+            b = brick_features(actual, found.slots[self.brick_ref.name])[:st.b_star.shape[0]]
             # Deliberately NOT taken from the reference frame. The held brick's row is read
             # against the twin posed where the tool is being *commanded*, because the reference
             # frame was recorded from a pose several millimetres away and the brick's silhouette

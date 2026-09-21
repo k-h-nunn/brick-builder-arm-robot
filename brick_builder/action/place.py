@@ -98,6 +98,15 @@ class PlaceConfig:
     the error keeps being reported, and the correction stops moving.
     """
 
+    dwell_only: bool | None = None
+    """Estimate only where the sequence dwells. `None` means "when picking".
+
+    The pick needs it: estimating while the arm crosses to the supply area integrated tracking
+    lag into the correction and walked a brick 116 mm. The placement task does NOT want it --
+    it was measured 10/10 estimating throughout, and gating it to dwells alone changed that to
+    0/3 with whole-cell errors. Two different tasks, two different answers, and the flag says so
+    rather than one of them quietly paying for the other."""
+
     use_yaw: bool = True
     """Whether the loop corrects tool yaw at all. A knob for isolating it, and an honest switch:
     a yaw estimate that is wrong is worse than none, because a square brick does not care how it
@@ -609,6 +618,9 @@ class TrackingEpisode:
             brick_body=held, tol_mm=self.cfg.tol_mm, min_refs=1,
             angle_from_blob=(len(bodies) == 1), square=(WANTED[0] == WANTED[1]),
             grip=pose.grip,
+            # Three in-hand degrees of freedom only for a pick, where the brick can sit deep in
+            # the jaws. The placement task keeps the two-column form it was measured 10/10 with.
+            brick_dof=3 if self.cfg.pick else 2,
         )
 
     def _settle_servo(self, held, frame, bodies) -> None:
@@ -714,8 +726,9 @@ class TrackingEpisode:
             # tracking lag, the correction is deliberately held constant, and holding the index
             # as well simply parks the tool part-way through the move. That is what stopped the
             # grasp descent 10 mm short and left 12 mm of vertical offset in the jaws.
+            dwell_only = cfg.pick if cfg.dwell_only is None else cfg.dwell_only
             playing_forward = (self.frozen or self._descending or not cfg.closed_loop
-                               or not self.dwelling)
+                               or (dwell_only and not self.dwelling))
             if err_mm != err_mm or err_mm <= tube or playing_forward:
                 if last:
                     # Finishing is the tight test, not the advancing one -- unless the
@@ -768,8 +781,10 @@ class TrackingEpisode:
         # the bias of a single small blob, not by the world. Integrating those frames is what
         # walked a brick 116 mm in a world where nothing was wrong. On moving frames the run is
         # feed-forward plus the last constant estimate, and nothing else.
-        self.dwelling = (1e3 * frame.travel < self.cfg.dwell_travel_mm
-                         and float(np.max(np.abs(self.world.joint_speed))) < self.cfg.dwell_speed)
+        dwell_only = self.cfg.pick if self.cfg.dwell_only is None else self.cfg.dwell_only
+        self.dwelling = (not dwell_only) or (
+            1e3 * frame.travel < self.cfg.dwell_travel_mm
+            and float(np.max(np.abs(self.world.joint_speed))) < self.cfg.dwell_speed)
         rel = self.frozen and self.ideal.held_by_step.get(frame.step_index) is None
         # In relative mode the placed brick is the whole point: measured over the baseplate and
         # the bricks that never moved, the relative error is near zero whatever the arm did. If

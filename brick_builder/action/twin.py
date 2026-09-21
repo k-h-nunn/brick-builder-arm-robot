@@ -192,7 +192,8 @@ class DigitalTwin:
                    *, d_xy: float = 0.002, d_spin: float = math.radians(2.0),
                    tol_mm: float = 0.3, brick_body: str | None = None,
                    min_refs: int = 2, angle_from_blob: bool = False,
-                   square: bool = False, grip: float | None = None) -> TwinStep:
+                   square: bool = False, grip: float | None = None,
+                   brick_dof: int = 2) -> TwinStep:
         """Everything one servoing step needs, measured once in the twin before the loop runs.
 
         `bodies` maps a plain-words label ("the yellow 2x4") to the body the twin knows it by.
@@ -246,10 +247,14 @@ class DigitalTwin:
             c_p = self._features_at(goal_tcp, goal_spin, (0.0, 0.0, d_spin), references, names)
             c_m = self._features_at(goal_tcp, goal_spin, (0.0, 0.0, -d_spin), references, names)
             if all(c_p[n] is not None and c_m[n] is not None for n in names):
-                spin_star = pair_orientation(s_star)
-                err, _ = orientation_error(pair_orientation(_stack(c_p, names)),
-                                           pair_orientation(_stack(c_m, names)), 1)
-                spin_gain = err / (2.0 * d_spin)
+                # Pair mode keeps plain wrapped angles. The branch cut that bites a square
+                # brick sits at 45 degrees, right where a gripped brick lives; the line joining
+                # two reference blobs would have to reverse end for end to reach ITS cut at 180,
+                # which never happens. Switching this path to the ratio form changed the
+                # placement task from 10/10 to 0/3, so it stays as it was and as it was measured.
+                spin_star = _pair_angle(s_star)
+                spin_gain = _wrap(_pair_angle(_stack(c_p, names))
+                                  - _pair_angle(_stack(c_m, names))) / (2.0 * d_spin)
                 period = 1
         elif len(names) == 1 and angle_from_blob:
             # One brick to line up on: its own ellipse is the only thing that says which way it
@@ -271,7 +276,8 @@ class DigitalTwin:
 
         J_brick = J_brick_pinv = b_star = None
         if brick_ref is not None:
-            b_star, J_brick = self._brick_jacobian(goal_tcp, goal_spin, brick_ref, d_xy)
+            b_star, J_brick = self._brick_jacobian(goal_tcp, goal_spin, brick_ref, d_xy,
+                                                   dof=brick_dof)
             J_brick_pinv = np.linalg.pinv(J_brick, rcond=1e-6)
 
         # leave the twin sitting at the goal pose, which is what a caller rendering the
@@ -288,7 +294,8 @@ class DigitalTwin:
 
     # -- the held brick's own Jacobian ------------------------------------------------------------
 
-    def _brick_jacobian(self, goal_tcp, goal_spin: float, brick_ref, d_xy: float):
+    def _brick_jacobian(self, goal_tcp, goal_spin: float, brick_ref, d_xy: float,
+                        *, dof: int = 2):
         """How the held brick's blob changes when the brick sits somewhere else in the hand.
 
         Three columns, not two, and eight features, not two. A brick sitting lower in the jaws
@@ -323,12 +330,13 @@ class DigitalTwin:
                      if not state.is_empty(k) and int(state.slot_ids[k]) == iid]
             if not match:
                 raise BlindStep("the twin lost the held brick's blob measuring its Jacobian")
-            return brick_features(state, match[0])
+            row = brick_features(state, match[0])
+            return row if dof >= 3 else row[:2]
 
         try:
             b_star = blob((0.0, 0.0, 0.0))
             cols = []
-            for axis in (0, 1, 2):
+            for axis in range(dof):
                 plus = np.zeros(3)
                 plus[axis] = d_xy
                 cols.append((blob(plus) - blob(-plus)) / (2.0 * d_xy))
@@ -394,9 +402,9 @@ def orientation_error(z_obs: complex, z_target: complex, fold: int) -> tuple[flo
     return float(np.angle(z_obs * np.conj(z_target)) / fold), float(min(abs(z_obs), abs(z_target)))
 
 
-def pair_orientation(s: np.ndarray) -> complex:
-    """The line from the first reference blob to the second, as a complex number."""
-    return complex(float(s[2] - s[0]), float(s[3] - s[1]))
+def _pair_angle(s: np.ndarray) -> float:
+    """Angle of the line from the first reference blob to the second, in the image."""
+    return float(math.atan2(s[3] - s[1], s[2] - s[0]))
 
 
 def _wrap_to(a: float, period: float) -> float:

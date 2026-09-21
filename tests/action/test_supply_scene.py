@@ -1,8 +1,7 @@
 """The loose supply bricks: bricks on a table, and nothing else holding them.
 
-The deliverable's hardware is a bare arm on a bare table. A tray is a fixture, and the owner
-never listed one, so the closed-loop pick-and-place scene puts its spare bricks straight on the
-table. These checks are the ones that would catch that quietly changing: that the bricks exist
+The hardware is a stock arm on a bare table with no tray or fixture, so the closed-loop
+pick-and-place scene puts its spare bricks straight on the table. These checks are the ones that would catch that quietly changing: that the bricks exist
 with their own bodies, that no tray gets built around them, that they rest on the table rather
 than hovering or sinking, and that the tray option still works for the scenes that use it.
 """

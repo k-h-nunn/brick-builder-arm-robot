@@ -121,9 +121,9 @@ def spec_line(*, driving: str, displayed: str, offset_mm: float, offset_deg: flo
     """
     job = "Closed-loop pick and place" if pick else "Closed-loop placement"
     model = (f"scene model: {driving}" if driving == displayed
-             else f"control input: {driving} | panel: {displayed}")
-    return (f"{job} | {model} | controller: ideal-sequence tracking, 10 Hz | "
-            f"brick: DUPLO 2x2 | baseplate offset: {offset_mm:.1f} mm, {offset_deg:.1f} deg")
+             else f"control: {driving} | panel: {displayed}")
+    return (f"{job} | {model} | target-sequence tracking, 10 Hz | "
+            f"DUPLO 2x2 | baseplate offset: {offset_mm:.1f} mm, {offset_deg:.1f} deg")
 
 
 DARK = (20, 22, 26)
@@ -324,10 +324,10 @@ def closed_loop_film(out: Path, *, quality_name: str = "hd1080", seed: int = 1,
         brick = scene.held_name
     studio_look(scene.model, quality)
     source = None
-    driving = "ground-truth scene model"
+    driving = "ground truth"
     if cnn_drives:
         source = _cnn()
-        driving = f"CNN, frozen {FROZEN_SHA}"
+        driving = f"CNN {FROZEN_SHA}"
     episode = TrackingEpisode(scene, ideal, cfg=cfg, seed=seed, twin_prepare=prepare,
                               build_decode=True, source=source)
     truth = Labeller(scene)
@@ -337,8 +337,8 @@ def closed_loop_film(out: Path, *, quality_name: str = "hd1080", seed: int = 1,
     length = lead_seconds + len(ideal) * 5 * CONTROL_DT + hold_seconds
     still_times = list(np.linspace(0.05 * length, 0.97 * length, stills)) if stills else []
     subtitle = spec_line(driving=driving,
-                         displayed=(f"CNN, frozen {FROZEN_SHA}" if cnn is not None
-                                    else "ground-truth scene model"),
+                         displayed=(f"CNN {FROZEN_SHA}" if cnn is not None
+                                    else "ground truth"),
                          offset_mm=1e3 * float(np.linalg.norm(d_xy)),
                          offset_deg=abs(math.degrees(d_yaw)), pick=pick)
 
