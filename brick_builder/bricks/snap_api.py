@@ -253,12 +253,19 @@ class SnapGeometry:
                 socket_brick.append(bi)
 
         stud_body, stud_local, body_ids = [], [], []
+        all_names, all_ids = [], []
         for handle in list(bricks) + list(plates):
             body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, handle.name)
             body_ids.append(body_id)
+            for target in handle.targets:
+                all_names.append(target)
+                all_ids.append(mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, target))
             for site in handle.stud_sites:
                 sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, site)
-                stud_body.append(body_id)
+                # The site's own body, not the handle's: a breakable brick puts each stud site
+                # on the stud's own piece, so that a stud that breaks off takes its connection
+                # with it rather than leaving it behind on the roof.
+                stud_body.append(int(model.site_bodyid[sid]))
                 stud_local.append(model.site_pos[sid].copy())
 
         spec = bricks[0].spec if bricks else plates[0].spec
@@ -269,8 +276,8 @@ class SnapGeometry:
             stud_body=np.asarray(stud_body, dtype=np.int32),
             stud_local=np.asarray(stud_local, dtype=np.float64).reshape(-1, 3),
             brick_names=[h.name for h in bricks],
-            body_names=[h.name for h in list(bricks) + list(plates)],
-            body_ids=np.asarray(body_ids, dtype=np.int32),
+            body_names=all_names,
+            body_ids=np.asarray(all_ids, dtype=np.int32),
             brick_body_ids=np.asarray(body_ids[: len(bricks)], dtype=np.int32),
             stud_h=spec.stud_h,
         )

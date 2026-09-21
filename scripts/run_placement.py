@@ -88,6 +88,8 @@ def run(seed: int = 1, pick: bool = False, model: str = "ideal") -> int:
 
     print(f"scene model: {'ground truth' if source is None else 'convolutional'}  "
           f"seed {seed}  {time.perf_counter() - t0:.1f} s")
+    if getattr(scene, "monitor", None) is not None:
+        print(scene.monitor.line())
     print(f"placement: seated={check.seated} at_target_cell={check.at_target_cell} "
           f"lateral={check.lateral_mm:.2f} mm depth_error={check.depth_error_mm:.2f} mm")
     print("RESULT: placed" if check.success else "RESULT: not placed")

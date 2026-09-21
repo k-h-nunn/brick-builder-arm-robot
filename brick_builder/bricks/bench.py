@@ -43,7 +43,7 @@ from typing import Callable
 import mujoco
 import numpy as np
 
-from brick_builder.bricks.generator import add_baseplate, add_brick
+from brick_builder.bricks.generator import ContactModel, add_baseplate, add_brick
 from brick_builder.bricks.snap_api import SnapModel, SnapParams
 from brick_builder.bricks.spec import DUPLO, BrickSpec
 
@@ -78,6 +78,20 @@ class BenchConfig:
     friction: float = 0.35             # brick-on-brick sliding friction
     solref: tuple[float, float] = (0.004, 1.0)
     solimp: tuple[float, float, float] = (0.95, 0.999, 0.0005)
+
+
+def _bench_contact(cfg) -> ContactModel:
+    """The bench's own ``solref``/``solimp``, as a :class:`ContactModel` for the generator.
+
+    The generator writes the material-derived contact settings onto every collision geom, which
+    would otherwise override the class default this bench sets on ``world.default.geom``. The
+    shipped values are the same numbers, so nothing moves; passing the config through keeps a
+    bench run that deliberately varies ``BenchConfig.solref`` doing what it says.
+    """
+
+    return ContactModel(
+        name="bench", solref=tuple(cfg.solref), solimp=tuple(cfg.solimp) + (0.5, 2.0)
+    )
 
 
 @dataclass
@@ -156,7 +170,9 @@ class PressBench:
         world.default.geom.solimp = list(cfg.solimp) + [0.5, 2.0]
         world.default.geom.friction = [cfg.friction, 0.005, 0.0001]
 
-        plate = add_baseplate(world, "plate", cfg.plate_nx, cfg.plate_ny, pos=(0.0, 0.0, 0.0))
+        contact = _bench_contact(cfg)
+        plate = add_baseplate(world, "plate", cfg.plate_nx, cfg.plate_ny, pos=(0.0, 0.0, 0.0),
+                              contact=contact)
         self.plate_top = spec.roof * _PLATE_SLAB_FACTOR
         self.stud_tip_z = self.plate_top + spec.stud_h
 
@@ -218,6 +234,7 @@ class PressBench:
             spec=spec,
             free=False,
             parent=parent,
+            contact=contact,
         )
 
         act = world.add_actuator(name="ram_act")
@@ -621,8 +638,10 @@ def build_stack_scene(
     sign = -1.0 if inverted else 1.0
     quat = flip if inverted else (1.0, 0.0, 0.0, 0.0)
     plate_z = 0.1 if inverted else 0.0
+    contact = _bench_contact(cfg)
     plate = add_baseplate(
-        world, "plate", plate_nx, plate_ny, pos=(0.0, 0.0, plate_z), spec=spec, quat=quat
+        world, "plate", plate_nx, plate_ny, pos=(0.0, 0.0, plate_z), spec=spec, quat=quat,
+        contact=contact,
     )
     top = spec.roof * _PLATE_SLAB_FACTOR
     bricks = []
@@ -638,6 +657,7 @@ def build_stack_scene(
                 pos=(dx * spec.pitch, sign * dy * spec.pitch, z),
                 quat=quat,
                 spec=spec,
+                contact=contact,
             )
         )
     snap.declare(world, bricks, [plate])

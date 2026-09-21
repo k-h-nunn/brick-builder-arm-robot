@@ -89,7 +89,14 @@ PART_ROOF = 4
 PART_NAMES = ("other", "wall", "tube", "stud", "roof")
 
 #: States, in order. Each one latches: a brick never gets better.
-STATES = ("intact", "marked", "loosened", "cracked", "broken")
+#:
+#: ``yielded`` is the permanent-set rung, and it is the one this arm actually reaches: a wall
+#: bent past the 44 MPa tensile yield keeps the bend, and a wall that has taken a set never grips
+#: properly again. It sits above ``loosened`` because a bent wall is a worse functional failure
+#: than a worn clutch, and below ``cracked`` because the wall is still in one piece. It is not
+#: the same thing as ``marked``, which is a contact *pressure* past yield under a sharp edge -
+#: cosmetic, and reached by loads an order of magnitude smaller.
+STATES = ("intact", "marked", "loosened", "yielded", "cracked", "broken")
 _STATE_RANK = {s: i for i, s in enumerate(STATES)}
 
 #: The failure modes the estimate evaluates, in the order of the guide's section 6.1 table.
@@ -131,6 +138,9 @@ class DamageThresholds:
 
     - ``marked`` when a contact pressure passes the yield stress anywhere. Visual only.
     - ``loosened`` when the clutch multiplier falls below ``loosened_clutch``.
+    - ``yielded`` when any bending mode passes the **tensile yield**, i.e. a permanent set. The
+      bending allowables are written against the flexural strength, so this is the same ratio
+      test at ``yield_Pa / flexural_Pa`` = 0.63 rather than 1.0.
     - ``cracked`` when any bending mode passes the flexural strength.
     - ``broken`` when any bending mode passes ``broken_ratio`` times the flexural strength, or
       when a breakable brick releases a weld.
@@ -168,6 +178,13 @@ class DamageThresholds:
     cycle_on: float = 0.05
     cycle_off: float = 0.02
     persist_s: float = 0.010
+    #: Contact force [N] below which a contact is not evaluated at all. It is there to drop
+    #: the contacts the solver has detected but is carrying nothing through, which cost the
+    #: whole stress pass for no reading. 1 mN is four and a half orders of magnitude below the
+    #: smallest load that can move any state (about 27 N, a sharp edge marking a wall) and an
+    #: order of magnitude below what one contact of a resting 12.5 g brick carries, so nothing
+    #: a reader would look at is lost.
+    force_floor: float = 0.001
     #: Stress concentration at the wall-to-roof fillet, applied to the wall-bending mode only.
     #: 1.0 is the nominal-stress default; :data:`~brick_builder.bricks.materials.WALL_KT_RANGE` is
     #: the 1.0 to 2.0 a moulded internal corner plausibly has, and the error is one-sided - a
@@ -284,6 +301,7 @@ class DamageState:
     cycle_open: np.ndarray
     cycle_peak: np.ndarray
     hold: np.ndarray
+    prev_cond: np.ndarray
     peak_hold: np.ndarray
     n_calls: int
     events: list
@@ -304,6 +322,7 @@ class DamageState:
             cycle_open=self.cycle_open.copy(),
             cycle_peak=self.cycle_peak.copy(),
             hold=self.hold.copy(),
+            prev_cond=self.prev_cond.copy(),
             peak_hold=self.peak_hold.copy(),
             n_calls=self.n_calls,
             events=list(self.events),
@@ -312,7 +331,7 @@ class DamageState:
 
 #: Columns of the persistence-guard timer, in state order. ``loosened`` is absent on purpose:
 #: it comes from time integrals that a single step cannot move.
-GUARDED_STATES = ("marked", "cracked", "broken")
+GUARDED_STATES = ("marked", "yielded", "cracked", "broken")
 _GUARD_RANK = np.array([_STATE_RANK[s] for s in GUARDED_STATES])
 
 
@@ -365,6 +384,9 @@ class DamageModel:
             )
         self.thresholds = thresholds
         self._allow = np.array([thresholds.allowable(m) for m in MODES])
+        # Bending is scored against the flexural strength, so permanent set is the same ratio
+        # test taken at the tensile yield instead: 44 / 70 = 0.63 on the shipped ABS table.
+        self._yield_ratio = float(thresholds.yield_Pa / max(thresholds.flexural_Pa, 1e-9))
         self.fatigue_model = self.material.fatigue
         self.spec = spec if spec is not None else (bricks[0].spec if bricks else None)
         self.names = [h.name for h in self.bricks]
@@ -550,6 +572,7 @@ class DamageModel:
         # How long each guarded condition has held without a break [s], and the longest any of
         # them has ever held, which is the evidence that an overload was not a transient.
         self._hold = np.zeros((n, len(GUARDED_STATES)))
+        self._prev_cond = np.zeros((n, len(GUARDED_STATES)), dtype=bool)
         self._peak_hold = np.zeros(n)
         self._n_calls = 0
         self._multiplier = np.ones(n)
@@ -572,6 +595,7 @@ class DamageModel:
             cycle_open=self._cycle_open.copy(),
             cycle_peak=self._cycle_peak.copy(),
             hold=self._hold.copy(),
+            prev_cond=self._prev_cond.copy(),
             peak_hold=self._peak_hold.copy(),
             n_calls=self._n_calls,
             events=list(self.events),
@@ -592,6 +616,7 @@ class DamageModel:
         self._cycle_open = s.cycle_open.copy()
         self._cycle_peak = s.cycle_peak.copy()
         self._hold = s.hold.copy()
+        self._prev_cond = s.prev_cond.copy()
         self._peak_hold = s.peak_hold.copy()
         self._n_calls = s.n_calls
         self.events = list(s.events)
@@ -660,7 +685,11 @@ class DamageModel:
         geoms, pos, world = self.contact_forces()
         if geoms.shape[0]:
             bi = self.g_brick[geoms]                       # (ncon, 2)
-            keep = np.nonzero((bi >= 0).any(axis=1))[0]
+            # A contact has to carry a force worth evaluating: see
+            # :attr:`DamageThresholds.force_floor`. The stress pass costs about 138 us a call,
+            # so a step whose contacts are all carrying nothing should not pay for it.
+            big = (world * world).sum(axis=1) > self.thresholds.force_floor**2
+            keep = np.nonzero((bi >= 0).any(axis=1) & big)[0]
             if keep.size:
                 self._accumulate_contacts(
                     geoms[keep], pos[keep], world[keep], bi[keep], stress, lateral, normal
@@ -832,8 +861,9 @@ class DamageModel:
         th = self.thresholds
         peak_worst = float(worst.max())
         if peak_worst <= th.cycle_off and not self._cycle_open.any():
-            if self._hold.any():
+            if self._hold.any() or self._prev_cond.any():
                 self._hold[:] = 0.0
+                self._prev_cond[:] = False
             return
 
         # Stress relaxation: sustained load above a threshold, integrated in time.
@@ -859,9 +889,11 @@ class DamageModel:
         )
         self._multiplier = multiplier
 
-        if peak_worst < 1.0 and (multiplier >= th.loosened_clutch).all():
-            if self._hold.any():
+        # The lowest ratio that can move a state is the permanent-set one, not 1.0.
+        if peak_worst < self._yield_ratio and (multiplier >= th.loosened_clutch).all():
+            if self._hold.any() or self._prev_cond.any():
                 self._hold[:] = 0.0
+                self._prev_cond[:] = False
             return
 
         # The persistence guard. A condition has to hold without a break for `persist_s` before
@@ -870,9 +902,17 @@ class DamageModel:
         # are untouched by this: they are recorded whether or not they lasted.
         bend = ratio[:, _BENDING_COLS].max(axis=1)
         cond = np.stack(
-            [ratio[:, _M_MARK] >= 1.0, bend >= 1.0, bend >= th.broken_ratio], axis=1
+            [ratio[:, _M_MARK] >= 1.0, bend >= self._yield_ratio, bend >= 1.0,
+             bend >= th.broken_ratio],
+            axis=1,
         )
-        self._hold = np.where(cond, self._hold + dt, 0.0)
+        # The timer measures the span between the first and the last call that saw the
+        # condition, not the number of calls times dt: a call that finds a condition newly true
+        # has learned only that it is true *now*, so it starts the clock at zero. That keeps the
+        # guard's meaning the same whether it is called every step or once per control tick -
+        # with dt at 20 ms, one sampled tick can no longer latch a permanent state on its own.
+        self._hold = np.where(cond, np.where(self._prev_cond, self._hold + dt, 0.0), 0.0)
+        self._prev_cond = cond
         np.maximum(self._peak_hold, self._hold.max(axis=1), out=self._peak_hold)
         # `cond` has to be in the test as well as the timer: with persist_s = 0 the timer of a
         # brick under no load at all is 0.0, which would otherwise clear the threshold.
@@ -1012,7 +1052,7 @@ class DamageModel:
         place the brick at all over breaking it.
         """
 
-        w = {"marked": 0.05, "loosened": 0.2, "cracked": 2.0, "broken": 5.0}
+        w = {"marked": 0.05, "loosened": 0.2, "yielded": 0.5, "cracked": 2.0, "broken": 5.0}
         if weights:
             w.update(weights)
         prev = self._reward_rank
@@ -1022,6 +1062,133 @@ class DamageModel:
                 total += w.get(STATES[r], 0.0)
         self._reward_rank = self._rank.copy()
         return -total
+
+
+# ---------------------------------------------------------------------------
+# The monitor: a damage model that rides on the snap model's own update
+# ---------------------------------------------------------------------------
+
+
+class DamageMonitor:
+    """A :class:`DamageModel` driven by the snap model, so no controller has to know about it.
+
+    Every loop in this project that advances a scene calls ``scene.snap.update(model, data)``
+    once every ``snap_every`` physics steps and then ``mj_step``. The snap models call their
+    observers at the end of that update, which is the right moment: the contact forces in
+    ``data`` are the ones the last ``mj_step`` produced, and the snap model has already
+    rewritten ``dof_frictionloss`` so a consequence applied here is not overwritten.
+
+    Attaching one therefore takes no change to any controller, environment or script - only to
+    the scene that builds it. :func:`brick_builder.scene.compose.build_scene` does that by default.
+
+    ``every`` subsamples further, in snap updates rather than steps, for a scene where the pass
+    is not worth its cost. ``dt`` is scaled to match, so the persistence guard and the fatigue
+    integrals stay honest at any rate.
+    """
+
+    def __init__(
+        self,
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        bricks: list[BrickHandle],
+        snap=None,
+        every: int = 1,
+        track_connections: bool = False,
+        consequences: bool = False,
+        breakable=None,
+        **kwargs,
+    ) -> None:
+        self.model = model
+        self.data = data
+        self.every = max(int(every), 1)
+        self.consequences = bool(consequences)
+        self.breakable = breakable
+        self.damage = DamageModel(
+            model, data, bricks, snap=snap, track_connections=track_connections, **kwargs
+        )
+        self._calls = 0
+        self._last_time = float(data.time)
+        # High-water marks that survive a reset, so a run of many episodes on one scene can
+        # report the worst it ever saw rather than only what the last episode left behind.
+        self._worst_rank = 0
+        self._worst_wall = 0.0
+
+    # -- the observer hook -------------------------------------------------
+
+    def notify(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        """What a snap model calls. Ignores its arguments: the monitor holds its own scene."""
+
+        self.update()
+
+    def update(self) -> None:
+        """One pass, at the monitor's own rate."""
+
+        self._calls += 1
+        if self._calls % self.every:
+            return
+        now = float(self.data.time)
+        dt = now - self._last_time
+        self._last_time = now
+        self.damage.update(dt if dt > 0.0 else None)
+        if self.breakable is not None:
+            self.breakable.update()
+        if self.consequences:
+            self.damage.apply_consequences()
+
+    def reset(self) -> None:
+        """Clear every accumulator. Called by ``reset_scene``, so an episode starts clean."""
+
+        self._worst_rank = max(self._worst_rank, _STATE_RANK[self.state])
+        self._worst_wall = max(self._worst_wall, self.peak_wall_stress_Pa)
+        self.damage.reset()
+        self._calls = 0
+        self._last_time = float(self.data.time)
+
+    @property
+    def worst_state_seen(self) -> str:
+        """The worst state reached in **any** episode this scene has run, resets included."""
+
+        return STATES[max(self._worst_rank, _STATE_RANK[self.state])]
+
+    @property
+    def worst_wall_stress_Pa(self) -> float:
+        """The highest wall-bending stress seen in any episode this scene has run [Pa]."""
+
+        return max(self._worst_wall, self.peak_wall_stress_Pa)
+
+    # -- reading it back ---------------------------------------------------
+
+    @property
+    def state(self) -> str:
+        """The worst state any brick is in."""
+
+        return self.damage.worst_state()
+
+    @property
+    def peak_wall_stress_Pa(self) -> float:
+        """The highest wall-bending stress any brick has seen [Pa]."""
+
+        return float(self.damage.summary()["peak_wall_stress_MPa"] * 1e6)
+
+    def states(self) -> dict[str, str]:
+        return self.damage.states()
+
+    def events(self) -> list[DamageEvent]:
+        return list(self.damage.events)
+
+    def summary(self) -> dict:
+        out = self.damage.summary()
+        out["monitor_calls"] = self._calls
+        out["monitor_every"] = self.every
+        if self.breakable is not None:
+            out["breakable"] = self.breakable.summary()
+        return out
+
+    def line(self) -> str:
+        """One line for a printed result: ``damage: intact | peak wall stress 1.2 MPa``."""
+
+        return (f"damage: {self.state} | peak wall stress "
+                f"{self.peak_wall_stress_Pa / 1e6:.1f} MPa")
 
 
 def benchmark(model, data, bricks, snap=None, steps: int = 200) -> dict:
@@ -1167,7 +1334,7 @@ def build_press_rig(
     :data:`PRESS_SOLREF_DAMPRATIO` say what replaced it and why.
     """
 
-    from brick_builder.bricks.generator import add_baseplate, add_brick
+    from brick_builder.bricks.generator import ContactModel, add_baseplate, add_brick
     from brick_builder.bricks.snap import ColletSnap
     from brick_builder.bricks.snap_api import SnapParams
     from brick_builder.bricks.spec import DUPLO
@@ -1189,8 +1356,17 @@ def build_press_rig(
     world.default.geom.solref = [settings.solref[0], PRESS_SOLREF_DAMPRATIO]
     world.default.geom.solimp = list(settings.solimp) + [0.5, 2.0]
     world.default.geom.friction = [mu, settings.friction[1], settings.friction[2]]
+    # The generator writes its own contact model onto every collision geom, so the rig's
+    # damping ratio has to be passed down explicitly or it is overwritten with the scene's.
+    # PRESS_SOLREF_DAMPRATIO is what makes this rig settle instead of running a limit cycle.
+    rig_contact = ContactModel(
+        name="press_rig",
+        solref=(settings.solref[0], PRESS_SOLREF_DAMPRATIO),
+        solimp=tuple(settings.solimp) + (0.5, 2.0),
+    )
 
-    plate = add_baseplate(world, "plate", 4, 6, pos=(0.0, 0.0, 0.0), spec=spec)
+    plate = add_baseplate(world, "plate", 4, 6, pos=(0.0, 0.0, 0.0), spec=spec,
+                          contact=rig_contact)
     stud_tip = spec.roof * 2.0 + spec.stud_h
     ram = world.worldbody.add_body(name="ram", pos=[offset_x, 0.0, stud_tip + start_gap])
     joint = ram.add_joint(name="ram_z", type=mujoco.mjtJoint.mjJNT_SLIDE, axis=[0, 0, 1])
@@ -1204,6 +1380,7 @@ def build_press_rig(
     ram.ipos = [0.0, 0.0, 0.0]
     ram.explicitinertial = True
     brick = add_brick(world, "brick", nx, ny, "red", pos=(0.0, 0.0, 0.0), spec=spec,
+                      contact=rig_contact,
                       free=False, parent=ram)
 
     snap = ColletSnap(SnapParams(f_clutch=f_clutch))
@@ -1353,6 +1530,8 @@ class WallRig:
     lever_m: float
     b_eff_m: float
     rod_radius_m: float
+    breakable: object = None
+    """Weld bookkeeping when the rig was built with ``breakable=True``; ``None`` otherwise."""
 
     def stress_per_newton(self) -> float:
         """The analytic ``6 L / (b_eff t^2)`` [Pa/N] this rig should reproduce."""
@@ -1374,6 +1553,8 @@ def build_wall_rig(
     rod_mass: float = 0.1,
     rod_damping: float = 500.0,
     seed: int | None = None,
+    breakable: bool = False,
+    limit_scale: float = 1.0,
 ) -> WallRig:
     """Build the section 7.7 rig: a fixed brick and a rod aimed at one wall's inner face.
 
@@ -1382,7 +1563,8 @@ def build_wall_rig(
     bottom edge"). The rod sits between two tubes so nothing but the wall is in its way.
     """
 
-    from brick_builder.bricks.generator import add_brick
+    from brick_builder.bricks.breakable import BreakableBricks, add_breakable_brick
+    from brick_builder.bricks.generator import ContactModel, add_brick
     from brick_builder.bricks.spec import DUPLO
 
     spec = DUPLO if spec is None else spec
@@ -1404,10 +1586,40 @@ def build_wall_rig(
     opt.gravity = [0.0, 0.0, 0.0]
     world.default.geom.solref = [settings.solref[0], PRESS_SOLREF_DAMPRATIO]
     world.default.geom.solimp = list(settings.solimp) + [0.5, 2.0]
+    rig_contact = ContactModel(
+        name="press_rig",
+        solref=(settings.solref[0], PRESS_SOLREF_DAMPRATIO),
+        solimp=tuple(settings.solimp) + (0.5, 2.0),
+    )
     world.default.geom.friction = [settings.friction[0], settings.friction[1],
                                    settings.friction[2]]
 
-    brick = add_brick(world, "brick", nx, ny, "red", pos=(0.0, 0.0, 0.0), spec=spec, free=False)
+    built = None
+    if breakable:
+        # The pieces need free joints, so the brick cannot be pinned to the world the way the
+        # monolithic one is; the roof is instead welded to the bench by an equality below.
+        built = add_breakable_brick(
+            world, "brick", nx, ny, "red", pos=(0.0, 0.0, 0.0), spec=spec, material=material,
+            limit_scale=limit_scale,
+            solref=(settings.solref[0], PRESS_SOLREF_DAMPRATIO),
+            solimp=tuple(settings.solimp) + (0.5, 2.0),
+        )
+        brick = built.handle
+        anchor = world.add_equality()
+        anchor.name = "bench_anchor"
+        anchor.type = mujoco.mjtEq.mjEQ_WELD
+        anchor.objtype = mujoco.mjtObj.mjOBJ_BODY
+        anchor.name1 = "brick"
+        anchor.active = True
+        eq_data = np.zeros(mujoco.mjNEQDATA)
+        eq_data[6] = 1.0
+        eq_data[10] = 1.0
+        anchor.data = eq_data
+        anchor.solimp = [0.9999, 0.9999, 0.001, 0.5, 2.0]
+        anchor.solref = [settings.solref[0], 1.0]
+    else:
+        brick = add_brick(world, "brick", nx, ny, "red", pos=(0.0, 0.0, 0.0), spec=spec,
+                          contact=rig_contact, free=False)
     rod = world.worldbody.add_body(
         name="rod",
         pos=[wall_inner - rod_radius - start_gap, spec.pitch / 2.0, contact_z],
@@ -1432,10 +1644,59 @@ def build_wall_rig(
     # roof, plus the contact width, capped at the wall's own length.
     b_eff = min(2.0 * lever + 2.0 * rod_radius,
                 mat.sections(spec, nx, ny)["wall_left_right"].length)
-    return WallRig(model, data, [brick], damage,
-                   mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "rod"),
-                   int(model.jnt_qposadr[jid]), int(model.jnt_dofadr[jid]),
-                   lever, b_eff, rod_radius)
+    rig = WallRig(model, data, [brick], damage,
+                  mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "rod"),
+                  int(model.jnt_qposadr[jid]), int(model.jnt_dofadr[jid]),
+                  lever, b_eff, rod_radius)
+    if built is not None:
+        rig.breakable = BreakableBricks([built], damage=damage)
+        rig.breakable.bind(model, data)
+    return rig
+
+
+def run_wall_impact(
+    rig: WallRig,
+    speed_m_s: float,
+    seconds: float = 0.25,
+    breakable=None,
+) -> dict:
+    """Drive the rod into the wall at ``speed_m_s`` and report what the impact did.
+
+    A collision, not a press: the rod is given the speed as an initial condition and nothing
+    holds it there, so the peak force is set by the energy balance ``F = v sqrt(m k)`` rather
+    than by a command. Build the rig with ``rod_damping=0`` for this - the default 500 N*s/m
+    dashpot is what makes :func:`run_wall_push` quasi-static and would stop the rod dead.
+
+    The three speeds the guide's section 4.8 names are 0.1, 0.3 and 0.6 m/s, against a rod
+    carrying the arm's own 0.32 to 0.62 kg of operational-space inertia.
+    """
+
+    m, d = rig.model, rig.data
+    dt = m.opt.timestep
+    d.qvel[int(m.jnt_dofadr[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "rod_x")])] = (
+        speed_m_s
+    )
+    peak_force = 0.0
+    for _ in range(int(round(seconds / dt))):
+        mujoco.mj_step(m, d)
+        rig.damage.update()
+        if breakable is not None:
+            breakable.update()
+        if d.ncon:
+            f = np.zeros(6)
+            for c in range(d.ncon):
+                mujoco.mj_contactForce(m, d, c, f)
+                peak_force = max(peak_force, float(abs(f[0])))
+    record = rig.damage.brick("brick")
+    return {
+        "speed_m_s": speed_m_s,
+        "state": record.state,
+        "peak_wall_stress_Pa": record.peak_wall_stress_Pa,
+        "peak_ratio": record.peak_ratio,
+        "peak_contact_N": peak_force,
+        "longest_overload_s": record.longest_overload_s,
+        "events": [vars(e) for e in record.events],
+    }
 
 
 def run_wall_push(

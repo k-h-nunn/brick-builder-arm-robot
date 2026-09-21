@@ -520,14 +520,55 @@ def test_the_friction_coefficients_are_flagged_as_unsourced():
 
 
 def test_contact_settings_respect_the_time_step_floor():
-    """The solref time constant must be at least twice the step; 2 ms forces a 4 ms floor."""
+    """The solref time constant must be at least twice the step; 2 ms forces a 4 ms floor.
+
+    The floor is now the solver's own ``2 * dt`` rather than a hard 4 ms, because the applied
+    value is the derived stiffness clipped at that floor: at a 0.5 ms step the solver can run
+    1 ms, which is four times stiffer and four times closer to the material. The project's own
+    contact model is fixed at :data:`brick_builder.bricks.generator.CONTACT_TIMESTEP` (2 ms), so
+    what a scene is built with does not move when a run is stepped finer.
+    """
 
     for dt in (0.0005, 0.002, 0.004):
         for setting in mat.contact_settings(dt).values():
             assert setting.solref[0] >= 2.0 * dt - 1e-12
-            assert setting.solref[0] >= 0.004 - 1e-12
+            assert setting.solref[0] == pytest.approx(2.0 * dt)
+    for setting in mat.contact_settings(0.002).values():
+        assert setting.solref[0] == pytest.approx(0.004)
     pads = mat.contact_settings(0.002)["pad_on_brick"]
     assert pads.condim == 4 and pads.priority == 1
+
+
+def test_every_contact_pair_is_derived_from_the_material_and_then_clipped():
+    """Each pair gets a stiffness from a contact modulus and a stated patch, and every one of
+    them is far past what the solver runs at a 2 ms step.
+
+    The clip is the headline number of the whole contact model: a flat ABS stud tip is 11.8 MN/m
+    and the stiffest setting the solver is stable at is four orders of magnitude softer, so the
+    simulated contact is a statement about the solver, not about the plastic.
+    """
+
+    settings = mat.contact_settings(0.002)
+    assert set(settings) == {
+        "brick_on_brick", "pad_on_brick", "brick_on_table", "arm_on_anything"
+    }
+    for name, s in settings.items():
+        assert s.stiffness_N_m > 1e6, name
+        assert s.contact_geometry, name
+        assert s.solref_derived[0] < 1e-4, name          # tens of microseconds
+        assert s.clip_ratio > 1e4, name
+        # The clip ratio is exactly the square of the time-constant ratio, which is the whole
+        # arithmetic of the statement "this is N times softer than the material".
+        assert s.clip_ratio == pytest.approx((s.solref[0] / s.solref_derived[0]) ** 2)
+
+    # Brick on brick is the pair every seated stud uses; its numbers are quoted in the guide.
+    bb = settings["brick_on_brick"]
+    assert bb.stiffness_N_m == pytest.approx(11.79e6, rel=0.02)
+    assert bb.solref_derived[0] == pytest.approx(32.6e-6, rel=0.02)
+    assert bb.clip_ratio == pytest.approx(15073.0, rel=0.02)
+
+    # A rigid table is stiffer than ABS on ABS, so it clips harder, not less.
+    assert settings["brick_on_table"].clip_ratio > bb.clip_ratio
 
 
 def test_restitution_is_recorded_as_a_gap_not_as_a_setting():

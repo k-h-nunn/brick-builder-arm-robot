@@ -53,6 +53,7 @@ class DetentSnap:
         self._plates: list[BrickHandle] = []
         self._eq_names: dict[tuple[int, str], str] = {}
         self._bound = False
+        self.observers: list = []
 
     # -- before compile ----------------------------------------------------
 
@@ -123,6 +124,19 @@ class DetentSnap:
     # -- per step ----------------------------------------------------------
 
     def update(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        """One bookkeeping pass, then every observer.
+
+        Observers are how anything that is not a controller gets a per-step look at the scene -
+        `brick_builder.bricks.damage.DamageMonitor` is the one this project ships. They run after
+        the pass, so a monitor that writes to `model.dof_frictionloss` is not overwritten by this
+        model's own scheduling, and they see the contact forces the last `mj_step` produced.
+        """
+
+        self._update_pass(model, data)
+        for observer in self.observers:
+            observer.notify(model, data)
+
+    def _update_pass(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         if not self._bound:
             raise RuntimeError("update() called before bind()")
         self._step_count += 1

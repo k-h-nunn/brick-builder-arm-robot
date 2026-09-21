@@ -220,6 +220,11 @@ def run(ctx: ExperimentContext) -> None:
             )
 
         result = _run_with_timeout(_do_run, timeout_s)
+        # `build_scene` attached a damage monitor and `reset_scene` clears it between trials, so
+        # the monitor's high-water marks are the worst any trial in this bench reached.
+        if getattr(scene, "monitor", None) is not None:
+            result["damage_state"] = scene.monitor.worst_state_seen
+            result["peak_wall_stress_MPa"] = scene.monitor.worst_wall_stress_Pa / 1e6
         _report_result(ctx, result, trials, place_error_mm, friction, skipped)
     except _NotAvailable as exc:
         _not_available_report(ctx, exc.reason)
@@ -251,6 +256,15 @@ def _report_result(ctx, result, trials, place_error_mm, friction, skipped) -> No
               f"skipped: {sorted(set(skipped))}")
 
     fig_path = _figure(result, ci, ctx.out_dir)
+
+    damage_md = ""
+    if "damage_state" in result:
+        damage_md = (
+            "| worst damage state | peak wall stress [MPa] |\n|---|---|\n"
+            f"| {result['damage_state']} | {result['peak_wall_stress_MPa']:.2f} |\n"
+        )
+        print(f"damage: {result['damage_state']} | peak wall stress "
+              f"{result['peak_wall_stress_MPa']:.1f} MPa")
 
     failure_table = "| reason | count |\n|---|---|\n"
     for reason, n in counts.most_common():
@@ -302,6 +316,8 @@ def _report_result(ctx, result, trials, place_error_mm, friction, skipped) -> No
         f"## Result\n\n{successes}/{result['trials']} succeeded, {ci.p_hat:.1%} "
         f"(95% Wilson CI [{ci.low:.1%}, {ci.high:.1%}]).\n\n### Failure reasons\n\n" + failure_table,
         f"![Success rate and failure reasons]({fig_path.name})\n",
+        *(["## Damage\n\nWorst state any trial reached, from the scene's own damage monitor.\n\n"
+           + damage_md] if damage_md else []),
         "## Reading\n\n" + "\n".join(f"- {r}" for r in reading),
     ]
     write_report(ctx.out_dir, sections)

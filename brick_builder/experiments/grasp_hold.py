@@ -72,11 +72,17 @@ def _sweep(scene, forces: list[float], seconds: float, settle_steps: int) -> lis
             # of an effectively still-open gripper regardless of friction.
             scene.step(settle_steps)
             out = push_held_brick(scene, force=force, seconds=seconds, direction=direction)
-            rows.append({
+            row = {
                 "direction": label, "force_N": force, "slip_mm": out["slip_m"] * 1e3,
                 "peak_slip_mm": out["peak_slip_m"] * 1e3, "holds": out["slip_m"] < SLIP_LIMIT_M,
                 "warnings": out["warnings"],
-            })
+            }
+            # The damage monitor is attached to every scene `build_scene` makes, and `reset_scene`
+            # clears it, so these two numbers are this hold's own and nobody had to drive them.
+            if scene.monitor is not None:
+                row["damage_state"] = scene.monitor.state
+                row["peak_wall_stress_MPa"] = scene.monitor.peak_wall_stress_Pa / 1e6
+            rows.append(row)
     return rows
 
 
@@ -150,6 +156,19 @@ def run(ctx: ExperimentContext) -> None:
             "nothing tried held" if s["holds_up_to_N"] is None else f"{s['holds_up_to_N']:g} N"
         ) + " |\n"
 
+    damage_md = ""
+    if any("damage_state" in r for rows in all_rows.values() for r in rows):
+        damage_md = (
+            "| brick | direction | force [N] | damage state | peak wall stress [MPa] |\n"
+            "|---|---|---|---|---|\n"
+        )
+        for name, rows in all_rows.items():
+            for r in rows:
+                if "damage_state" not in r:
+                    continue
+                damage_md += (f"| {name} | {r['direction']} | {r['force_N']:g} | "
+                              f"{r['damage_state']} | {r['peak_wall_stress_MPa']:.2f} |\n")
+
     friction = params.value("bricks.jaw_on_brick_friction")
     reading = [
         f"At jaw_on_brick_friction = {friction:g}, see the summary table for how much load each "
@@ -185,6 +204,7 @@ def run(ctx: ExperimentContext) -> None:
         ),
         "## Summary\n\n" + summary_md,
         "## Full sweep\n\n" + table,
+        *(["## Damage\n\n" + damage_md] if damage_md else []),
         f"![Slip against applied load]({fig_path.name})\n",
         "## Reading\n\n" + "\n".join(f"- {r}" for r in reading),
     ]

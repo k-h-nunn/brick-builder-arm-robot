@@ -415,8 +415,11 @@ def test_a_brief_spike_does_not_latch_but_the_same_spike_held_does():
 
     brief = _push_with_pulse(build_wall_rig(), 50.0, 96.0, 0.006)
     assert brief["peak_ratio"] > 1.0, "the spike did not actually pass an allowable"
-    assert brief["state"] == "intact", "a 6 ms spike latched a permanent state"
-    assert 0.004 <= brief["longest_overload_s"] < 0.010
+    # The pulse is 6 ms past the flexural strength, so the crack rung cannot latch. It is
+    # necessarily longer than that past the tensile yield - the ramp up and the ramp down both
+    # pass through it - so the permanent-set rung does latch, which is the right answer: a wall
+    # held past 44 MPa for more than 10 ms keeps the bend.
+    assert brief["state"] == "yielded", "a 6 ms spike cracked the brick"
 
     held = _push_with_pulse(build_wall_rig(), 50.0, 96.0, 0.2)
     assert held["state"] in ("cracked", "broken")
@@ -486,7 +489,9 @@ def test_the_wall_fillet_concentration_moves_the_estimate_the_way_it_should():
     assert concentrated["peak_wall_stress_Pa"] == pytest.approx(
         2.0 * nominal["peak_wall_stress_Pa"], rel=0.01
     )
-    assert nominal["state"] == "intact"
+    # 40 N bends the wall past its 44 MPa yield but not past its 70 MPa flexural strength, so
+    # the nominal corner takes a permanent set; the sharp one cracks at the same load.
+    assert nominal["state"] == "yielded"
     assert concentrated["state"] in ("cracked", "broken")
     assert mat.wall_thresholds(DUPLO, mat.ABS_BRICK_23C, k_t=2.0)["crack_band_N"][0] == (
         pytest.approx(mat.wall_thresholds(DUPLO, mat.ABS_BRICK_23C)["crack_band_N"][0] / 2.0)
@@ -510,7 +515,7 @@ def test_a_weaker_brick_cracks_where_a_nominal_one_does_not():
     weak = DamageThresholds.from_material(mat.ABS_BRICK_23C, scale=0.7)
     nominal = run_wall_push(build_wall_rig(), 50.0)
     fragile = run_wall_push(build_wall_rig(thresholds=weak), 50.0)
-    assert nominal["state"] == "intact"
+    assert nominal["state"] == "yielded"      # past yield, short of the flexural strength
     assert fragile["state"] in ("cracked", "broken")
     # The stress itself is unchanged: it is the allowable that moved, not the physics.
     assert fragile["peak_wall_stress_Pa"] == pytest.approx(

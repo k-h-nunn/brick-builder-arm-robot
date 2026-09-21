@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import mujoco
 import numpy as np
 
-from brick_builder.bricks.generator import BrickHandle, add_brick
+from brick_builder.bricks.generator import BrickHandle, ContactModel, add_brick
 from brick_builder.bricks.spec import DUPLO, PALETTE, BrickSpec
 
 _LINE_RE = re.compile(
@@ -130,6 +130,7 @@ def build_structure(
     placements: list[Placement],
     plate: BrickHandle,
     spec: BrickSpec = DUPLO,
+    contact: ContactModel | None = None,
 ) -> list[BrickHandle]:
     """Instantiate every placement as a brick body on top of `plate`.
 
@@ -140,18 +141,31 @@ def build_structure(
     generator's geometry produces (see `generator.py`'s module docstring).
     """
 
-    plate_stud_x0 = -(plate.nx - 1) / 2.0 * spec.pitch
-    plate_stud_y0 = -(plate.ny - 1) / 2.0 * spec.pitch
-    plate_top = plate.body.pos[2] + spec.roof * 2.0  # matches add_baseplate's slab thickness
-
     handles = []
     for idx, p in enumerate(placements):
-        cx = plate_stud_x0 + (p.x + (p.w - 1) / 2.0) * spec.pitch
-        cy = plate_stud_y0 + (p.y + (p.h - 1) / 2.0) * spec.pitch
-        cz = plate_top + p.z * spec.height
         handle = add_brick(
             world, name=f"struct_{idx}", nx=p.w, ny=p.h, colour=p.colour,
-            pos=(cx, cy, cz), spec=spec,
+            pos=placement_pose(p, plate, spec), spec=spec, contact=contact,
         )
         handles.append(handle)
     return handles
+
+
+def placement_pose(
+    p: Placement, plate: BrickHandle, spec: BrickSpec = DUPLO
+) -> tuple[float, float, float]:
+    """World position of one placement's brick body origin, in the plate's own frame.
+
+    Split out of :func:`build_structure` so a caller that builds its bricks some other way -
+    :mod:`brick_builder.bricks.breakable`, through
+    :func:`brick_builder.scene.compose.build_scene` - lays them out on exactly the same grid.
+    """
+
+    plate_stud_x0 = -(plate.nx - 1) / 2.0 * spec.pitch
+    plate_stud_y0 = -(plate.ny - 1) / 2.0 * spec.pitch
+    plate_top = plate.body.pos[2] + spec.roof * 2.0  # matches add_baseplate's slab thickness
+    return (
+        plate_stud_x0 + (p.x + (p.w - 1) / 2.0) * spec.pitch,
+        plate_stud_y0 + (p.y + (p.h - 1) / 2.0) * spec.pitch,
+        plate_top + p.z * spec.height,
+    )

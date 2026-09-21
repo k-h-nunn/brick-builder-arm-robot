@@ -632,6 +632,13 @@ class ArmEnv(gym.Env):
             success=success, steps=self._tick, peak_load=self._peak_load,
             failure=failure, ret=self._ep_return, params=params,
         )
+        # The damage monitor rides on the scene, not on the task, so it is read here rather than
+        # in every environment's own `episode_result_extra`. A task that wants to override
+        # either field still can: `extra` is applied after this.
+        monitor = getattr(self.scene, "monitor", None)
+        if monitor is not None:
+            result_kwargs["damage_state"] = monitor.state
+            result_kwargs["peak_wall_stress_Pa"] = monitor.peak_wall_stress_Pa
         result_kwargs.update(extra)
         result = EpisodeResult(**result_kwargs)
         return {
@@ -640,6 +647,8 @@ class ArmEnv(gym.Env):
             "seat_depth_error": result.seat_depth_error,
             "peak_load": result.peak_load,
             "structure_intact": result.structure_intact,
+            "damage_state": result.damage_state,
+            "peak_wall_stress_Pa": result.peak_wall_stress_Pa,
             "params": result.params,
             "episode_result": result,
         }

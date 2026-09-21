@@ -156,6 +156,7 @@ def add_breakable_brick(
     include_studs: bool = True,
     limit_scale: float = 1.0,
     solref: tuple[float, float] = (0.004, 1.0),
+    solimp: tuple[float, float, float, float, float] | None = None,
 ) -> BreakableHandle:
     """Add a brick built from separable pieces welded to its roof.
 
@@ -172,6 +173,11 @@ def add_breakable_brick(
 
     ``limit_scale`` multiplies every weld limit at once, for randomization or for making a
     demonstration fail at a convenient load.
+
+    ``solref``/``solimp`` are written onto the welds and, when ``solimp`` is given, onto every
+    collision geom as well, so a breakable brick carries the same contact model a monolithic one
+    does. ``solimp=None`` leaves the geoms on whatever the spec's own defaults are, which is what
+    the rigs in this module set at ``world.default.geom``.
     """
 
     if nx < 1 or ny < 1:
@@ -270,6 +276,7 @@ def add_breakable_brick(
     # -- studs -------------------------------------------------------------
     stud_grid = _stud_xy(nx, ny, spec.pitch)
     s_i = min(spec.stud_inner_d / 2.0, stud_radius * 0.99)
+    stud_hosts: dict[tuple[int, int], object] = {}
     for i, j, x, y in stud_grid:
         col = f"{name}_col_stud_{i}_{j}"
         vis = f"{name}_vis_stud_{i}_{j}"
@@ -278,6 +285,7 @@ def add_breakable_brick(
         if include_studs:
             pname = f"{name}_piece_stud_{i}_{j}"
             host = new_piece_body(pname)
+        stud_hosts[(i, j)] = host
         for group, contype, kw, gname, radius in (
             (COLLISION_GROUP, 1, {}, col, stud_radius),
             (VISUAL_GROUP, 0, {"rgba": rgba}, vis, spec.stud_d / 2.0),
@@ -316,12 +324,19 @@ def add_breakable_brick(
             roof_mass, roof_com = total, new_com
     _set_inertial(roof, roof_mass, roof_com, roof_inertia)
 
-    # -- sites, on the roof, exactly where the generator puts them ---------
+    # -- sites, with the names and positions the generator gives them ------
+    # A stud's site goes on the stud's own piece, not on the roof. That is what makes a
+    # broken-off stud lose its press fit: the snap model resolves a connection to the body the
+    # site sits on, so once the weld lets go the connection travels with the piece that came
+    # away instead of staying behind on a stud that is no longer there. Socket sites stay on the
+    # roof, because the socket is an open column through the shell rather than a part.
     stud_sites, socket_sites = [], []
     for i, j, x, y in stud_grid:
         sname, kname = f"{name}_stud_{i}_{j}", f"{name}_socket_{i}_{j}"
-        roof.add_site(name=sname, pos=[x, y, spec.height + spec.stud_h],
-                      size=[0.0005, 0.0005, 0.0005], group=MARKER_SITE_GROUP)
+        stud_hosts[(i, j)].add_site(
+            name=sname, pos=[x, y, spec.height + spec.stud_h],
+            size=[0.0005, 0.0005, 0.0005], group=MARKER_SITE_GROUP,
+        )
         roof.add_site(name=kname, pos=[x, y, 0.0], size=[0.0005, 0.0005, 0.0005],
                       group=MARKER_SITE_GROUP)
         stud_sites.append(sname)
@@ -366,9 +381,19 @@ def add_breakable_brick(
             ex.bodyname1 = all_bodies[a]
             ex.bodyname2 = all_bodies[b]
 
+    if solimp is not None:
+        for body in [roof] + [world.body(b) for b in piece_bodies]:
+            for geom in body.geoms:
+                if geom.group == COLLISION_GROUP:
+                    geom.solref = list(solref)
+                    geom.solimp = list(solimp)
+
     handle = BrickHandle(
         name=name, body=roof, nx=nx, ny=ny, spec=spec,
         stud_sites=stud_sites, socket_sites=socket_sites, colour=colour,
+        # A socket may connect to the roof or to any stud piece, because a stud piece is where
+        # a stud site now lives.
+        connect_bodies=[name] + [p.name for p in pieces if p.kind == "stud"],
     )
     return BreakableHandle(
         name=name, handle=handle, pieces=pieces, weld_names=weld_names,

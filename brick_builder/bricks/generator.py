@@ -48,6 +48,11 @@ from brick_builder.bricks.spec import DUPLO, BrickSpec
 
 VISUAL_GROUP = 2
 COLLISION_GROUP = 3
+
+#: Physics step every contact setting in this module is derived against [s]. MuJoCo's constraint
+#: time constant has a floor of twice the step, so the step is part of the derivation, not a
+#: separate choice.
+CONTACT_TIMESTEP = 0.002
 # Stud and socket sites only mark positions for the connection model. MuJoCo draws site groups
 # 0-2 by default, so they sit in a group no camera shows; otherwise each stud carries a dot.
 MARKER_SITE_GROUP = 4
@@ -56,6 +61,82 @@ MARKER_SITE_GROUP = 4
 # on. Not part of BrickSpec (a baseplate is not a brick shape), and not fixed by any acceptance
 # test; the roof thickness is a reasonable stand-in for "thin structural plate."
 _BASEPLATE_THICKNESS_FACTOR = 2.0  # slab thickness = spec.roof * this factor
+
+
+@dataclass(frozen=True)
+class ContactModel:
+    """``solref``/``solimp`` written onto a brick's collision geoms.
+
+    ``MATERIAL_CONTACT`` is the default: it comes from
+    :func:`brick_builder.bricks.materials.contact_settings`, which derives a contact stiffness from
+    the material's contact modulus and a stated patch size and then clips it at the solver's
+    floor of twice the step. ``MUJOCO_CONTACT`` writes nothing and leaves every geom on
+    MuJoCo's own shipped defaults, which is the fall-back a parameter file can select.
+
+    ``derived_solref`` and ``clip_ratio`` carry the unclipped derivation so a report can print
+    what was asked for beside what the solver runs.
+    """
+
+    name: str = "material"
+    solref: tuple[float, float] | None = None
+    solimp: tuple[float, float, float, float, float] | None = None
+    derived_solref: tuple[float, float] = (0.0, 1.0)
+    stiffness_N_m: float = 0.0
+    clip_ratio: float = 1.0
+    geometry: str = ""
+
+    def apply_to(self, body: "mujoco.MjsBody") -> None:
+        """Write this model onto every collision geom of ``body``. A no-op when it is empty."""
+
+        if self.solref is None and self.solimp is None:
+            return
+        for geom in body.geoms:
+            if geom.group != COLLISION_GROUP:
+                continue
+            if self.solref is not None:
+                geom.solref = list(self.solref)
+            if self.solimp is not None:
+                geom.solimp = list(self.solimp)
+
+
+#: Leave every geom on MuJoCo's shipped contact defaults (``solref`` 0.02 s, ``solimp`` 0.9/0.95).
+MUJOCO_CONTACT = ContactModel(name="mujoco")
+
+
+def material_contact(
+    timestep: float = CONTACT_TIMESTEP,
+    pair: str = "brick_on_brick",
+    press_limited: bool = True,
+) -> ContactModel:
+    """The material-derived :class:`ContactModel` for one pair of
+    :func:`brick_builder.bricks.materials.contact_settings`.
+
+    ``press_limited`` applies the second clip, which is the default and the only thing that
+    separates what ships from what the derivation asks for: at the 4 ms the solver floor allows,
+    a 10 to 14 N press cannot seat a brick, so the pair that carries the press fit is held at
+    :data:`~brick_builder.bricks.materials.PRESS_LIMITED_TIMECONST`. Pass ``False`` for the
+    derived setting, which is selectable and is what ``SceneConfig.contact_model="derived"``
+    builds with.
+    """
+
+    from brick_builder.bricks import materials as mat  # local: materials imports spec, not this
+
+    s = mat.contact_settings(timestep, press_limited=press_limited)[pair]
+    return ContactModel(
+        name="material" if press_limited else "derived",
+        solref=tuple(s.solref),
+        solimp=tuple(s.solimp) + (0.5, 2.0),
+        derived_solref=tuple(s.solref_derived),
+        stiffness_N_m=s.stiffness_N_m,
+        clip_ratio=s.clip_ratio,
+        geometry=s.contact_geometry,
+    )
+
+
+def default_contact() -> ContactModel:
+    """What a brick gets when the caller says nothing: the material-derived model."""
+
+    return material_contact()
 
 
 @dataclass
@@ -70,6 +151,18 @@ class BrickHandle:
     stud_sites: list[str] = field(default_factory=list)
     socket_sites: list[str] = field(default_factory=list)
     colour: str = "white"
+    connect_bodies: list[str] = field(default_factory=list)
+    """Bodies a snap connection may be made to, when the brick is built from more than one.
+
+    Empty means "just :attr:`name`", which is every monolithic brick. A breakable brick lists
+    its stud pieces here as well, so a stud that has broken off carries its own connection away
+    with it instead of leaving it behind on the roof."""
+
+    @property
+    def targets(self) -> list[str]:
+        """:attr:`connect_bodies` if it is set, otherwise the single body :attr:`name`."""
+
+        return list(self.connect_bodies) if self.connect_bodies else [self.name]
 
 
 def _stud_xy(nx: int, ny: int, pitch: float) -> list[tuple[int, int, float, float]]:
@@ -353,6 +446,7 @@ def add_brick(
     free: bool = True,
     chamfer: bool = False,
     parent: "mujoco.MjsBody | None" = None,
+    contact: ContactModel | None = None,
 ) -> BrickHandle:
     """Add an `nx` x `ny` brick body to `world` and return a handle to it.
 
@@ -370,6 +464,9 @@ def add_brick(
     defaults to off because a plain cylinder is the simpler, more robust choice for collision
     and the tapered tip only helps a later capture/self-centring stage (WP-SNAP), not the
     insertion geometry itself.
+
+    `contact` sets the collision geoms' `solref`/`solimp`; `None` takes `default_contact()`,
+    the material-derived model, and `MUJOCO_CONTACT` leaves MuJoCo's own defaults in place.
     """
 
     from brick_builder.bricks.spec import PALETTE  # local import: keep spec.py free of generator deps
@@ -396,6 +493,7 @@ def add_brick(
         group=VISUAL_GROUP, contype=0, rgba=rgba,
         stud_radius=spec.stud_d / 2.0, chamfer=0.0, world=world, name_prefix=f"{name}_vis",
     )
+    (default_contact() if contact is None else contact).apply_to(body)
 
     mass, com_z, (ixx, iyy, izz) = _mass_properties(nx, ny, spec)
     body.mass = mass
@@ -433,6 +531,7 @@ def add_baseplate(
     spec: BrickSpec = DUPLO,
     colour: str = "green",
     quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
+    contact: ContactModel | None = None,
 ) -> BrickHandle:
     """Add a baseplate: a flat slab with studs on top, welded to the world (no joint).
 
@@ -489,6 +588,8 @@ def add_baseplate(
             size=[0.0005, 0.0005, 0.0005], group=MARKER_SITE_GROUP,
         )
         stud_sites.append(stud_name)
+
+    (default_contact() if contact is None else contact).apply_to(body)
 
     # A slab is dense enough, and always welded, that its mass/inertia is not load-bearing
     # physics; give it a plausible explicit mass anyway so the compiled model has no

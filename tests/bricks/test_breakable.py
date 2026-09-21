@@ -247,3 +247,80 @@ def test_the_breakable_brick_is_much_more_expensive_than_a_monolithic_one():
     assert result["breakable"]["nv"] == 96
     assert result["breakable"]["neq"] == 15
     assert result["slowdown"] > 1.5
+
+
+# ---------------------------------------------------------------------------
+# A broken-off stud takes its connection with it
+# ---------------------------------------------------------------------------
+
+
+def test_each_stud_site_sits_on_the_stud_that_carries_it():
+    """The site a connection is made to has to travel with the piece that can come away.
+
+    With the site on the roof, a stud that had broken off left its connection behind and the
+    snap model went on treating it as attached. Moving the site onto the piece is the whole fix,
+    and it is only correct if the site's world position is unchanged while the weld holds.
+    """
+
+    world = mujoco.MjSpec()
+    built = brk.add_breakable_brick(world, "brick", 2, 4, "red", (0.0, 0.0, 0.0))
+    model = world.compile()
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+
+    for i in range(2):
+        for j in range(4):
+            sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, f"brick_stud_{i}_{j}")
+            bid = int(model.site_bodyid[sid])
+            assert mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, bid) == (
+                f"brick_piece_stud_{i}_{j}"
+            )
+            # Same place as the monolithic generator puts it: on top of the stud.
+            assert data.site_xpos[sid][2] == pytest.approx(DUPLO.height + DUPLO.stud_h)
+
+    # Socket sites stay on the roof: a socket is an open column, not a part.
+    sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "brick_socket_0_0")
+    assert mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, int(model.site_bodyid[sid])) == "brick"
+
+    # And the handle advertises the bodies a connection may be made to.
+    assert built.handle.targets[0] == "brick"
+    assert "brick_piece_stud_1_3" in built.handle.targets
+    assert len(built.handle.targets) == 9
+
+
+def test_welding_the_studs_into_the_roof_puts_their_sites_back_on_it():
+    """``include_studs=False`` has no stud pieces, so there is nothing to move the site to."""
+
+    world = mujoco.MjSpec()
+    built = brk.add_breakable_brick(
+        world, "brick", 2, 4, "red", (0.0, 0.0, 0.0), include_studs=False
+    )
+    model = world.compile()
+    sid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "brick_stud_0_0")
+    assert mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, int(model.site_bodyid[sid])) == "brick"
+    assert built.handle.targets == ["brick"]
+
+
+def test_the_snap_model_declares_a_connection_to_every_stud_piece():
+    """Otherwise the fix above would only move the site and lose the connection entirely."""
+
+    world = mujoco.MjSpec()
+    plate = add_baseplate(world, "plate", 4, 6, pos=(0.0, 0.0, 0.0))
+    top = DUPLO.roof * 2.0
+    lower = brk.add_breakable_brick(world, "lower", 2, 4, "red", (0.0, 0.0, top))
+    upper = brk.add_breakable_brick(world, "upper", 2, 4, "blue", (0.0, 0.0, top + DUPLO.height))
+    snap = ColletSnap(SnapParams())
+    snap.declare(world, [lower.handle, upper.handle], [plate])
+    model = world.compile()
+    data = mujoco.MjData(model)
+    snap.bind(model, data)
+
+    # The upper brick's sockets are indices 8 to 15; socket 8 is its (0, 0).
+    socket = 8
+    for target in ("plate", "lower", "lower_piece_stud_0_0", "lower_piece_stud_1_3"):
+        bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, target)
+        assert snap._eq_of[socket, bid] >= 0, target
+    # A socket must never be able to connect to its own brick, pieces included.
+    for own in ("upper", "upper_piece_stud_0_0"):
+        bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, own)
+        assert snap._eq_of[socket, bid] == -1, own

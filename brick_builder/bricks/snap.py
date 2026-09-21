@@ -96,6 +96,7 @@ class ColletSnap:
         self._lateral_joints: list[str] = []         # two sideways slides per socket
         self._eq_names: dict[tuple[int, str], str] = {}   # (socket index, target body) -> eq name
         self._bound = False
+        self.observers: list = []
 
     # -- before compile ----------------------------------------------------
 
@@ -121,7 +122,10 @@ class ColletSnap:
         self._eq_names = {}
 
         p = self.params
-        target_names = [h.name for h in list(bricks) + list(plates)]
+        # A brick is usually one body, but a breakable one is a roof plus a piece per stud, and
+        # a stud site lives on its own piece. `BrickHandle.targets` is the list of bodies a
+        # connection may be made to, so a released stud carries its connection with it.
+        target_names = [b for h in list(bricks) + list(plates) for b in h.targets]
 
         socket_index = 0
         for handle in bricks:
@@ -180,8 +184,9 @@ class ColletSnap:
                 joint.solimp_friction = [0.9999, 0.9999, 0.001, 0.5, 2.0]
                 self._collet_joints.append(joint.name)
 
+                own = set(handle.targets)
                 for target in target_names:
-                    if target == handle.name:
+                    if target in own:
                         continue
                     eq = world.add_equality()
                     eq.name = f"snapeq_{socket_index}_{target}"
@@ -265,6 +270,19 @@ class ColletSnap:
         return math.hypot(self.geom.stud_h + p.collet_margin, p.capture_lateral) * (1.0 + 1e-9)
 
     def update(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
+        """One bookkeeping pass, then every observer.
+
+        Observers are how anything that is not a controller gets a per-step look at the scene -
+        `brick_builder.bricks.damage.DamageMonitor` is the one this project ships. They run after
+        the pass, so a monitor that writes to `model.dof_frictionloss` is not overwritten by this
+        model's own scheduling, and they see the contact forces the last `mj_step` produced.
+        """
+
+        self._update_pass(model, data)
+        for observer in self.observers:
+            observer.notify(model, data)
+
+    def _update_pass(self, model: mujoco.MjModel, data: mujoco.MjData) -> None:
         """One bookkeeping pass: release, re-schedule the clutch, then capture.
 
         Everything an engaged collet needs happens on every call, because that is what the

@@ -868,7 +868,14 @@ def breakaway_travel(spec: BrickSpec = DUPLO, material: Material = ABS_BRICK_23C
 
 @dataclass(frozen=True)
 class ContactSettings:
-    """MuJoCo contact parameters for one pair, with the reasoning attached."""
+    """MuJoCo contact parameters for one pair, with the reasoning attached.
+
+    ``solref`` is what the simulator is given: the **clipped** value. ``solref_derived`` is what
+    the material and the stated contact geometry ask for, before the clip, and ``clip_ratio``
+    is how much softer the clipped setting is (``(t_clipped / t_derived) ** 2``, because
+    MuJoCo's constraint stiffness goes as one over the square of the time constant).
+    ``stiffness_N_m`` and ``contact_geometry`` record what the derivation was made from.
+    """
 
     pair: str
     condim: int
@@ -878,15 +885,129 @@ class ContactSettings:
     friction: tuple[float, float, float]
     friction_range: tuple[float, float]
     note: str
+    stiffness_N_m: float = 0.0
+    contact_geometry: str = ""
+    solref_derived: tuple[float, float] = (0.0, 1.0)
+    clip_ratio: float = 1.0
 
 
-def contact_settings(timestep: float = 0.002) -> dict[str, ContactSettings]:
-    """Per-pair ``solref``/``solimp``/``friction``, with the time-step floor respected.
+#: Mass [kg] the derived time constants are quoted against. MuJoCo's soft constraint is
+#: mass-normalised - ``solref``'s first number is the period of the contact's own mass-spring,
+#: not a stiffness - so an absolute N/m only becomes a time constant against a stated mass. This
+#: is the generated DUPLO 2x4, which is the body every one of these pairs is about.
+CONTACT_REFERENCE_MASS_KG: float = 0.01252
 
-    MuJoCo's soft constraint takes a ``solref`` of (time constant, damping ratio) and the time
-    constant must be at least twice the step, so **a 2 ms step forces a 4 ms floor** and this
-    project sits exactly on it. Three measured facts from the guide's section 3 drive these
-    numbers:
+#: MuJoCo's own shipped contact defaults, for the fall-back path and for the comparison table.
+MUJOCO_DEFAULT_SOLREF: tuple[float, float] = (0.02, 1.0)
+MUJOCO_DEFAULT_SOLIMP: tuple[float, float, float, float, float] = (0.9, 0.95, 0.001, 0.5, 2.0)
+
+#: Second clip, on the one pair that carries the press fit: brick on brick and brick on
+#: baseplate keep MuJoCo's own shipped contact settings, and the derivation is not applied to
+#: them at all.
+#:
+#: The solver's floor at a 2 ms step is 4 ms, and 4 ms **jams the press**: the closed-loop
+#: placement stops on the stud tips, 4.50 mm (one stud height) short of seated, on every seed.
+#: Sweeping the time constant does not rescue it either - 4, 6, 8 and 12 ms all stop at 4.50 mm,
+#: 16 ms seats three seeds of five, and 20 ms with the derived impedance throws one seed 43 mm
+#: off the plate. The whole derived setting has to come off this pair, not just its time
+#: constant.
+#:
+#: The mechanism is the arm, not the solver. Seating the last 4.5 mm means closing the contacts
+#: along the insertion path against a 10 to 14 N press, and a contact 25 times stiffer needs 25
+#: times the force to close by the same amount. **A press-fit insertion in a rigid-body
+#: simulator runs on contact compliance**, and this one is calibrated, through the placement
+#: policy, to MuJoCo's default. That is a real limit on how far the material model can reach
+#: into the simulator, and it is why the derived setting stays selectable rather than shipped.
+#:
+#: Every other pair keeps the 4 ms the derivation asks for, because nothing presses through
+#: them. The table and the jaw pads carry ``priority = 1`` so their own settings win over the
+#: brick's rather than being averaged with them.
+PRESS_LIMITED_SOLREF: tuple[float, float] = MUJOCO_DEFAULT_SOLREF
+PRESS_LIMITED_SOLIMP: tuple[float, float, float] = MUJOCO_DEFAULT_SOLIMP[:3]
+
+
+def flat_punch_stiffness(radius: float, e_star: float) -> float:
+    """Normal stiffness [N/m] of a flat circular punch of ``radius`` on an elastic half-space.
+
+    ``k = 2 a E*``, the standard rigid-punch result. It is the right form here because none of
+    these contacts is a sphere on a plane: a stud tip on a roof, a wall bottom on a plate and a
+    jaw face on a wall are all flat-on-flat, and a flat contact's stiffness is set by the size
+    of the patch rather than by the load.
+    """
+
+    return 2.0 * max(radius, 0.0) * max(e_star, 0.0)
+
+
+def pair_contact_modulus(a: Material, b: Material | None = None) -> float:
+    """``E*`` [Pa] for two bodies in contact: ``1/E* = (1-nu_a^2)/E_a + (1-nu_b^2)/E_b``.
+
+    ``b = None`` makes the second body rigid, which is how the table is treated: no source
+    exists for what the table is made of, and anything harder than plastic is stiff enough that
+    it drops out of the series sum.
+    """
+
+    compliance = (1.0 - a.nu**2) / a.E
+    if b is not None:
+        compliance += (1.0 - b.nu**2) / b.E
+    return 1.0 / compliance
+
+
+def solref_from_stiffness(
+    stiffness: float,
+    timestep: float = 0.002,
+    mass: float = CONTACT_REFERENCE_MASS_KG,
+    dampratio: float = 1.0,
+) -> tuple[tuple[float, float], tuple[float, float], float]:
+    """``(derived solref, clipped solref, clip ratio)`` for a contact stiffness [N/m].
+
+    The map is the mass-spring period, ``t = sqrt(m / k)``, because that is what MuJoCo's first
+    ``solref`` number is: the constraint behaves as a unit-mass spring whose reference
+    acceleration is ``-2 v / t - r / t**2``, so a real stiffness only becomes a time constant
+    once a mass is named (:data:`CONTACT_REFERENCE_MASS_KG`).
+
+    The clip is the solver's own stability floor: MuJoCo requires the time constant to be at
+    least twice the step, so a 2 ms step cannot run anything below 4 ms. Every pair in this
+    project derives to tens of microseconds, so **every pair clips**, and the ratio is large:
+    the returned ``clip_ratio`` is ``(t_clipped / t_derived) ** 2``, the factor by which the
+    simulated contact is softer than the material.
+    """
+
+    t_derived = math.sqrt(max(mass, 1e-12) / max(stiffness, 1e-12))
+    t_clipped = max(2.0 * timestep, t_derived)
+    return ((t_derived, dampratio), (t_clipped, dampratio),
+            (t_clipped / t_derived) ** 2 if t_derived > 0.0 else 1.0)
+
+
+def contact_settings(
+    timestep: float = 0.002,
+    spec: BrickSpec = DUPLO,
+    material: Material = ABS_BRICK_23C,
+    press_limited: bool = False,
+) -> dict[str, ContactSettings]:
+    """Per-pair ``solref``/``solimp``/``friction``, derived from the material and then clipped.
+
+    Each pair gets a contact modulus from :func:`pair_contact_modulus` and a patch size from a
+    stated piece of geometry, which together give a flat-punch stiffness; that stiffness becomes
+    a time constant through :func:`solref_from_stiffness` and is then clipped at twice the step.
+    For DUPLO in ABS at a 2 ms step:
+
+    ======================  ===============  ==============  ===============
+    Pair                    Stiffness        Derived solref  Clip factor
+    ======================  ===============  ==============  ===============
+    brick on brick / plate  11.8 MN/m        32.6 us         1.5e4
+    jaw on brick            12.7 MN/m        31.4 us         1.6e4
+    brick on table          50.1 MN/m        15.8 us         6.4e4
+    arm link on anything    12.7 MN/m        31.4 us         1.6e4
+    ======================  ===============  ==============  ===============
+
+    **Real ABS contact is four to five orders of magnitude stiffer than anything this solver
+    runs at a 2 ms step**, so the per-pair derivation lands on one number: the floor. That is
+    the honest result, not a shortcut - the pairs differ by a factor of four in stiffness and by
+    two in time constant, and the floor is a hundred times above all of them. What the
+    derivation buys is the 4 ms floor itself rather than MuJoCo's shipped 20 ms, which is 25
+    times stiffer, and the knowledge of exactly how far short of the material that still is.
+
+    Three further facts from the guide's section 3 belong with these numbers:
 
     - At the arm's own 14 N press ceiling, a brick sinks **180.7 um** into the plate - deeper
       than the entire 86 um interference the clutch is made of. That is the quantitative reason
@@ -901,33 +1022,69 @@ def contact_settings(timestep: float = 0.002) -> dict[str, ContactSettings]:
       dropped brick skitters, that is acceptable - but it should be known, not discovered.
     """
 
-    ref = (max(0.004, 2.0 * timestep), 1.0)
     imp = (0.95, 0.999, 0.0005)
     abs_abs = FRICTION_PAIRS["abs_on_abs"]
     pla_abs = FRICTION_PAIRS["pla_on_abs"]
     table = FRICTION_PAIRS["abs_on_table"]
+
+    stud_r = spec.stud_d / 2.0 - spec.clearance
+    e_abs = pair_contact_modulus(material, material)
+    e_pla = pair_contact_modulus(material, PLA_PRINTED)
+    e_rigid = pair_contact_modulus(material, None)
+
+    # Wall bottoms are what a brick stands on; the equivalent punch radius is the one whose area
+    # matches the whole wall footprint of a 2x4.
+    wall_area = sum(sections(spec)[k].area * 2.0 for k in ("wall_front_back", "wall_left_right"))
+    wall_r = math.sqrt(wall_area / math.pi)
+    # The jaw face meets a brick wall over roughly the pad's own footprint, 10 by 5 mm.
+    jaw_r = math.sqrt(0.010 * 0.005 / math.pi)
+
+    def build(key: str, pair: str, condim: int, priority: int, fric, frange,
+              stiffness: float, geometry: str, note: str) -> ContactSettings:
+        derived, clipped, ratio = solref_from_stiffness(stiffness, timestep)
+        this_imp = imp
+        if press_limited and key == "brick_on_brick":
+            # The second clip, and the only pair it applies to: see PRESS_LIMITED_SOLREF.
+            clipped = PRESS_LIMITED_SOLREF
+            this_imp = PRESS_LIMITED_SOLIMP
+            ratio = (clipped[0] / derived[0]) ** 2
+        return ContactSettings(
+            pair, condim, priority, clipped, this_imp, fric, frange, note,
+            stiffness_N_m=stiffness, contact_geometry=geometry,
+            solref_derived=derived, clip_ratio=ratio,
+        )
+
     return {
-        "brick_on_brick": ContactSettings(
-            "brick on brick / brick on baseplate", 3, 0, ref, imp,
+        "brick_on_brick": build(
+            "brick_on_brick", "brick on brick / brick on baseplate", 3, 0,
             abs_abs.friction, abs_abs.mu.range,
+            flat_punch_stiffness(stud_r, e_abs),
+            f"flat stud tip, radius {stud_r * 1e3:.2f} mm, ABS on ABS",
             "friction has no source; randomize 0.2 to 0.5",
         ),
-        "pad_on_brick": ContactSettings(
-            "jaw pad on brick (PLA on ABS)", 4, 1, ref, imp,
+        "pad_on_brick": build(
+            "pad_on_brick", "jaw pad on brick (PLA on ABS)", 4, 1,
             pla_abs.friction, pla_abs.mu.range,
+            flat_punch_stiffness(jaw_r, e_pla),
+            "jaw face on a wall, 10 by 5 mm patch, PLA on ABS",
             "condim 4 with priority 1 is already correct and should stay: it gives the pad "
             "torsional friction, which stops a gripped brick spinning about the pinch axis, "
             "and the priority makes the pad's friction win over the brick's. The value of 1.0 "
             "currently in ArmConfig is a modelling choice, not a measurement",
         ),
-        "brick_on_table": ContactSettings(
-            "brick on table", 3, 0, ref, imp,
+        "brick_on_table": build(
+            "brick_on_table", "brick on table", 3, 1,
             table.friction, table.mu.range,
-            "depends entirely on the table",
+            flat_punch_stiffness(wall_r, e_rigid),
+            f"whole wall footprint, equivalent radius {wall_r * 1e3:.2f} mm, ABS on rigid",
+            "depends entirely on the table; the table is treated as rigid because no source "
+            "says what it is made of and anything harder than plastic drops out of the series",
         ),
-        "arm_on_anything": ContactSettings(
-            "arm link on anything", 3, 0, ref, imp,
+        "arm_on_anything": build(
+            "arm_on_anything", "arm link on anything", 3, 0,
             (0.35, 0.005, 0.0001), (0.2, 0.5),
+            flat_punch_stiffness(jaw_r, e_pla),
+            "printed link corner on a brick, same patch as the jaw face",
             "collisions, not manipulation; nothing rests on these",
         ),
     }

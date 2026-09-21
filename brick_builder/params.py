@@ -181,6 +181,50 @@ SCHEMA: dict[str, FieldSpec] = {
         "bricks", "mm", float, 0.01, 2.0, default=0.30,
         doc="How far off-centre a stud may be and still be captured by a socket. Sets "
             "SnapParams.capture_lateral."),
+    # -- bricks: contact model, damage and breakable bricks ---------------------------------
+    "bricks.contact_model": FieldSpec(
+        "bricks", "-", str, choices=("material", "derived", "mujoco"), default="material",
+        default_status="derived",
+        doc="Where a contact's solref/solimp come from. All three derive a flat-punch contact "
+            "stiffness from the ABS contact modulus and a stated patch size and then clip it. "
+            "'material' clips at the solver's floor (4 ms at a 2 ms step) on the table, the jaw "
+            "pads and the arm links, and leaves brick-on-brick on MuJoCo's own settings, "
+            "because the derived one stops the press 4.50 mm short of seated. 'derived' clips "
+            "at the solver floor on every pair, which is what the material asks for. 'mujoco' "
+            "leaves MuJoCo's shipped defaults everywhere. Sets SceneConfig.contact_model."),
+    "bricks.youngs_modulus_GPa": FieldSpec(
+        "bricks", "GPa", float, 0.5, 6.0, default=2.3, default_status="derived",
+        doc="ABS Young's modulus at 23 C. Datasheet figure for unfilled injection-moulding ABS; "
+            "generic range 1.8 to 2.7. Feeds the contact stiffness, the press-fit stiffness and "
+            "every damage threshold. Measure with a three-point bend on a brick wall (guide "
+            "02c section 7)."),
+    "bricks.tensile_yield_MPa": FieldSpec(
+        "bricks", "MPa", float, 10.0, 120.0, default=44.0, default_status="derived",
+        doc="ABS tensile yield at 23 C. The permanent-set ('yielded') damage threshold and the "
+            "marking threshold are both written against it. Generic range 36 to 52."),
+    "bricks.flexural_strength_MPa": FieldSpec(
+        "bricks", "MPa", float, 10.0, 200.0, default=70.0, default_status="derived",
+        doc="ABS flexural strength at 23 C. The 'cracked' damage threshold is written against "
+            "it, and 'broken' at 1.5 times it. Generic range 60 to 95."),
+    "bricks.damage_monitor": FieldSpec(
+        "bricks", "-", str, choices=("on", "off"), default="on",
+        doc="Attach a DamageMonitor to every scene. It rides on the snap model's own update, so "
+            "nothing in a controller has to know about it, and reports a damage state and a peak "
+            "wall stress per brick. Sets SceneConfig.damage_monitor."),
+    "bricks.damage_monitor_every": FieldSpec(
+        "bricks", "steps", int, 1, 100, default=10,
+        doc="Physics steps between damage passes. 10 is one control tick and measures at about "
+            "2 % of step time; 1 costs about 17 %. Sets SceneConfig.damage_monitor_every."),
+    "bricks.breakable": FieldSpec(
+        "bricks", "-", str, choices=("on", "off"), default="off",
+        doc="Build bricks out of welded pieces that can come apart instead of one rigid body. "
+            "Off by default: a breakable 2x4 steps 6.8 times slower. Sets "
+            "SceneConfig.breakable."),
+    "bricks.breakable_limit_scale": FieldSpec(
+        "bricks", "-", float, 0.01, 10.0, default=1.0,
+        doc="Multiplies every weld limit of a breakable brick at once, for randomization or for "
+            "making a demonstration fail at a convenient load. Sets "
+            "SceneConfig.breakable_limit_scale."),
     # -- bricks: raw measurements, used only to fit f_clutch/beta in the press-bench experiment
     "bricks.measured.push_on_2x2_N": FieldSpec(
         "bricks", "N", float, 0.0, 500.0, nullable=True, default=None,
@@ -735,6 +779,11 @@ def to_scene_config(params: ParamFile, base: Any = None, **overrides: Any) -> tu
             float(params.value("workspace.tray_y_m")),
         ),
         "brick_friction": float(params.value("bricks.brick_on_brick_friction")),
+        "contact_model": str(params.value("bricks.contact_model")),
+        "damage_monitor": params.value("bricks.damage_monitor") == "on",
+        "damage_monitor_every": int(params.value("bricks.damage_monitor_every")),
+        "breakable": params.value("bricks.breakable") == "on",
+        "breakable_limit_scale": float(params.value("bricks.breakable_limit_scale")),
         "offscreen": (
             int(params.value("camera.resolution_width_px")),
             int(params.value("camera.resolution_height_px")),

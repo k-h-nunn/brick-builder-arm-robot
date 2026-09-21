@@ -292,6 +292,110 @@ bricks:
     measured_on:
     notes: "A DUPLO stud's capture window is about 0.3 mm (guide 03), far smaller than the arm's own backlash."
 
+  # ---- contact model, damage and breakable bricks ---------------------------------------------
+
+  contact_model:
+    # What: where a contact's stiffness comes from. All three choices start from the same
+    #   derivation -- a flat-punch stiffness k = 2 a E* from the ABS contact modulus
+    #   E/(2(1-nu^2)) = 1.31 GPa and a stated patch size (a 4.5 mm flat stud tip gives
+    #   11.8 MN/m), turned into a solref time constant against the 12.5 g brick -- and differ
+    #   only in where they clip it.
+    #     material  the shipped default: the solver's floor of twice the 2 ms step (4 ms,
+    #               solimp 0.95/0.999/0.0005) on the table, the jaw pads and the arm links, and
+    #               MuJoCo's own settings on brick-on-brick, because the derived one stops the
+    #               10-14 N press 4.50 mm short of seated -- one stud height, on every seed.
+    #     derived   the solver floor on every pair. What the material asks for; it jams the
+    #               press, and is kept selectable so that measurement can be repeated.
+    #     mujoco    MuJoCo's shipped defaults everywhere, 20 ms and 0.9/0.95/0.001.
+    # Measure: not a measurement. The clip is the point: real ABS contact is about 15,000 times
+    #   stiffer than the stiffest setting this solver is stable at, so none of the three is the
+    #   material. Use "mujoco" to see what the change was worth, not to model anything.
+    value: material
+    status: derived
+    measured_by:
+    measured_on:
+    notes: >
+      The table carries it with priority 1 so its own settings decide a brick-on-table contact;
+      the jaw pads already carried the same numbers. Sets SceneConfig.contact_model. See
+      docs/guide/02d.
+
+  youngs_modulus_GPa:
+    # What: ABS Young's modulus at 23 C. Feeds the contact stiffness, the press-fit member
+    #   stiffnesses and the buckling half of every weld limit.
+    # Measure: three-point bend on a wall cut from a brick, or a cantilever deflection under a
+    #   known weight. Generic unfilled ABS is 1.8 to 2.7 GPa; nothing here was measured on a
+    #   DUPLO brick.
+    value: 2.3
+    status: derived
+    measured_by:
+    measured_on:
+    notes: "Novodur P2H-AT is listed at 2.5 GPa; generic ABS 1.58-2.63 (ASTM D638). Randomize over 1.8-2.7."
+
+  tensile_yield_MPa:
+    # What: ABS tensile yield at 23 C. The "yielded" (permanent set) damage rung and the
+    #   "marked" (contact pressure) rung are both written against it.
+    # Measure: destructive, three bricks -- push a wall sideways with a force gauge until the
+    #   bend stops springing back and read the force (guide 02c section 7.7).
+    value: 44.0
+    status: derived
+    measured_by:
+    measured_on:
+    notes: "Novodur P2H-AT 44 MPa; generic 35.1-51.0 (ASTM D638)."
+
+  flexural_strength_MPa:
+    # What: ABS flexural strength at 23 C. The "cracked" rung is written against it and "broken"
+    #   at 1.5 times it.
+    # Measure: the same destructive test, carried on past the permanent set to the crack.
+    value: 70.0
+    status: derived
+    measured_by:
+    measured_on:
+    notes: "Generic ABS 72-97 MPa (MakeItFrom); the lower end is used so the model errs toward flagging damage."
+
+  damage_monitor:
+    # What: whether every scene carries a damage monitor. On, each brick reports a damage state
+    #   (intact | marked | loosened | yielded | cracked | broken) and a peak wall stress, and the
+    #   numbers reach EpisodeResult, the environments' info dict, the experiment reports and
+    #   scripts/run_placement.py. It rides on the snap model's own update, so no controller
+    #   changes.
+    # Measure: nothing to measure. Switch it off to recover about 2 % of step time.
+    value: "on"
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Sets SceneConfig.damage_monitor. Measured overhead 2.0-2.2 % of step time at the default rate."
+
+  damage_monitor_every:
+    # What: physics steps between damage passes. 10 is one control tick at the 2 ms step.
+    # Measure: the pass costs about 22 us a call on the default scene; at every step it is 17 %
+    #   of step time and at every tenth step 2 %.
+    value: 10
+    status: derived
+    measured_by:
+    measured_on:
+    notes: "The persistence guard is written in seconds, not in calls, so it means the same at either rate."
+
+  breakable:
+    # What: whether bricks are built from welded pieces that can actually come apart (a roof plus
+    #   one body per wall, tube and stud) instead of one rigid body. Released pieces stay in the
+    #   scene as free bodies.
+    # Measure: nothing to measure. Off by default because a breakable 2x4 steps 6.8 times slower.
+    value: "off"
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Sets SceneConfig.breakable. Weld limits come from the members' real cross-sections; see docs/guide/02d."
+
+  breakable_limit_scale:
+    # What: multiplies every weld limit of a breakable brick at once.
+    # Measure: 1.0 is the derived limit. Lower it to make a demonstration fail at a load the arm
+    #   can actually reach; randomize it to cover the material spread.
+    value: 1.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Sets SceneConfig.breakable_limit_scale."
+
   # ---- raw kitchen-scale readings, for the press-bench experiment to fit -----------------------
   # Leave these null until you've done the push-on/pull-off test in docs/guide/10. Once filled
   # in, `press-bench` uses them to fit clutch_force_per_stud_N and push_pull_asymmetry_beta and

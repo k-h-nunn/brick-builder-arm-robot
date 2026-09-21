@@ -49,7 +49,18 @@ from typing import Literal
 import mujoco
 import numpy as np
 
-from brick_builder.bricks.generator import COLLISION_GROUP, VISUAL_GROUP, BrickHandle, add_baseplate, add_brick
+from brick_builder.bricks.breakable import BreakableBricks, add_breakable_brick
+from brick_builder.bricks.damage import DamageMonitor
+from brick_builder.bricks.generator import (
+    COLLISION_GROUP,
+    MUJOCO_CONTACT,
+    VISUAL_GROUP,
+    BrickHandle,
+    ContactModel,
+    add_baseplate,
+    add_brick,
+    material_contact,
+)
 from brick_builder.bricks.snap import ColletSnap
 from brick_builder.bricks.snap_api import SnapParams
 from brick_builder.bricks.snap_detent import DetentSnap
@@ -352,6 +363,50 @@ class SceneConfig:
     scene is where a world's materials get decided, so it is set here rather than by editing the
     generator, whose own bench tests are calibrated against what it currently produces."""
 
+    contact_model: Literal["material", "derived", "mujoco"] = "material"
+    """Where the contact `solref`/`solimp` come from.
+
+    All three come out of `brick_builder.bricks.materials.contact_settings`, which derives a
+    flat-punch stiffness from the material's contact modulus and a stated patch size and then
+    clips it:
+
+    - `"material"`, the default: clipped at the solver's floor of twice the 2 ms step on the
+      table, the jaw pads and the arm links, and left on MuJoCo's own settings for brick-on-brick
+      (`materials.PRESS_LIMITED_SOLREF`), because a 10 to 14 N press cannot seat a brick through
+      a 4 ms contact.
+    - `"derived"`: the solver floor on every pair.  It is what the material asks for and it stops
+      the closed-loop press 4.50 mm short of seated; kept selectable so the measurement can be
+      repeated.
+    - `"mujoco"`: MuJoCo's shipped defaults, so the change can be switched off entirely."""
+
+    damage_monitor: bool = True
+    """Attach a `brick_builder.bricks.damage.DamageMonitor` to the scene.
+
+    It rides on the snap model's own update, so every loop in this project that steps a scene
+    drives it without a line of controller code.  Read it back through `Scene.monitor`."""
+
+    damage_monitor_every: int = 10
+    """Physics steps between damage passes.  10 is one control tick, which measures at 2.0-2.2 %
+    of step time against 17 % at every step; the pass itself costs about 22 us a call on this
+    scene.  The persistence guard is written in seconds rather than in calls, so it means the
+    same thing at either rate."""
+
+    breakable: bool = False
+    """Build the bricks out of welded pieces that can come apart, instead of one rigid body.
+
+    Off by default: a breakable 2x4 steps 6.8 times slower than a monolithic one.  On, the
+    scene's placed, supply and held bricks are built by
+    `brick_builder.bricks.breakable.add_breakable_brick` and the released pieces stay in the
+    scene as free bodies."""
+
+    breakable_studs: bool = True
+    """Give each stud its own piece when `breakable` is on.  Off welds the studs into the roof,
+    which halves the piece count; a stud needs 942 N to shear off, so nothing this arm does
+    removes one."""
+
+    breakable_limit_scale: float = 1.0
+    """Multiplies every weld limit at once, for randomization or for a demonstration."""
+
     tray_xy: tuple[float, float] = (0.13, -0.17)
     tray_brick: tuple[int, int] = (2, 4)
     """Footprint of the spare bricks in the tray, in studs."""
@@ -407,6 +462,12 @@ class Scene:
     weld_eq: int                        # -1 when the scene has no soft weld
     in_hand_offset: np.ndarray          # (4,) dx, dy, dz, dyaw actually used by the last reset
     placed_names: list[str] = field(default_factory=list)
+
+    monitor: DamageMonitor | None = None
+    """Damage monitor, driven by the snap model's own update.  `None` when it is switched off."""
+
+    breakable: BreakableBricks | None = None
+    """Weld bookkeeping for a scene built with `SceneConfig.breakable`.  `None` otherwise."""
 
     # -- written by `randomize.apply`, read by `reset_scene` -------------------------------
     randomization: dict = field(default_factory=dict)
@@ -506,6 +567,13 @@ def _add_world_furniture(world: mujoco.MjSpec, cfg: SceneConfig) -> None:
         diffuse=[0.35, 0.35, 0.35],
     )
     if cfg.table:
+        extra = {}
+        table = scene_contact(cfg, pair="brick_on_table")
+        if table.solref is not None:
+            # priority 1 for the same reason the jaw pads carry it: the table's own settings
+            # then decide a brick-on-table contact outright, instead of being averaged with the
+            # brick's, which are the press pair's and belong to a different question.
+            extra = {"solref": list(table.solref), "solimp": list(table.solimp), "priority": 1}
         world.worldbody.add_geom(
             name=TABLE_GEOM,
             type=mujoco.mjtGeom.mjGEOM_PLANE,
@@ -517,6 +585,7 @@ def _add_world_furniture(world: mujoco.MjSpec, cfg: SceneConfig) -> None:
             condim=3,
             friction=[0.6, 0.005, 0.0001],
             rgba=[0.55, 0.55, 0.58, 1.0],
+            **extra,
         )
 
 
@@ -548,7 +617,9 @@ def _add_cameras(world: mujoco.MjSpec, cfg: SceneConfig, grasp: GraspPose | None
         )
 
 
-def _add_supply(world: mujoco.MjSpec, cfg: SceneConfig) -> list[BrickHandle]:
+def _add_supply(
+    world: mujoco.MjSpec, cfg: SceneConfig, breakables: list | None = None
+) -> list[BrickHandle]:
     """Loose bricks lying on the table, in a row. Nothing else: no tray, no jig, no fixture.
 
     They sit one thousandth of a millimetre above the table so the first physics step settles
@@ -563,14 +634,16 @@ def _add_supply(world: mujoco.MjSpec, cfg: SceneConfig) -> list[BrickHandle]:
             continue
         nx, ny, colour = entry
         y = sy + (k - (len(cfg.supply) - 1) / 2.0) * SUPPLY_SPACING * spec.pitch
-        out.append(add_brick(
-            world, name=f"{SUPPLY_PREFIX}{k}", nx=int(nx), ny=int(ny), colour=str(colour),
-            pos=(sx, y, 0.0005), spec=spec,
+        out.append(_new_brick(
+            world, cfg, name=f"{SUPPLY_PREFIX}{k}", nx=int(nx), ny=int(ny), colour=str(colour),
+            pos=(sx, y, 0.0005), breakables=breakables,
         ))
     return out
 
 
-def _add_tray(world: mujoco.MjSpec, cfg: SceneConfig) -> list[BrickHandle]:
+def _add_tray(
+    world: mujoco.MjSpec, cfg: SceneConfig, breakables: list | None = None
+) -> list[BrickHandle]:
     """A shallow open box beside the plate with a few loose bricks in it.
 
     Deliberately plain: it is a place for spare bricks to sit within reach and in the overview
@@ -615,11 +688,81 @@ def _add_tray(world: mujoco.MjSpec, cfg: SceneConfig) -> list[BrickHandle]:
     for k in range(cfg.tray_bricks):
         x = tx + (k - (cfg.tray_bricks - 1) / 2.0) * TRAY_BRICK_SPACING * spec.pitch
         out.append(
-            add_brick(
-                world, name=f"tray_brick_{k}", nx=cfg.tray_brick[0], ny=cfg.tray_brick[1],
-                colour=colours[k % len(colours)], pos=(x, ty, floor + 0.0005), spec=spec,
+            _new_brick(
+                world, cfg, name=f"tray_brick_{k}", nx=cfg.tray_brick[0], ny=cfg.tray_brick[1],
+                colour=colours[k % len(colours)], pos=(x, ty, floor + 0.0005),
+                breakables=breakables,
             )
         )
+    return out
+
+
+def scene_contact(cfg: SceneConfig, pair: str = "brick_on_brick") -> ContactModel:
+    """The :class:`ContactModel` one pair of a scene's geoms is built with."""
+
+    if cfg.contact_model == "mujoco":
+        return MUJOCO_CONTACT
+    return material_contact(pair=pair, press_limited=cfg.contact_model == "material")
+
+
+def _new_brick(
+    world: mujoco.MjSpec,
+    cfg: SceneConfig,
+    *,
+    name: str,
+    nx: int,
+    ny: int,
+    colour: str,
+    pos: tuple[float, float, float],
+    quat: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0),
+    breakables: list | None = None,
+) -> BrickHandle:
+    """One brick, monolithic or built from breakable pieces, as ``cfg`` asks.
+
+    Both paths hand back a :class:`~brick_builder.bricks.generator.BrickHandle` with the same body
+    name, the same geom names and the same stud and socket sites, so everything downstream that
+    works by name is unaffected by which one was built.
+    """
+
+    contact = scene_contact(cfg)
+    if not cfg.breakable:
+        return add_brick(
+            world, name, nx, ny, colour, pos=pos, quat=quat, spec=cfg.spec, contact=contact,
+        )
+    built = add_breakable_brick(
+        world, name, nx, ny, colour, pos=pos, quat=quat, spec=cfg.spec,
+        include_studs=cfg.breakable_studs, limit_scale=cfg.breakable_limit_scale,
+        solref=contact.solref or (0.004, 1.0), solimp=contact.solimp,
+    )
+    if breakables is not None:
+        breakables.append(built)
+    return built.handle
+
+
+def _build_placed(
+    world: mujoco.MjSpec, cfg: SceneConfig, plate: BrickHandle,
+    breakables: list | None = None,
+) -> list[BrickHandle]:
+    """The structure already standing on the plate, through the same brick factory."""
+
+    if not cfg.breakable:
+        return build_structure(world, cfg.placed, plate, spec=cfg.spec,
+                               contact=scene_contact(cfg))
+    # A breakable brick is many bodies, so the plate's yaw has to be baked in here rather than
+    # applied to one body afterwards the way `build_scene` does for a monolithic one.
+    from brick_builder.bricks.structures import placement_pose
+
+    centre = np.array([cfg.plate_xy[0], cfg.plate_xy[1], 0.0])
+    quat = tuple(_yaw_quat(cfg.plate_yaw))
+    out = []
+    for idx, p in enumerate(cfg.placed):
+        pos = np.asarray(placement_pose(p, plate, cfg.spec), dtype=float)
+        if cfg.plate_yaw:
+            pos = _rotate_about(pos, centre, cfg.plate_yaw)
+        out.append(_new_brick(
+            world, cfg, name=f"struct_{idx}", nx=p.w, ny=p.h, colour=p.colour,
+            pos=tuple(pos), quat=quat, breakables=breakables,
+        ))
     return out
 
 
@@ -675,14 +818,16 @@ def build_scene(cfg: SceneConfig = SceneConfig()) -> Scene:
     # 1. the arm, then everything that stands on the table.
     attach_arm(world, cfg.arm)
 
+    contact = scene_contact(cfg)
     plate = add_baseplate(
         world, PLATE_BODY, cfg.plate_studs[0], cfg.plate_studs[1],
         pos=(cfg.plate_xy[0], cfg.plate_xy[1], 0.0), spec=spec,
-        quat=tuple(_yaw_quat(cfg.plate_yaw)),
+        quat=tuple(_yaw_quat(cfg.plate_yaw)), contact=contact,
     )
 
-    placed = build_structure(world, cfg.placed, plate, spec=spec)
-    if cfg.plate_yaw:
+    breakables: list = []
+    placed = _build_placed(world, cfg, plate, breakables)
+    if cfg.plate_yaw and not cfg.breakable:
         # `build_structure` lays the bricks out for an un-rotated plate; turning them about the
         # plate's centre afterwards keeps the grid arithmetic in one place instead of duplicating
         # it here with a rotation baked in.
@@ -692,15 +837,15 @@ def build_scene(cfg: SceneConfig = SceneConfig()) -> Scene:
             handle.body.pos = list(_rotate_about(pos, centre, cfg.plate_yaw))
             handle.body.quat = list(_yaw_quat(cfg.plate_yaw))
 
-    tray_bricks = _add_tray(world, cfg) if cfg.tray else []
-    tray_bricks += _add_supply(world, cfg) if cfg.supply else []
+    tray_bricks = _add_tray(world, cfg, breakables) if cfg.tray else []
+    tray_bricks += _add_supply(world, cfg, breakables) if cfg.supply else []
 
     held: BrickHandle | None = None
     if held_cfg is not None:
-        held = add_brick(
-            world, HELD_BODY, held_cfg.nx, held_cfg.ny, held_cfg.colour,
+        held = _new_brick(
+            world, cfg, name=HELD_BODY, nx=held_cfg.nx, ny=held_cfg.ny, colour=held_cfg.colour,
             # A harmless parking spot: `reset_scene` puts it in the hand before anything steps.
-            pos=(cfg.plate_xy[0], cfg.plate_xy[1], 0.20), spec=spec,
+            pos=(cfg.plate_xy[0], cfg.plate_xy[1], 0.20), breakables=breakables,
         )
         eq = world.add_equality()
         eq.name = WELD_EQ
@@ -773,6 +918,20 @@ def build_scene(cfg: SceneConfig = SceneConfig()) -> Scene:
         placed_names=[h.name for h in placed],
         weld_torquescale=cfg.weld_torquescale,
     )
+
+    # 5. the weld bookkeeping for breakable bricks, then the damage monitor, which rides on the
+    # snap model's own update so no controller has to know either of them exists.
+    if breakables:
+        scene.breakable = BreakableBricks(breakables)
+        scene.breakable.bind(model, data)
+    if cfg.damage_monitor:
+        scene.monitor = DamageMonitor(
+            model, data, bricks, snap=snap, breakable=scene.breakable,
+            every=cfg.damage_monitor_every,
+        )
+        if scene.breakable is not None:
+            scene.breakable.damage = scene.monitor.damage
+        snap.observers.append(scene.monitor)
     scene.nominal = {
         "body_mass": model.body_mass.copy(),
         "body_inertia": model.body_inertia.copy(),
@@ -937,6 +1096,36 @@ def _write_weld(model: mujoco.MjModel, data: mujoco.MjData, eq: int, body1: int,
     model.eq_data[eq, 10] = torquescale
 
 
+def brick_bodies(scene: Scene, name: str) -> list[str]:
+    """Every body that makes up one brick: just ``name``, or the roof plus all of its pieces.
+
+    A breakable brick is a roof body and one free body per wall, tube and stud, each with its
+    own free joint and all sharing the roof's frame. Moving only the roof would stretch every
+    weld across the distance and tear the brick apart on the first step, so anything that poses
+    a brick has to pose all of it.
+    """
+
+    if scene.breakable is None:
+        return [name]
+    for built in scene.breakable.bricks:
+        if built.name == name:
+            return [name] + [piece.name for piece in built.pieces]
+    return [name]
+
+
+def set_brick_pose(scene: Scene, name: str, pos, quat) -> None:
+    """Write one brick's free-joint pose, pieces included, and zero its velocity."""
+
+    data = scene.data
+    for body in brick_bodies(scene, name):
+        adr = scene.free_joint_adr(body)
+        data.qpos[adr:adr + 3] = pos
+        data.qpos[adr + 3:adr + 7] = quat
+        jid = mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_JOINT, f"{body}_free")
+        dof = int(scene.model.jnt_dofadr[jid])
+        data.qvel[dof:dof + 6] = 0.0
+
+
 def reset_scene(scene: Scene, rng: np.random.Generator, arm_q: np.ndarray | None = None) -> None:
     """Put ``scene`` back to a clean start: arm at home, bricks placed, snap state cleared.
 
@@ -949,6 +1138,10 @@ def reset_scene(scene: Scene, rng: np.random.Generator, arm_q: np.ndarray | None
 
     model, data, cfg = scene.model, scene.data, scene.cfg
     mujoco.mj_resetData(model, data)
+    if scene.breakable is not None:
+        scene.breakable.bind(model, data)
+    if scene.monitor is not None:
+        scene.monitor.reset()
 
     q = scene.home_q if arm_q is None else np.asarray(arm_q, dtype=float)
     data.qpos[scene.arm_qpos_adr[:5]] = q
@@ -982,15 +1175,12 @@ def reset_scene(scene: Scene, rng: np.random.Generator, arm_q: np.ndarray | None
             plate_pos[1] + s * local[0] + c * local[1],
             top + p.z * spec.height,
         ])
-        adr = scene.free_joint_adr(name)
-        data.qpos[adr:adr + 3] = pos
-        data.qpos[adr + 3:adr + 7] = plate_quat
+        set_brick_pose(scene, name, pos, plate_quat)
 
     for k, handle in enumerate(h for h in scene.bricks.values()
                                if h.name.startswith(("tray_brick_", SUPPLY_PREFIX))):
-        adr = scene.free_joint_adr(handle.name)
-        data.qpos[adr:adr + 3] = np.asarray(handle.body.pos, dtype=float)
-        data.qpos[adr + 3:adr + 7] = [1.0, 0.0, 0.0, 0.0]
+        set_brick_pose(scene, handle.name, np.asarray(handle.body.pos, dtype=float),
+                       [1.0, 0.0, 0.0, 0.0])
 
     mujoco.mj_forward(model, data)
 
@@ -1005,9 +1195,7 @@ def reset_scene(scene: Scene, rng: np.random.Generator, arm_q: np.ndarray | None
                 offset = offset + rng.uniform(-jitter, jitter)
         scene.in_hand_offset = offset
         pos, quat = held_brick_pose(scene, offset)
-        adr = scene.free_joint_adr(scene.held_name)
-        data.qpos[adr:adr + 3] = pos
-        data.qpos[adr + 3:adr + 7] = quat
+        set_brick_pose(scene, scene.held_name, pos, quat)
         mujoco.mj_forward(model, data)
 
         if scene.weld_eq >= 0:

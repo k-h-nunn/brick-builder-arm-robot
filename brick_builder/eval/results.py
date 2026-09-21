@@ -31,6 +31,14 @@ class EpisodeResult:
     actually measured. `brick_builder.eval.report.check_acceptance` now fails loud with a clear
     "not reported" row whenever either field is `None` on any episode in a batch, rather than
     silently treating missing data as a perfect score.
+
+    `damage_state` and `peak_wall_stress_Pa` come from
+    `brick_builder.bricks.damage.DamageMonitor`, which `brick_builder.scene.compose.build_scene`
+    attaches by default. `damage_state` is one of
+    `brick_builder.bricks.damage.STATES` -- `intact`, `marked`, `loosened`, `yielded`, `cracked`,
+    `broken` -- and `peak_wall_stress_Pa` is the highest wall-bending stress any brick in the
+    scene saw during the episode. Both default to `None` for the same reason as the two above: a
+    scene with the monitor switched off reports nothing rather than reporting `intact`.
     """
 
     success: bool
@@ -41,3 +49,5 @@ class EpisodeResult:
     failure: FailureClass | None = None
     ret: float = 0.0                        # undiscounted return
     params: dict = field(default_factory=dict)
+    damage_state: str | None = None         # worst DamageModel state any brick reached; None = not reported
+    peak_wall_stress_Pa: float | None = None  # highest wall-bending stress any brick saw; None = not reported
