@@ -455,6 +455,9 @@ be filled in before and after, not just after.
 | `arm.backlash_total_deg` | ruler at the tool, by feel (total play, not half) | `pick-and-place` |
 | `arm.servo_dead_band_counts` | servo tool, registers 26/27 | `pick-and-place` |
 | `camera.diagonal_fov_deg`, resolution | printed checkerboard or a sheet of paper | `params` |
+| `bricks.youngs_modulus_GPa` | three-point bend on a wall cut from a brick | `params` |
+| `bricks.tensile_yield_MPa`, `flexural_strength_MPa` | destructive: push a wall sideways to a visible set, then to a crack (guide 02c section 7.7) | `grasp-hold` |
+| `bricks.contact_model`, `damage_monitor`, `breakable` | switches, not measurements — see guide 02d | `pick-and-place` |
 
 And after any change, `python -m brick_builder.experiments params --params my_params.yaml` is the
 cheapest way to see the whole file's current state — every value, every status, and which of the

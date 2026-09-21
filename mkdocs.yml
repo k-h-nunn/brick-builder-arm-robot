@@ -44,6 +44,7 @@ nav:
       - Simulator and bricks: guide/02-simulator-and-bricks.md
       - Rendering and datasets: guide/02b-rendering-and-datasets.md
       - Materials and damage: guide/02c-materials-and-damage.md
+      - Damage and breakable bricks: guide/02d-damage-and-breakable-bricks.md
       - Robot and servo model: guide/03-robot-and-servo-model.md
       - Environments: guide/04-environments.md
       - Training and evaluation: guide/05-training-and-evaluation.md
