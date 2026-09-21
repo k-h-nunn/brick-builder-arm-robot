@@ -64,10 +64,6 @@ def test_a_nominal_placement_lands_on_the_cell() -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(reason="lands 15.9 mm from the cell, one stud pitch: the in-hand estimate "
-                          "reads 3.2 mm over the baseplate where the brick is centred in the "
-                          "jaws to 0.3 mm, and the align dwell turns that into 5.5 mm of tool "
-                          "correction", strict=False)
 def test_a_nominal_pick_and_place_lands_on_the_cell() -> None:
     check, corrections, episode = _track(pick=True)
     assert episode.failure is None, episode.failure
@@ -99,6 +95,7 @@ def test_a_nominal_grasp_closes_where_it_was_sent() -> None:
 
     Measured with four millimetres of clearance: a jaw lands on the brick's top face, the arm
     stalls 9.6 mm high, and the brick slid 32 mm out of the jaws between the lift and the press.
+    Now: 0.3 mm across the jaws and 0.2 mm along them.
     """
     from brick_builder.action.place import PlaceConfig, TrackingEpisode, record_ideal
     from brick_builder.action.worlds import SUPPLY_BODY, build_pick_world
