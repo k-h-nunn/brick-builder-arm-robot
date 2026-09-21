@@ -330,7 +330,17 @@ CUDA_VISIBLE_DEVICES="" python -m brick_builder.action.learn.evaluate \
   offline --data data_cache/action/placement
 ```
 
-`data_cache/` is git-ignored; the two checkpoints under `brick_builder/action/weights/` are
+The DAgger round, which is what the shipped inverse was trained with:
+
+```bash
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=3 \
+  python -m brick_builder.action.learn.collect --task placement --minutes 16 --seed 7 \
+    --inverse learned --out data_cache/action/dagger
+CUDA_VISIBLE_DEVICES="" python scripts/train_action_model.py --teacher 1.0 \
+  --data data_cache/action/placement data_cache/action/pick data_cache/action/dagger
+```
+
+`data_cache/` is git-ignored; the three checkpoints under `brick_builder/action/weights/` are
 shipped. Training is deterministic given `--seed`, time-budgeted by `--minutes` and resumable:
 the optimizer state is written after every epoch under `--state-dir`, so a run stopped by its own
 budget continues from where it left off.
