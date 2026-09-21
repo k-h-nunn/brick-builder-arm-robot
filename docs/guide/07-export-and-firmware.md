@@ -59,7 +59,7 @@ bit-for-bit-ish rather than only to a looser tolerance.
 `CPolicy(lib_path, obs_dim, act_dim)` loads the shared library with `ctypes` and exposes `act(obs)`
 — the same call the torch actor's deterministic path makes. `check_parity(checkpoint, cpolicy,
 n=10_000)` draws `n` random observations from the checkpoint's own normalizer statistics (so they
-land in the range the policy actually saw), runs both the torch actor and `CPolicy` on them, and
+land in the range the policy saw), runs both the torch actor and `CPolicy` on them, and
 reports the max and mean absolute error. `benchmark_inference(cpolicy, obs, n_calls)` times `act()`
 from Python with `time.perf_counter_ns` and returns the median nanoseconds per call.
 

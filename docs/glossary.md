@@ -7,7 +7,7 @@ project, a small neural network that outputs a correction on top of scripted mot
 [Environments](guide/04-environments.md).
 
 **Backlash** — mechanical play or slack in a joint's gear train: the amount the joint can move without
-the motor actually turning. A real SO-101 servo has more backlash than its specification promises, which
+the motor turning. A real SO-101 servo has more backlash than its specification promises, which
 matters because that play can be larger than the tolerance needed to seat a brick. See
 [Robot and servo model](guide/03-robot-and-servo-model.md#gear-free-play-and-encoder-position).
 

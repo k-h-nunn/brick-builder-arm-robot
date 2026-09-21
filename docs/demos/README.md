@@ -49,7 +49,7 @@ at curriculum level 0 (no misalignment), overview camera. The command writes a 6
 ```
 
 See [Training and evaluation](../guide/05-training-and-evaluation.md) for what a trained residual policy
-actually did against this baseline on this machine.
+did against this baseline on this machine.
 
 ### `policy`
 
