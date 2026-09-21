@@ -1,13 +1,12 @@
 # On-screen wording
 
-Every word that appears in a video, a still or a figure comes from this page.  Viewers are not
-reading our source code, so nothing on screen may be a code identifier, an abbreviation only this
-project uses, or a term someone here invented.  If a thing needs a name that is not listed below,
-find the name its makers use and add it here first.
+Every word that appears in a video, a still or a figure comes from this page. Viewers do not read
+the source code, so nothing on screen may be a code identifier, a project-only abbreviation, or an
+invented term. A name not listed below is added here first, using its maker's own name for it.
 
-The robot names come from the SO-ARM100 repository that this project vendors the model from
-(`third_party/so101/`, whose `UPSTREAM_README.md` and MJCF are the copy we build against) and from
-the LeRobot SO-101 documentation.  The brick names are LEGO's own.
+Robot names come from the SO-ARM100 repository this project vendors the model from
+(`third_party/so101/`; `UPSTREAM_README.md` and the MJCF are the vendored copy) and from the
+LeRobot SO-101 documentation. Brick names are LEGO's own.
 
 ## The project
 
@@ -60,7 +59,7 @@ no such part, so no picture may show one and no caption may mention one.
 | The bump on top | stud |
 | The hollow pillar underneath that a stud enters | tube |
 | The large flat piece bricks are built on | baseplate |
-| How firmly bricks hold together | clutch power |
+| How firmly bricks hold together | clutch force |
 | The open box of spare bricks | tray |
 
 "2x4" is written as LEGO writes it: studs across by studs along, no spaces, no multiplication sign.
