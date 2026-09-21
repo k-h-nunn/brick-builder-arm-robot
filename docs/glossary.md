@@ -1,7 +1,6 @@
 # Glossary
 
-Plain-language definitions of terms used throughout this site, for teammates who did not take part in the
-original planning.
+Plain-language definitions of terms used throughout this site.
 
 **Action model** — the part of the software that decides what the robot should do next; in this
 project, a small neural network that outputs a correction on top of scripted motion. See
@@ -15,19 +14,18 @@ matters because that play can be larger than the tolerance needed to seat a bric
 **Clutch (DUPLO)** — the grip that holds a stud inside a tube once it is pressed in, coming from a tiny
 manufacturing interference between the stud's and tube's actual sizes.
 
-**Decode (of a scene model's output)** — a function that answers, for any pixel location you ask
-about, which object (if any) the model thinks is there. This is how a coarse per-object summary
-becomes a specific answer about a specific place in the image, such as "is there a brick at this
-stud location." Viewer and evaluation only: the controller reads slot states, never a decode. See
+**Decode (of a scene model's output)** — a function that answers, for a queried pixel location,
+which object (if any) the model thinks is there: how a coarse per-object summary becomes a
+specific answer about a specific place in the image, such as "is there a brick at this stud
+location." Viewer and evaluation only: the controller reads slot states, never a decode. See
 [Perception](guide/06-perception.md).
 
 **Digital twin** — a simulation that mirrors the real robot's actual measured state (joint angles, and so
 on) so that a real run can be replayed and compared against simulated behavior afterward.
 
-**Domain randomization** — deliberately varying simulation parameters (friction, servo stiffness, camera
-lighting, and so on) across training so that a learned policy does not overfit to the simulator's exact,
-possibly wrong, assumptions and instead learns something that holds up across a range of possibilities,
-including the real world.
+**Domain randomization** — varying simulation parameters (friction, servo stiffness, camera
+lighting, etc.) across training so a learned policy does not overfit to the simulator's exact
+assumptions and generalizes across a range of possibilities, including the real world.
 
 **DUPLO clutch / stud / tube** — the three parts of a DUPLO brick connection: the **stud** is the raised
 bump on top of a brick, the **tube** is the hollow cylinder on the underside of the brick above it that
