@@ -1,0 +1,37 @@
+# scripts/train.py --config configs/train/reach_sac.yaml
+#
+# BrickBuilder/Reach-v0 with the SAC fallback recipe (brick_builder/rl/sac_asym.py, section
+# 3) instead of PPO -- same task, same network family, so this exists mainly to exercise the
+# off-policy path end to end on a real Brick Builder Arm Robot environment (a short smoke run: see
+# docs/guide/05-training-and-evaluation.md for what a few minutes of it actually measured; a
+# real budget, tuned against Reach's own reward scale, is future work, same as press_sac.yaml
+# and align_sac.yaml below). `total_steps` here is intentionally small -- SAC's per-env-step
+# gradient updates make its wall-clock cost scale with total_steps in a way PPO's epoch/batch
+# structure does not (see the Pendulum acceptance test's own tuning notes).
+env: BrickBuilder/Reach-v0
+env_kwargs: {}
+run_name: reach_sac
+algo: sac
+
+sac:
+  n_envs: 4
+  n_step: 3
+  gamma: 0.97
+  tau: 0.005
+  lr_actor: 0.0003
+  lr_critic: 0.0003
+  lr_alpha: 0.0003
+  init_alpha: 0.2
+  buffer_size: 100000
+  batch_size: 256
+  warmup_steps: 2000
+  utd_ratio: 0.5
+  init_log_std: -0.5
+  total_steps: 60000
+  seed: 0
+  hidden_actor: [64, 64]
+  hidden_critic: [256, 256]
+  norm_clip: 10.0
+  async_envs: true
+  vector_context: forkserver
+  log_every: 1

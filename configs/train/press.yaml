@@ -1,0 +1,40 @@
+# scripts/train.py --config configs/train/press.yaml
+#
+# BrickBuilder/PressFromHeld-v0: the residual + compliance policy on top of PressScripted. Starts at
+# curriculum level 0 (empty plate, +-1 mm / 2 deg) and is promoted automatically
+# (env_kwargs.curriculum = [promote_at_success_rate, window]) up through level 3 (+-6 mm / 12 deg,
+# empty plate -- the "4-6 mm misalignment" the deliverable's acceptance numbers are stated at) and
+# on to levels 4-5 (neighbouring bricks, far-row and layer-1 targets).
+#
+# total_steps here is a real training budget (some hours on this 16-thread, 6-worker machine, not
+# a smoke test) -- see docs/guide/05-training-and-evaluation.md for what was actually measured with
+# a much smaller budget and why full convergence is future work, not this package's deliverable.
+env: BrickBuilder/PressFromHeld-v0
+env_kwargs:
+  level: 0
+  dr: true
+  curriculum: [0.7, 40]
+run_name: press
+
+ppo:
+  n_envs: 6
+  n_steps: 256
+  epochs: 5
+  minibatches: 8
+  lr: 0.0003
+  gamma: 0.99
+  lam: 0.95
+  clip: 0.2
+  target_kl: 0.02
+  ent_coef: 0.003
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  init_log_std: -1.0
+  total_steps: 2000000
+  seed: 0
+  hidden_actor: [64, 64]
+  hidden_critic: [256, 256]
+  norm_clip: 10.0
+  async_envs: true
+  vector_context: forkserver
+  log_every: 1

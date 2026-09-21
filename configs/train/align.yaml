@@ -1,0 +1,36 @@
+# scripts/train.py --config configs/train/align.yaml
+#
+# BrickBuilder/AlignFromTokens-v0: bring the TCP over a table brick using only backprojected vision
+# tokens. Trained against the fast "surrogate" producer (brick_builder.perception.producers.
+# GroundTruthProducer, fitted to a vision model's measured error statistics) so a training run
+# does not pay that model's per-step compute; evaluate separately with --producer blob
+# (scripts/eval.py --env BrickBuilder/AlignFromTokens-v0 --producer blob) to measure the
+# sim-to-model gap on a real perception stack.
+env: BrickBuilder/AlignFromTokens-v0
+env_kwargs:
+  producer: surrogate
+  token_noise_mm: 4.0
+run_name: align
+
+ppo:
+  n_envs: 6
+  n_steps: 256
+  epochs: 4
+  minibatches: 6
+  lr: 0.0003
+  gamma: 0.98
+  lam: 0.95
+  clip: 0.2
+  target_kl: 0.02
+  ent_coef: 0.0
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  init_log_std: -1.0
+  total_steps: 600000
+  seed: 0
+  hidden_actor: [64, 64]
+  hidden_critic: [128, 128]
+  norm_clip: 10.0
+  async_envs: true
+  vector_context: forkserver
+  log_every: 1

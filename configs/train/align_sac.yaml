@@ -1,0 +1,35 @@
+# scripts/train.py --config configs/train/align_sac.yaml
+#
+# BrickBuilder/AlignFromTokens-v0 with the SAC fallback recipe (brick_builder/rl/sac_asym.py,
+# spec section 3) instead of PPO. Real training budget (same order as configs/train/align.yaml's
+# 600,000 PPO steps), not run to convergence by this package -- see press_sac.yaml's own note
+# and docs/guide/05-training-and-evaluation.md for what a small smoke budget measured.
+env: BrickBuilder/AlignFromTokens-v0
+env_kwargs:
+  producer: surrogate
+  token_noise_mm: 4.0
+run_name: align_sac
+algo: sac
+
+sac:
+  n_envs: 4
+  n_step: 3
+  gamma: 0.98
+  tau: 0.005
+  lr_actor: 0.0003
+  lr_critic: 0.0003
+  lr_alpha: 0.0003
+  init_alpha: 0.2
+  buffer_size: 150000
+  batch_size: 256
+  warmup_steps: 3000
+  utd_ratio: 0.5
+  init_log_std: -0.5
+  total_steps: 600000
+  seed: 0
+  hidden_actor: [64, 64]
+  hidden_critic: [128, 128]
+  norm_clip: 10.0
+  async_envs: true
+  vector_context: forkserver
+  log_every: 1
