@@ -1,0 +1,50 @@
+name: Deploy docs to GitHub Pages
+
+# Manual only — do NOT add push/pull_request triggers here.
+#
+# This repository is private, and GitHub Pages for a private repository needs a paid plan (GitHub
+# Pro, Team, or Enterprise) on the account/organization that owns it; a private repo on the Free
+# plan has no Pages to deploy to, and this workflow would just fail. Run it by hand (Actions tab ->
+# "Deploy docs to GitHub Pages" -> "Run workflow") once Pages is actually available for this repo --
+# a paid plan is active and Pages has been enabled in Settings, or the repo is later made public --
+# not automatically on every push the way ci.yml runs.
+#
+# NOTE: untested on GitHub Actions until it is actually run once — see ci.yml's own note. In
+# particular, `mkdocs gh-deploy` needs permission to push a `gh-pages` branch to this repo, which
+# is why this job requests `contents: write` explicitly.
+#
+# This job installs only the `docs` extra, not `dev` or PyTorch/MuJoCo: today's mkdocs.yml only
+# enables the `search` plugin, and `mkdocs build`/`gh-deploy` do not import the brick_builder package at
+# all (verified locally: a plain `mkdocs build --strict` succeeds with no brick_builder dependencies
+# installed). If mkdocstrings (already in the `docs` extra) or another plugin that imports
+# brick_builder is ever wired into mkdocs.yml's `plugins:` list, this job will need the same
+# dev-extra + PyTorch + system-package steps ci.yml uses.
+
+"on":
+  workflow_dispatch: {}
+
+jobs:
+  docs-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Brick Builder Arm Robot (docs extra only)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[docs]"
+
+      - name: Configure git identity for the gh-pages commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Deploy docs
+        run: mkdocs gh-deploy --force

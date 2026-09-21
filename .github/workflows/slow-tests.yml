@@ -1,0 +1,47 @@
+name: Slow tests
+
+# The slow subset (-m slow: PPO training smoke tests, longer physics settles, the full press
+# baseline sweep — roughly 20 minutes on the project's own dev machine;
+# a GitHub-hosted runner may well be slower). Not run on every push — only on demand and on a
+# weekly schedule, so an unrelated PR is never blocked on a 20+ minute job.
+#
+# NOTE: untested on GitHub Actions until the first push/run — see ci.yml's own note.
+
+"on":
+  workflow_dispatch: {}
+  schedule:
+    # Every Monday 09:00 UTC. GitHub Actions cron always runs in UTC.
+    - cron: "0 9 * * 1"
+
+jobs:
+  slow-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      # Same osmesa choice, and the same reasoning, as ci.yml.
+      MUJOCO_GL: osmesa
+      CUDA_VISIBLE_DEVICES: ""
+      OMP_NUM_THREADS: "4"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install system packages for headless MuJoCo rendering (osmesa)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libosmesa6
+
+      - name: Install CPU-only PyTorch
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install Brick Builder Arm Robot (dev + docs extras)
+        run: pip install -e ".[dev,docs]"
+
+      - name: Run slow test suite
+        run: python -m pytest -q -m slow
