@@ -1,0 +1,490 @@
+# Brick Builder Arm Robot -- member-editable parameters.
+#
+# Loaded by brick_builder/params.py (`brick_builder.params.load_params`). Every leaf below is one
+# parameter: `value` is what the simulator will use, `status` says how much to trust it
+# (assumed | derived | measured), and `measured_by` / `measured_on` / `notes` are yours to fill
+# in when you replace a guess with a real measurement.
+#
+#   assumed  = a placeholder, a number from a datasheet for a similar part, or a design choice.
+#   derived  = worked out from other assumed numbers (geometry + material properties). Better
+#              justified than a guess, but still not a measurement on OUR bricks or OUR arm.
+#   measured = you measured this, on this team's own hardware, and wrote down how.
+#
+# HOW TO USE THIS FILE: don't edit this one. Copy it (`cp configs/params/default.yaml
+# my_params.yaml`), change only the lines you have real numbers for, and pass your copy to an
+# experiment with `--params my_params.yaml`. A field you don't mention keeps this file's value.
+# You can also write a bare value instead of the full block, e.g. `supply_voltage_V: 6.9`, which
+# is shorthand for `{value: 6.9, status: measured}`.
+#
+# Full walkthrough, worked example and what to run after each measurement:
+# docs/guide/10-measure-and-enter-parameters.md
+#
+# The four biggest unknowns in the whole project, in order: bricks.clutch_force_per_stud_N,
+# bricks.brick_on_brick_friction (and jaw_on_brick_friction), arm.supply_voltage_V (and
+# arm.torque_limit_Nm), and camera.diagonal_fov_deg. Measuring any one of these and updating it
+# here is worth more than anything else you could do with the simulator.
+
+bricks:
+
+  # ---- the snap fit: how hard a stud grips, and the shape of that grip -----------------------
+
+  clutch_force_per_stud_N:
+    # What: how hard one fully-seated DUPLO stud grips, in newtons -- the AVERAGE of push-on and
+    #   pull-off force per stud (push = clutch*(1+beta), pull = clutch*(1-beta); see
+    #   push_pull_asymmetry_beta below). This is THE most important number in the project: it
+    #   decides whether the arm can seat a brick at all. Plausible range: about 0.5 to 5 N per
+    #   stud. Sets SnapParams.f_clutch.
+    # Measure: docs/guide/10, "push-on and pull-off with a kitchen scale" -- press a brick fully
+    #   home and read the peak force, then hang a bottle of water off it until it lets go and
+    #   weigh the bottle. Twenty minutes, no arm. Then run `press-bench` with your numbers in
+    #   bricks.measured below and copy the fitted value here.
+    value: 1.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: >
+      Matches the simulator's own bare placeholder (SnapParams.f_clutch=1.0 N), so the shipped
+      file is consistent with every test, the scripted pick-and-place study and the
+      demonstration film, none of which have ever run at anything else. Not a measurement: DUPLO
+      is moulded for toddlers' hands, and no measured DUPLO clutch figure exists anywhere.
+      A first-principles estimate from press-fit geometry and ABS material properties
+      (docs/guide/02c-materials-and-damage.md section 2.3) gives 4.79 N, band 2.7 to 10.0 --
+      kept in that section as an UPPER scenario, not as this default, because it rests on an
+      assumed interference (thick-wall press-fit theory applied to a 1.55 mm wall that in
+      reality bends rather than resisting rigidly). At more than about 1.5 N per stud (7.4 V,
+      datasheet torque -- see guide 02c) this arm cannot seat a 2x4 by a straight press, so the
+      plausible range straddles a real capability cliff. Nobody has put a real DUPLO brick on a
+      scale yet -- this is the first thing to measure.
+
+  push_pull_asymmetry_beta:
+    # What: how much harder it is to push a brick on than to pull it off, as a fraction. Push
+    #   force = clutch_force * (1+beta); pull force = clutch_force * (1-beta).
+    # Measure: docs/guide/10 -- the same kitchen-scale test gives you both push-on and pull-off;
+    #   beta = (F_push - F_pull) / (F_push + F_pull), equivalently (push/pull - 1) / (push/pull
+    #   + 1). `press-bench` computes this for you.
+    value: 0.15
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Mould draft of 0.5-1.5 deg would produce a ratio of 1.2 to 1.8 (beta 0.10-0.28). Nothing measures it yet."
+
+  press_curve_shape:
+    # What: the shape of the force-against-depth curve as a stud goes in. "ramp" = smooth build
+    #   to full force at full seat. "plateau" = full force the instant it engages. "detent" = an
+    #   entry bump (a "click") then easier sliding.
+    # Measure: docs/guide/10 -- press a brick on slowly by hand while filming a kitchen scale.
+    #   Does the force build smoothly (ramp) or is there a click (detent)?
+    value: ramp
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "'ramp' is the only shape with a mechanism behind it (straight-sided interference); 'plateau' has none. See guide 02c section 2.4."
+
+  press_curve_exponent:
+    # What: how sharply the "ramp"/"detent" curve rises with depth. 1 = straight line, 2 = rises
+    #   like depth-squared (what mould draft would produce).
+    # Measure: comes out of the same scale-and-camera test as press_curve_shape, by fitting the
+    #   force-vs-depth trace. Not a quick by-eye number.
+    value: 1.91
+    status: derived
+    measured_by:
+    measured_on:
+    notes: "1 degree of mould draft moves the exponent from 1 toward 2 (guide 02c section 2.4). Unused unless press_curve_shape is 'ramp' or 'detent'."
+
+  press_curve_plateau_gain:
+    # What: height of the "detent" curve's flat part, as a fraction of clutch_force_per_stud_N.
+    value: 0.35
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Unused unless press_curve_shape is 'detent'."
+
+  press_curve_detent_gain:
+    # What: height of the "detent" curve's entry bump above its plateau, as a fraction of
+    #   clutch_force_per_stud_N.
+    value: 1.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Unused unless press_curve_shape is 'detent'."
+
+  press_curve_detent_depth_mm:
+    # What: how far in (mm) the "detent" curve's entry bump is centred.
+    value: 1.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Unused unless press_curve_shape is 'detent'."
+
+  press_curve_detent_width_mm:
+    # What: full width (mm) of the "detent" curve's entry bump.
+    value: 0.6
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Unused unless press_curve_shape is 'detent'."
+
+  # ---- geometry: stud, tube and wall dimensions, all in millimetres --------------------------
+
+  pitch_mm:
+    # What: centre-to-centre spacing between neighbouring studs.
+    # Measure: docs/guide/10 section "dimensions and mass" -- caliper across several studs and
+    #   divide, which is far more accurate than measuring one gap.
+    value: 16.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Nominal DUPLO dimension (brick_builder/bricks/spec.py). Least uncertain of the dimension fields."
+
+  stud_outer_diameter_mm:
+    # What: outer diameter of one stud.
+    # Measure: caliper at the tip AND at the root; the difference over 4.5 mm gives the mould
+    #   draft directly (0.5 deg of draft is 39 um, which a 0.01 mm caliper can resolve).
+    value: 9.4
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Hobbyist dimension, +-0.05 mm caliper uncertainty. See guide 02c section 7.1."
+
+  stud_inner_diameter_mm:
+    # What: inner (hollow) diameter of a stud. 0 means a solid stud.
+    value: 6.5
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Caliper into the open top of a stud."
+
+  stud_height_mm:
+    # What: how far a stud stands proud of the roof.
+    value: 4.5
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Caliper from the roof surface to the stud tip."
+
+  wall_thickness_mm:
+    # What: thickness of the four outer side walls.
+    value: 1.55
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Caliper at a cut or a broken edge, or squeeze two jaws of a caliper through the open bottom."
+
+  tube_outer_diameter_mm:
+    # What: outer diameter of an interior support tube (the part a stud from below grips).
+    #   THE dimension the whole first-principles clutch estimate is most sensitive to -- see notes.
+    value: 13.4
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: >
+      This is a hobbyist dimension, not a LEGO drawing, and it is the single number the 20x
+      uncertainty on the first-principles clutch estimate traces back to (guide 02c section
+      2.3) -- that estimate is the upper scenario, not this file's shipped (assumed) default:
+      the interference is the difference between this and stud_outer_diameter_mm, both near
+      13 mm. +-0.05 mm here moves the derived clutch force +-30 to 60%.
+
+  tube_inner_diameter_mm:
+    # What: inner diameter of an interior support tube.
+    value: 10.7
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Caliper into the open tube from underneath."
+
+  roof_thickness_mm:
+    # What: thickness of the top plate the studs stand on.
+    value: 1.5
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Caliper at a cut edge, or measure brick_height_mm minus the inside cavity depth."
+
+  brick_height_mm:
+    # What: outer height of the brick body, bottom face to roof -- NOT including the studs.
+    value: 19.2
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Caliper the whole brick, then subtract stud_height_mm if you measured tip-to-bottom instead."
+
+  clearance_mm:
+    # What: radius removed from every stud in the simulator so it can physically slide into a
+    #   socket at all. Not a real dimension of a brick -- a simulator modelling margin.
+    value: 0.2
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Simulator-only fudge factor, not something to caliper. Leave alone unless bricks visibly interpenetrate or never touch."
+
+  chamfer_mm:
+    # What: height of the tapered lead-in at a stud's tip, if generated with one.
+    value: 0.5
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Caliper the height of the visible taper at a stud tip, if your bricks have one."
+
+  density_kg_m3:
+    # What: bulk material density, used with the dimensions above to compute brick mass.
+    # Measure: don't caliper this -- weigh a whole brick (mass_2x2_g / mass_2x4_g below) and let
+    #   the `params` experiment tell you what density that implies.
+    value: 1050.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Generic unfilled ABS, 1030-1070 kg/m^3 (guide 02c section 1.1)."
+
+  mass_2x2_g:
+    # What: mass of one assembled 2x2 brick, in grams. Cross-check only -- does not feed the
+    #   simulator directly; the `params` experiment compares it against what density_kg_m3 plus
+    #   the dimensions above predict.
+    # Measure: a 0.1 g kitchen scale, one clean new 2x2 brick.
+    value: 6.60
+    status: derived
+    measured_by:
+    measured_on:
+    notes: "What the generator's shell model gives at density_kg_m3=1050 and the nominal dimensions above -- nobody has weighed a real one for this team yet."
+
+  mass_2x4_g:
+    # What: mass of one assembled 2x4 brick, in grams. Same purpose as mass_2x2_g.
+    value: 12.52
+    status: derived
+    measured_by:
+    measured_on:
+    notes: "Generator's shell model at density_kg_m3=1050; the DUPLO catalogue figure is about 12.2 g (guide 02c section 4)."
+
+  # ---- friction: the second-biggest unknown in the project ------------------------------------
+
+  brick_on_brick_friction:
+    # What: sliding friction coefficient, ABS brick on ABS brick (or on the baseplate).
+    # Measure: docs/guide/10, "friction from the tilt angle" -- stack one brick on another,
+    #   tilt until it slides, take the tangent of that angle. Ten minutes, costs nothing.
+    value: 0.35
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "NO SOURCE EXISTS anywhere for ABS-on-ABS friction (guide 02c section 1.1). Every holding-force number scales linearly with this."
+
+  jaw_on_brick_friction:
+    # What: sliding friction coefficient, the bare printed PLA jaw face on an ABS brick -- what
+    #   the stock (unmodified) gripper's friction grasp actually depends on.
+    # Measure: same tilt test as brick_on_brick_friction, with a printed PLA offcut in place of
+    #   the lower brick.
+    value: 0.40
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: >
+      The simulator's own ArmConfig.pad_friction defaults to 1.0, which the design docs say
+      outright is "a modelling choice to make the grasp hold, not a measurement" -- PLA is
+      reported to have LOWER friction than ABS, so 0.3-0.5 is more likely physically. This file
+      ships the more physical 0.40 rather than the simulator's convenience default of 1.0, which
+      is why grasp-hold may report a weaker grip than other demos in this repository.
+
+  lateral_capture_tolerance_mm:
+    # What: how far off-centre a stud may be and still be captured by the socket above it.
+    # Measure: not a kitchen-scale test -- feel for how much wiggle a seated brick has before it
+    #   visibly rocks off its studs, or read it off the seating-feasibility / press-bench reports.
+    value: 0.30
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "A DUPLO stud's capture window is about 0.3 mm (guide 03), far smaller than the arm's own backlash."
+
+  # ---- raw kitchen-scale readings, for the press-bench experiment to fit -----------------------
+  # Leave these null until you've done the push-on/pull-off test in docs/guide/10. Once filled
+  # in, `press-bench` uses them to fit clutch_force_per_stud_N and push_pull_asymmetry_beta and
+  # prints the values to paste above.
+
+  measured:
+
+    push_on_2x2_N:
+      # Peak force to press a whole 2x2 fully home (kitchen scale under the baseplate).
+      value:
+      status: assumed
+      measured_by:
+      measured_on:
+      notes: "Null = not measured yet."
+
+    push_on_2x4_N:
+      # Same, for a 2x4.
+      value:
+      status: assumed
+      measured_by:
+      measured_on:
+      notes: "Null = not measured yet."
+
+    pull_off_2x2_N:
+      # Peak force to pull a seated 2x2 straight back off (hanging-bottle test).
+      value:
+      status: assumed
+      measured_by:
+      measured_on:
+      notes: "Null = not measured yet."
+
+    pull_off_2x4_N:
+      # Same, for a 2x4.
+      value:
+      status: assumed
+      measured_by:
+      measured_on:
+      notes: "Null = not measured yet."
+
+arm:
+
+  supply_voltage_V:
+    # What: the servo supply voltage this team's arm actually runs at.
+    # Measure: read it off the power supply under load, or from the servo tool's voltage
+    #   reading (docs/guide/10).
+    value: 7.4
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "The design's nominal supply. Nobody has read it off this team's own power supply yet."
+
+  servo_p_gain:
+    # What: the STS3215 P register (address 21) every servo is set to.
+    # Measure: read it with the servo configuration tool (docs/guide/10, "supply voltage and
+    #   servo gain read from the servo tool").
+    value: 16
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "16 is what LeRobot writes on connect (brick_builder/robot/patch_so101.py); 32 is the factory default. Confirm which this team's servos are actually set to."
+
+  torque_limit_Nm:
+    # What: servo stall torque at supply_voltage_V. One of the biggest open questions in the
+    #   robot model: the datasheet says 1.9 N.m at 7.4 V, but the identified servo law reaches
+    #   3.41 N.m at full duty, and nobody has measured which is right on this arm.
+    # Measure: not a kitchen-scale job -- needs a lever arm and a scale, or a calibrated stall
+    #   test with the servo tool. See docs/guide/03-robot-and-servo-model.md.
+    value: 1.9
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "The conservative (datasheet) figure. seating-feasibility and force-map report what the higher, identified-law figure (3.41 N.m) would change."
+
+  backlash_total_deg:
+    # What: TOTAL gear free-play in one servo joint, at the output -- not a half-range. The
+    #   simulator's own ArmConfig.backlash_deg is a half-range, so brick_builder/params.py halves
+    #   this value before setting it; type in the full play you measure, not half of it.
+    # Measure: docs/guide/10, "backlash by feel with a ruler at the tool" -- hold the tool still,
+    #   wiggle one joint by hand, read the play at the tool tip with a ruler, convert to degrees
+    #   with the joint's lever arm. Bench-accurate version: a dial gauge on a lever, servo powered
+    #   (holding position, not actively commanded), reading the free swing before the servo starts
+    #   correcting.
+    value: 0.87
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "0.5 deg is the Feetech spec (also a total). 0.87 deg is a third-party dial-gauge bench measurement (1.3 mm on an 86 mm lever, servo powered) on a different physical STS3215 (guide 02c section 1.3), not this team's own arm."
+
+  servo_dead_band_counts:
+    # What: the STS3215 firmware's own position dead band, registers 26 (CW) / 27 (CCW), in
+    #   encoder counts. While the position error stays inside this band the firmware commands
+    #   nothing at all. Sets ServoConfig.error_deadband_ticks.
+    # Measure: read registers 26/27 with the servo configuration tool.
+    value: 0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Default 0 (nominal law, nothing added). Documented value is about 2 counts; the factory value is set per unit, so treat 2 as a bracket, not a measurement, until read off this team's own servos."
+
+  joint_friction_Nm:
+    # What: dry friction in one servo's gear train.
+    # Measure: not practical with a kitchen scale; recorded here for completeness.
+    value: 0.0515
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: >
+      RECORDED FOR REFERENCE ONLY. ArmConfig has no field for this today -- patch_so101.py hard-
+      codes the BAM-identified value on every joint, so changing this number here does not
+      currently reach the simulator. See the params loader's report for the hook this is
+      missing.
+
+camera:
+
+  diagonal_fov_deg:
+    # What: the wrist camera lens's field of view, measured corner to corner (diagonal) -- the
+    #   number lens vendors always quote, because it doesn't depend on the sensor's aspect ratio.
+    # Measure: docs/guide/10, "camera field of view with a printed checkerboard".
+    value: 115.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Midpoint of the stated 100-130 degree range for this class of lens (brick_builder/robot/patch_so101.py). No datasheet for one specific board exists."
+
+  resolution_width_px:
+    # What: the wrist camera's operating resolution, width.
+    value: 640
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "4:3, the module vendor's own recommended operating resolution."
+
+  resolution_height_px:
+    value: 480
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See resolution_width_px."
+
+  distortion_k1:
+    # What: 2nd-order radial lens distortion (render.domain_rand.PostProcessConfig convention;
+    #   negative = barrel distortion, which a wide-angle lens like this one typically has).
+    value: -0.225
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Engineering estimate for 'a wide-angle board lens of this class', not a measured number. The checkerboard procedure in docs/guide/10 gives a real one."
+
+  distortion_k2:
+    # What: 4th-order radial lens distortion, same convention.
+    value: 0.04
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See distortion_k1."
+
+workspace:
+
+  baseplate_x_m:
+    # What: where the baseplate actually sits on the table, x, in the arm's base frame.
+    # Measure: a ruler from the arm's base mounting point.
+    value: 0.17
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Where the force map says the arm has the most downward push (brick_builder/scene/compose.py)."
+
+  baseplate_y_m:
+    value: 0.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See baseplate_x_m."
+
+  baseplate_yaw_deg:
+    # What: rotation of the baseplate about its own centre.
+    value: 0.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "0 = grid-aligned with the arm's base frame."
+
+  tray_x_m:
+    # What: where the spare-brick tray sits, x.
+    value: 0.13
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Default layout position (brick_builder/scene/compose.py)."
+
+  tray_y_m:
+    value: -0.17
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See tray_x_m."
