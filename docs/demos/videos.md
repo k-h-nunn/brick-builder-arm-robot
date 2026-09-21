@@ -179,3 +179,81 @@ One run of the same loop, headless:
 ```
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl python scripts/run_placement.py --pick --seed 0
 ```
+
+# Brick damage film
+
+<video controls preload="metadata" width="100%"
+       poster="../../media/hd/brick-damage-aftermath.png">
+  <source src="../../media/hd/brick-builder-arm-robot-brick-damage-1080p.mp4" type="video/mp4">
+</video>
+
+[1920x1080 file](../media/hd/brick-builder-arm-robot-brick-damage-1080p.mp4)
+
+| Step | Frame |
+|---|---|
+| Strike | [brick-damage-strike.png](../media/hd/brick-damage-strike.png) |
+| Aftermath | [brick-damage-aftermath.png](../media/hd/brick-damage-aftermath.png) |
+
+## Run conditions
+
+| Item | Value |
+|---|---|
+| Task | Three passes of the closed gripper at the end wall of a breakable DUPLO 2x4, one brick per pass |
+| Striker | Arm tool: the stock SO-101 gripper, jaws closed, no brick held |
+| Commanded tool speeds | 0.1, 0.3, 0.6 m/s |
+| Measured tool speed at contact | 0.100, 0.313, 0.538 m/s |
+| Bricks | Three breakable DUPLO 2x4, 17 pieces each (roof, 4 walls, 4 tubes, 8 studs), seated on the baseplate's edge row |
+| Weld limits | `materials.weld_limits`, unscaled: short wall 1398 N axial, 0.891 N*m at the root |
+| Contact point | Bottom few millimetres of the wall, about 15 mm below the roof |
+| Physics time step | 2 ms; damage monitor and weld check every step |
+| Control | `control.pick_place.ArmDriver` at 50 Hz, commanded pose advancing at the pass speed and running on for 92 ms past the wall face |
+| Video | 1920x1080, 30 fps, H.264, 10.9 s, 326 frames, single continuous take, real time |
+
+## On-screen elements
+
+| Element | Content |
+|---|---|
+| Wall stress [MPa] | Damage monitor's peak wall-bending stress; dashed lines: 44 MPa tensile yield, 70 MPa flexural strength; vertical rules: pass boundaries |
+| Contact force [N] | Monitor's peak lateral contact load on a brick |
+| Weld utilisation [%] | `F/F_limit + M/M_limit` for the most loaded weld; 100 % is the fracture criterion |
+| Damage state | Monitor's worst latched state over the three bricks |
+| Pieces released | Welds that have let go |
+| Struck wall | Close-up of the struck end wall |
+
+Every readout is a running peak. A rigid-body impact resolves in one 2 ms step, so the
+instantaneous value is gone before the next video frame is drawn.
+
+## Results
+
+| Pass | Tool speed at contact | Peak wall stress | Peak contact force | Peak weld utilisation | Pieces released | Damage state |
+|---|---|---|---|---|---|---|
+| Strike 0.1 m/s | 0.100 m/s | 0.6 MPa | 4.6 N | 7 % | 0 | intact |
+| Strike 0.3 m/s | 0.313 m/s | 7.3 MPa | 32.3 N | 58 % | 0 | intact |
+| Strike 0.6 m/s | 0.538 m/s | 48.0 MPa | 60.6 N | 152 % | 1 | broken |
+
+The third pass releases the struck brick's back wall at t = 7.476 s, at a weld utilisation of
+1.52 (51.2 N against 1398 N axial, 1.80 N*m against 0.891 N*m at the root). The piece is
+repainted dark grey, stays in the scene as a free body, and latches its brick to `broken`; the
+take holds on it for the last three seconds, because the release itself is one step long. The
+arm reaches 0.54 to 0.69 m/s at the tool, so the speed the guide's collision case needs is
+inside the servos' own limit and no separate striker is required.
+
+The wall stress crosses the 44 MPa tensile yield on the third pass and stays under the 70 MPa
+flexural strength, while the weld criterion is already past 100 %: the monitor's instantaneous
+peak is step-dependent by construction, and the released piece is the criterion the breakable
+brick is built to answer with.
+
+## Reproduction
+
+```
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=3 \
+  python scripts/make_damage_video.py --quality hd1080 --stills 6 \
+    --stills-dir media_out/hd/damage_stills \
+    --out media_out/hd/brick_builder_arm_robot_brick_damage_1080p.mp4
+```
+
+The same three passes without rendering:
+
+```
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl python scripts/make_damage_video.py --probe
+```
