@@ -64,7 +64,7 @@ class TwinStep:
     tol: float
     """Done threshold on the brick-to-cell error [m] -- 0.3 mm, inside the studs' capture range."""
     J_brick: np.ndarray | None = None
-    """`[8, 3]`: d(held brick's published row) / d(brick's own world dx, dy, dz). Different from `J`
+    """d(held brick's published state) / d(the brick's own world dx, dy). Different from `J`
     because the brick's top face is much nearer the lens than the plate is: the same millimetre
     of world motion moves the two blobs by different numbers of pixels."""
     J_brick_pinv: np.ndarray | None = None
@@ -193,7 +193,7 @@ class DigitalTwin:
                    tol_mm: float = 0.3, brick_body: str | None = None,
                    min_refs: int = 2, angle_from_blob: bool = False,
                    square: bool = False, grip: float | None = None,
-                   brick_dof: int = 2) -> TwinStep:
+                   brick_dof: int = 2, brick_row: bool = False) -> TwinStep:
         """Everything one servoing step needs, measured once in the twin before the loop runs.
 
         `bodies` maps a plain-words label ("the yellow 2x4") to the body the twin knows it by.
@@ -277,7 +277,7 @@ class DigitalTwin:
         J_brick = J_brick_pinv = b_star = None
         if brick_ref is not None:
             b_star, J_brick = self._brick_jacobian(goal_tcp, goal_spin, brick_ref, d_xy,
-                                                   dof=brick_dof)
+                                                   dof=brick_dof, row=brick_row)
             J_brick_pinv = np.linalg.pinv(J_brick, rcond=1e-6)
 
         # leave the twin sitting at the goal pose, which is what a caller rendering the
@@ -295,16 +295,18 @@ class DigitalTwin:
     # -- the held brick's own Jacobian ------------------------------------------------------------
 
     def _brick_jacobian(self, goal_tcp, goal_spin: float, brick_ref, d_xy: float,
-                        *, dof: int = 2):
+                        *, dof: int = 2, row: bool = False):
         """How the held brick's blob changes when the brick sits somewhere else in the hand.
 
-        Three columns, not two, and eight features, not two. A brick sitting lower in the jaws
-        moves its blob's centre almost the same way as one sitting further along them --
-        measured, `d(centre y)` is -3.99 per metre of vertical against +5.47 per metre along the
-        jaws -- so a centre-only fit reads a real 12 mm of vertical as a phantom 9 mm sideways,
-        and the loop then corrects for it. Mass tells them apart: -0.262 per metre of vertical
-        against -0.038 along the jaws, because a brick that has slid towards the gripper body
-        has part of its top face hidden. The second moments and `orient4` help as well.
+        `dof` is how many unknowns are solved for and `row` is how much of the brick's published
+        state is read to solve them. Two unknowns from the whole eight-number row is the form
+        the pick uses: the two offsets in the plane are what the tool can do anything about, and
+        they are well conditioned (the two singular values are 36.6 and 16.2 per metre). How
+        deep the brick sits in the jaws is the third, and it is not an unknown -- the grasp puts
+        it where the grasp puts it, and the run checks that against the commanded grasp height
+        rather than inferring it. Solved as a third column it comes back at a singular value of
+        2.68, which the inverse's own truncation then drops, leaving a rank-two fit for three
+        unknowns and the vertical aliasing into the pair that is commanded.
 
         The perturbation is written in the *tool* frame (that is what `held_brick_pose` takes)
         but each column is one metre of **world** brick motion, which is the frame the correction
@@ -330,8 +332,8 @@ class DigitalTwin:
                      if not state.is_empty(k) and int(state.slot_ids[k]) == iid]
             if not match:
                 raise BlindStep("the twin lost the held brick's blob measuring its Jacobian")
-            row = brick_features(state, match[0])
-            return row if dof >= 3 else row[:2]
+            published = brick_features(state, match[0])
+            return published if row else published[:2]
 
         try:
             b_star = blob((0.0, 0.0, 0.0))

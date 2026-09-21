@@ -154,6 +154,10 @@ class VisualServo:
     little under the pinch, so a single frame's answer jitters by a few tenths of a millimetre --
     enough to stop a 0.4 mm tolerance ever being met."""
 
+    hold_in_hand: bool = False
+    """Stop the in-hand reading being remade. Set by the caller everywhere but the one dwell the
+    reading belongs to, so a constant is measured where it can be measured and then stands."""
+
     freeze_in_hand: int = 8
     """Vision ticks after which the in-hand reading stops being updated.
 
@@ -368,7 +372,7 @@ class VisualServo:
             # while searching for the frame the world is really at. A search that averaged the
             # in-hand reading in nine times per tick would bury the real one under the frames it
             # only looked at.
-            if dry_run:
+            if dry_run or self.hold_in_hand:
                 d_b = self._d_b if self._d_b is not None else d_b
             else:
                 if self._d_b is None:

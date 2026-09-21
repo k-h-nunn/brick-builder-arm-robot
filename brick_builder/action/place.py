@@ -48,7 +48,8 @@ from .sequence import Command, IdealSequence, ReferenceFrame
 from .servo import VisualServo
 from .twin import BlindStep, DigitalTwin
 from .worlds import (
-    NOMINAL_PLATE_XY, SUPPLY_BODY, TARGET_CELL, WANTED, nominal_cfg, supply_nominal_xy,
+    NOMINAL_PLATE_XY, SPARE_BODY, SUPPLY_BODY, TARGET_CELL, WANTED, nominal_cfg,
+    supply_nominal_xy,
 )
 
 STEP_TITLES = (
@@ -151,7 +152,14 @@ class PlaceConfig:
     pick: bool = False
     pick_approach: float = 0.055
     pick_settle: float = 0.6
-    pick_clearance: float = 0.010
+    lift_hold: float = 1.6
+    """Seconds the script stands still at the top of the lift [s].
+
+    Where the brick's offset in the jaws is read: the arm is at rest, the brick is clear of the
+    table, and the only thing under it is bare table rather than the baseplate and the bricks
+    already on it. The reading is taken here, averaged over the dwell, and then held -- it is
+    one constant, and the align dwell's job is the baseplate, not this again."""
+    pick_clearance: float = 0.016
     """How much wider than the brick the jaws open before the grasp [m], total across the gap.
 
     A control parameter, not a change of hardware: the same bare jaws, told to open further.
@@ -160,7 +168,9 @@ class PlaceConfig:
     measured floor near 1.7 mm with one small reference in view, so two millimetres of clearance
     is inside its own noise. Measured at 4 mm: a jaw lands on the brick's top face, the arm
     stalls ten millimetres above the commanded grasp height and closes on the brick's top rim.
-    Ten millimetres of clearance puts the floor of the estimate well inside the gap."""
+    At 10 mm the grasp reaches its commanded height in a nominal world but still misses on
+    displaced ones; at 16 mm, eight on each side, four of five seeds that had missed twice each
+    reached it, and three of them landed on the target cell."""
     pick_freeze_below: float = 0.030
     """Tool height above the table below which the grasp's correction stops updating [m].
 
@@ -181,16 +191,17 @@ class PlaceConfig:
     brick instead of beside it: the arm stalls ten millimetres high, the jaws close on the
     brick's top rim, and the brick slides out of them during the transport."""
 
-    grasp_yaw_ticks: int = 3
-    """Consecutive vision ticks inside `grasp_yaw_deg` before the descent starts."""
+    grasp_ticks: int = 3
+    """Consecutive vision ticks inside both tolerances before the descent starts."""
 
-    grasp_yaw_wait: int = 20
+    grasp_wait: int = 45
     """Vision ticks the descent waits for that, and no more.
 
     A brick whose blob barely carries an orientation never settles, and a loop that waits for it
-    trips the stall bound and ends the run with the brick still on the table -- measured on two
-    of five displaced seeds. Past this the descent goes ahead on the estimate it has and
-    `grasp_miss` catches what that costs."""
+    trips the stall bound and ends the run with the brick still on the table. Past this the
+    descent goes ahead on the estimate it has and `grasp_miss` catches what that costs. Wide
+    enough for the correction to cross the offsets the task puts there: 15 mm at the 1.2 mm a
+    tick the integrator is allowed, plus the arm's own settling."""
 
     grasp_miss: float = 0.003
     """How far above the commanded grasp height the tool may stop and still count as a grasp [m].
@@ -254,6 +265,7 @@ def reference_bodies(twin_scene, state: SceneState, *, exclude: str | None = Non
     titles = {
         twin_scene.plate.name: "baseplate",
         SUPPLY_BODY: "brick to pick up",
+        SPARE_BODY: "spare brick",
     }
     for i, name in enumerate(twin_scene.placed_names):
         titles.setdefault(name, f"placed brick {i}")
@@ -378,6 +390,7 @@ class Script:
             yield from self._close_on_the_brick("Grasp")
             yield from self._move("Lift", np.array([self._cmd[0], self._cmd[1], g.carry_z]),
                                   speed=cfg.descend_speed, grip=g.grip_closed)
+            yield from self._hold("Lift", cfg.lift_hold)
         else:
             yield from self._hold("Transport", 0.2, grip=g.grip_closed)
 
@@ -536,6 +549,15 @@ def record_ideal(cfg: PlaceConfig, *, seed: int = 0, target=TARGET_CELL,
         # baseplate is exactly what the rest of the sequence is about.
         f.bodies = reference_bodies(
             scene, f.state, exclude=held_name if _in_hand(f.step) else None)
+        if cfg.pick and f.step in ("Approach", "Grasp"):
+            # Reaching for the brick, the brick is the only thing worth lining up on. Everything
+            # else in view -- the spare beside it, the baseplate across the table -- is a
+            # landmark that has not moved, and a least-squares fit over the lot answers "where
+            # is the arm" when the question is "where is that brick". Measured with the spare in
+            # the set: the tool corrected 3.6 mm of a 13.4 mm offset and called itself converged
+            # at 1.74 mm, and the yaw, read off the line joining the two blobs, moved 0.26 deg
+            # against a brick turned 15.8.
+            f.bodies = {t: b for t, b in f.bodies.items() if b == SUPPLY_BODY}
         bodies.setdefault(f.step_index, f.bodies)
         held_by_step.setdefault(f.step_index, held_name if _in_hand(f.step) else None)
     return IdealSequence(frames=frames, bodies_by_step=bodies, held_body=held_name,
@@ -572,7 +594,11 @@ class TrackingEpisode:
                                seed=seed, prepare=twin_prepare),
         }
         if cfg.pick:
-            self.twins[True] = DigitalTwin(nominal_cfg(held=held, supply=(DISTRACTOR,)),
+            # The wanted brick's row position is left empty rather than dropped, so the spare
+            # keeps the body name and the place it has in the world the sequence was recorded
+            # in. `_prepare_step` matches the recording's reference bodies to the twin's by
+            # name, and renumbering the row silently emptied the reference set.
+            self.twins[True] = DigitalTwin(nominal_cfg(held=held, supply=(None, DISTRACTOR)),
                                            seed=seed, prepare=twin_prepare)
         else:
             self.twins[True] = DigitalTwin(nominal_cfg(held=held), seed=seed,
@@ -597,7 +623,8 @@ class TrackingEpisode:
         self.regrasps = 0
         """Times the grasp was opened and made again because the tool stopped short."""
         self.yaw_err = float("nan")
-        self._yaw_settled = 0
+        self._grasp_settled = 0
+        self._gating_grasp = False
         self._grasp_checked = False
         self._regrasping = False
         # Where the descent onto the brick begins, and how low it is told to go. Both are read
@@ -672,9 +699,15 @@ class TrackingEpisode:
             brick_body=held, tol_mm=self.cfg.tol_mm, min_refs=1,
             angle_from_blob=(len(bodies) == 1), square=(WANTED[0] == WANTED[1]),
             grip=pose.grip,
-            # Three in-hand degrees of freedom only for a pick, where the brick can sit deep in
-            # the jaws. The placement task keeps the two-column form it was measured 10/10 with.
-            brick_dof=3 if self.cfg.pick else 2,
+            # Two in-hand unknowns, from the brick's blob centre. The offsets in the plane are
+            # what a tool move can answer; how deep the brick sits in the jaws is the grasp's
+            # business and is checked against the commanded grasp height instead. Reading the
+            # whole eight-number row to solve them measured worse, not better: mass, the second
+            # moments and `orient4` also move with the brick's tilt and with how much of it the
+            # jaws cut into, the fit has no column for either, and it spreads them over the two
+            # it does have. At the lift dwell, in a nominal world with the brick centred in the
+            # jaws to 0.3 mm, the row read 6.2 mm and the centre read 1.1 mm.
+            brick_dof=2, brick_row=False,
         )
 
     def _settle_servo(self, held, frame, bodies) -> None:
@@ -696,10 +729,21 @@ class TrackingEpisode:
             self._servo.require_brick = held is not None
         if frame.step == self.cfg.freeze_after and not self._in_hand_reset:
             self._in_hand_reset = True
-            self._servo.reset_in_hand()
+            # Not on a pick. There the reading was already taken at the lift dwell, against the
+            # bare table and with the arm at rest, and it is one constant: starting it again
+            # over the baseplate measured 3.2 mm where the jaws hold the brick to 0.3 mm, and
+            # the align dwell turned that into 5.5 mm of tool correction. The placement task
+            # starts with the brick already held and has no lift dwell to read it at, so it
+            # reads it here, which is what it was measured 10/10 with.
+            if not self.cfg.pick:
+                self._servo.reset_in_hand()
         sv = np.linalg.svd(self._step.J[:, :2], compute_uv=False)
         self.gain = float(sv[-1]) if sv.size else 0.0
-        self.trusted = self.gain >= self.cfg.min_gain and len(bodies) >= 2
+        # Two blobs, or the one blob the whole step is about. Reaching for the brick there is
+        # nothing else to line up on by design, and the wider single-blob dead band is what
+        # pays for the noisier reading.
+        alone = self.cfg.pick and frame.step in ("Approach", "Grasp")
+        self.trusted = self.gain >= self.cfg.min_gain and (len(bodies) >= 2 or alone)
 
     def run(self) -> Iterator[TickRecord]:
         cfg = self.cfg
@@ -718,7 +762,7 @@ class TrackingEpisode:
             # frame, because the arm has 55 mm to travel and the stall bound is counted in
             # vision ticks.
             commands = (frame.commands if self.holds == 0 or self._regrasping
-                        else frame.commands[-1:])
+                        or self._gating_grasp else frame.commands[-1:])
             for command in commands:
                 pos = np.array([command.pos[0] + self.correction[0],
                                 command.pos[1] + self.correction[1], command.pos[2]])
@@ -790,6 +834,8 @@ class TrackingEpisode:
             # grasp descent 10 mm short and left 12 mm of vertical offset in the jaws.
             dwell_only = cfg.pick if cfg.dwell_only is None else cfg.dwell_only
             playing_forward = (self.frozen or self._descending or not cfg.closed_loop
+                               or not self.trusted
+                               or (cfg.pick and frame.step == "Lift")
                                or (dwell_only and not self.dwelling))
             # Two places the index waits for something other than the tube. On the way back up
             # to the hover after a missed grasp there is nothing to compare against until the
@@ -801,8 +847,8 @@ class TrackingEpisode:
                 if (self.k == self._descent_k - 1
                         and float(np.max(np.abs(self.world.joint_speed))) < cfg.dwell_speed):
                     self._regrasping = False
-            hold_for_yaw = self._holding_for_yaw(frame)
-            if not hold_for_yaw and (err_mm != err_mm or err_mm <= tube or playing_forward):
+            self._gating_grasp = self._holding_for_grasp(frame, err_mm, floor)
+            if not self._gating_grasp and (err_mm != err_mm or err_mm <= tube or playing_forward):
                 if last:
                     # Finishing is the tight test, not the advancing one -- unless the
                     # correction is frozen, in which case nothing is going to move the error and
@@ -829,23 +875,26 @@ class TrackingEpisode:
 
     # -- the grasp -------------------------------------------------------------------------------
 
-    def _holding_for_yaw(self, frame: ReferenceFrame) -> bool:
+    def _holding_for_grasp(self, frame: ReferenceFrame, err_mm: float, floor: float) -> bool:
         """Whether the descent onto the brick is still waiting for the hover estimate to settle.
 
-        Only at the last frame before the descent, and only for a pick: everywhere else yaw is
-        one more thing the loop corrects while it goes, but here it decides whether the jaws
-        come down around the brick or on top of it.
+        Only at the last frame before the descent, and only for a pick. Both halves of the
+        estimate have to have arrived -- where the brick is and which way it is turned -- because
+        the descent freezes the correction and the jaws then go wherever it left them. Measured
+        without this, on a brick lying 13.4 mm and 15.8 deg off: the index ran through the hover
+        while the reading still said 21 mm, the correction stopped at 1.6 mm, and the grasp
+        stopped short twice.
         """
         cfg = self.cfg
         if not (cfg.pick and cfg.closed_loop) or self.frozen or self._descent_k is None:
             return False
         if self.k != self._descent_k - 1 or self._regrasping:
             return False
-        if self.yaw_err == self.yaw_err:
-            self._yaw_settled = (self._yaw_settled + 1
-                                 if abs(self.yaw_err) <= math.radians(cfg.grasp_yaw_deg) else 0)
-        return (self._yaw_settled < cfg.grasp_yaw_ticks
-                and self.holds < cfg.grasp_yaw_wait)
+        close = err_mm == err_mm and err_mm <= max(floor, cfg.advance_mm)
+        turned = (self.yaw_err == self.yaw_err
+                  and abs(self.yaw_err) <= math.radians(cfg.grasp_yaw_deg))
+        self._grasp_settled = self._grasp_settled + 1 if (close and turned) else 0
+        return self._grasp_settled < cfg.grasp_ticks and self.holds < cfg.grasp_wait
 
     def _grasp_missed(self, frame: ReferenceFrame, command: Command) -> bool:
         """Did the jaws close somewhere other than where they were sent? If so, go back up.
@@ -874,7 +923,7 @@ class TrackingEpisode:
         self.holds = 0
         self._step_index = -1
         self._jacobian_at = -10 ** 6
-        self._yaw_settled = 0
+        self._grasp_settled = 0
         self._grasp_checked = False
         self._regrasping = True
         self.pick_frozen = False
@@ -894,7 +943,14 @@ class TrackingEpisode:
         driving the tool somewhere it should not go.
         """
         self.yaw_err = float("nan")
-        if (self._servo is None or self._step is None or not self.trusted
+        # The lift dwell is the one place a tick is worth taking on an untrusted reading: what
+        # is read there is the brick's own blob against the twin's, which needs no reference
+        # geometry at all, and over the supply area there is only one reference blob in view
+        # anyway. Nothing is steered by it -- the correction integrates only on trusted ticks.
+        in_hand_only = (self.cfg.pick and self._step is not None
+                        and self._step.J_brick is not None and frame.step == "Lift")
+        if (self._servo is None or self._step is None
+                or (not self.trusted and not in_hand_only)
                 or getattr(self, "_pressing", False) or getattr(self, "_descending", False)):
             return self.k, float("nan"), np.zeros(3), 0
         if self.frozen:
@@ -915,6 +971,10 @@ class TrackingEpisode:
         self.dwelling = (not dwell_only) or (
             1e3 * frame.travel < self.cfg.dwell_travel_mm
             and float(np.max(np.abs(self.world.joint_speed))) < self.cfg.dwell_speed)
+        if self.cfg.pick:
+            # One dwell, one unknown. The brick's offset in the jaws is read at the lift dwell
+            # and nowhere else; every other tick reads the stored value.
+            self._servo.hold_in_hand = not (self.dwelling and frame.step == "Lift")
         rel = self.frozen and self.ideal.held_by_step.get(frame.step_index) is None
         # In relative mode the placed brick is the whole point: measured over the baseplate and
         # the bricks that never moved, the relative error is near zero whatever the arm did. If
@@ -967,7 +1027,7 @@ class TrackingEpisode:
             self._pred_mm = 1e3 * float(np.linalg.norm(measured[:2] - self._predicted[:2]))
             self.pred_errors.append(self._pred_mm)
 
-        if self.cfg.closed_loop and not self.frozen and self.dwelling:
+        if self.cfg.closed_loop and not self.frozen and self.dwelling and self.trusted:
             delta = -self.cfg.lam * measured
             n = float(np.linalg.norm(delta[:2]))
             if n > 0.0012:
