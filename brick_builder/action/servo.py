@@ -343,10 +343,12 @@ class VisualServo:
             # Only as many features as the Jacobian was built from: the placement task keeps
             # the two-column centre-only form it was measured with, the pick uses the full row.
             b = brick_features(actual, found.slots[self.brick_ref.name])[:st.b_star.shape[0]]
-            # Deliberately NOT taken from the reference frame. The held brick's row is read
-            # against the twin posed where the tool is being *commanded*, because the reference
-            # frame was recorded from a pose several millimetres away and the brick's silhouette
-            # shifts a little with the camera.
+            # Against the twin posed where the tool is being *commanded*, not against the
+            # reference frame: the reference frame was recorded from a pose several millimetres
+            # away and the brick's silhouette shifts a little with the camera. A grasp that
+            # closed where it was told leaves the brick at the twin's own in-hand offset, so
+            # this row is the right one to difference against; a grasp that stopped short does
+            # not, and that is a grasp to redo rather than a reading to correct for.
             inv_b, sv_b, _ = damped_inverse(st.J_brick, relative=self.truncate_at)
             self.last_in_hand_sv = sv_b
             full = inv_b @ (b - st.b_star)

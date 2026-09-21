@@ -151,6 +151,16 @@ class PlaceConfig:
     pick: bool = False
     pick_approach: float = 0.055
     pick_settle: float = 0.6
+    pick_clearance: float = 0.010
+    """How much wider than the brick the jaws open before the grasp [m], total across the gap.
+
+    A control parameter, not a change of hardware: the same bare jaws, told to open further.
+    `press.open_clearance` is 4 mm, two on each side, which is what a task that already knows
+    where the brick is needs. This one does not: it is aiming at a blob whose centre has a
+    measured floor near 1.7 mm with one small reference in view, so two millimetres of clearance
+    is inside its own noise. Measured at 4 mm: a jaw lands on the brick's top face, the arm
+    stalls ten millimetres above the commanded grasp height and closes on the brick's top rim.
+    Ten millimetres of clearance puts the floor of the estimate well inside the gap."""
     pick_freeze_below: float = 0.030
     """Tool height above the table below which the grasp's correction stops updating [m].
 
@@ -161,6 +171,33 @@ class PlaceConfig:
     The loop lines up at the hover, then holds while it comes down."""
     stall_load: float = 0.45
     """Gripper load, as a fraction of the servo's limit, that counts as closed on the brick."""
+
+    grasp_yaw_deg: float = 1.5
+    """Yaw error the hover estimate must be inside before the jaws are allowed down [deg].
+
+    The open jaws clear the brick by half of `press.open_clearance` on each side -- two
+    millimetres -- and a square brick 31.8 mm across turns that much through one and a half
+    degrees. A descent started on a yaw estimate that has not settled puts a jaw on top of the
+    brick instead of beside it: the arm stalls ten millimetres high, the jaws close on the
+    brick's top rim, and the brick slides out of them during the transport."""
+
+    grasp_yaw_ticks: int = 3
+    """Consecutive vision ticks inside `grasp_yaw_deg` before the descent starts."""
+
+    grasp_yaw_wait: int = 20
+    """Vision ticks the descent waits for that, and no more.
+
+    A brick whose blob barely carries an orientation never settles, and a loop that waits for it
+    trips the stall bound and ends the run with the brick still on the table -- measured on two
+    of five displaced seeds. Past this the descent goes ahead on the estimate it has and
+    `grasp_miss` catches what that costs."""
+
+    grasp_miss: float = 0.003
+    """How far above the commanded grasp height the tool may stop and still count as a grasp [m].
+
+    Read from the bus: forward kinematics on the reported joint angles. Above this the jaws
+    closed somewhere other than where they were sent, so the grasp is opened and made again from
+    the hover. Once -- a second miss is a failure, not a third attempt."""
 
     travel_speed: float = 0.10
     descend_speed: float = 0.035
@@ -403,8 +440,9 @@ class Geometry:
                             if self.twin_scene.grasp is not None
                             else jaw_angle_for_clearance(self.grasp.contact_point,
                                                          -self.cfg.press.squeeze))
-        self.grip_open = jaw_angle_for_clearance(self.grasp.contact_point,
-                                                 self.cfg.press.open_clearance)
+        self.open_clearance = (self.cfg.pick_clearance if self.cfg.pick
+                               else self.cfg.press.open_clearance)
+        self.grip_open = jaw_angle_for_clearance(self.grasp.contact_point, self.open_clearance)
         self.grip_together = gripper_angle_for_width(0.002)
         self.supply_nominal = np.array([0.0, 0.0, 0.0])
 
@@ -421,7 +459,7 @@ class Geometry:
         move, so a brick a couple of millimetres towards it ends up outside the gripper. Starting
         half the open clearance back lets the moving jaw shove it flush as it closes.
         """
-        centre = np.array([0.5 * self.cfg.press.open_clearance, 0.0, 0.0])
+        centre = np.array([0.5 * self.open_clearance, 0.0, 0.0])
         rot = np.array([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]])
         base = tcp_for_brick(
             [self.supply_nominal[0], self.supply_nominal[1], height], 0.0, self.grasp)
@@ -556,6 +594,22 @@ class TrackingEpisode:
         self.pick_frozen = False
         self._descending = False
         self.frozen_correction = np.zeros(3)
+        self.regrasps = 0
+        """Times the grasp was opened and made again because the tool stopped short."""
+        self.yaw_err = float("nan")
+        self._yaw_settled = 0
+        self._grasp_checked = False
+        self._regrasping = False
+        # Where the descent onto the brick begins, and how low it is told to go. Both are read
+        # off the recording, which is nominal task knowledge, not the world.
+        self._descent_k = next(
+            (i for i, f in enumerate(ideal.frames)
+             if f.commands and f.commands[0].pos[2] < cfg.pick_freeze_below), None)
+        self._grasp_k = max(
+            (i for i, f in enumerate(ideal.frames) if f.step == "Grasp"), default=-1)
+        self._grasp_z = min(
+            (c.pos[2] for f in ideal.frames if f.step in ("Approach", "Grasp")
+             for c in f.commands), default=0.0)
         self._freeze_index = max(
             (f.step_index for f in ideal.frames if f.step == cfg.freeze_after), default=10 ** 6)
         self._step_index = -1
@@ -659,7 +713,12 @@ class TrackingEpisode:
                 self._jacobian_at = self.k
                 self._prepare_step(frame)
 
-            commands = frame.commands if self.holds == 0 else frame.commands[-1:]
+            # A held index issues the frame's last write only, so the world runs a fifth as
+            # fast; on the way back up to the hover after a missed grasp it issues the whole
+            # frame, because the arm has 55 mm to travel and the stall bound is counted in
+            # vision ticks.
+            commands = (frame.commands if self.holds == 0 or self._regrasping
+                        else frame.commands[-1:])
             for command in commands:
                 pos = np.array([command.pos[0] + self.correction[0],
                                 command.pos[1] + self.correction[1], command.pos[2]])
@@ -692,6 +751,9 @@ class TrackingEpisode:
             self.step_errors.setdefault(frame.step_index, []).append(err_mm)
             rec = self._record(frame, pos, commands[-1], vision=True, err_mm=err_mm, seen=seen)
             yield rec
+
+            if self._grasp_missed(frame, commands[-1]):
+                continue
 
             # The tube can never be tighter than the reading is trustworthy. With one small
             # blob in view the feature floor is about 1.7 mm; asking the index to wait for
@@ -729,7 +791,18 @@ class TrackingEpisode:
             dwell_only = cfg.pick if cfg.dwell_only is None else cfg.dwell_only
             playing_forward = (self.frozen or self._descending or not cfg.closed_loop
                                or (dwell_only and not self.dwelling))
-            if err_mm != err_mm or err_mm <= tube or playing_forward:
+            # Two places the index waits for something other than the tube. On the way back up
+            # to the hover after a missed grasp there is nothing to compare against until the
+            # arm is there. And the descent itself waits for the hover estimate to settle in
+            # yaw as well as in position, because a square brick turned a degree and a half
+            # fills the two millimetres of clearance the open jaws leave it.
+            if self._regrasping:
+                playing_forward = False
+                if (self.k == self._descent_k - 1
+                        and float(np.max(np.abs(self.world.joint_speed))) < cfg.dwell_speed):
+                    self._regrasping = False
+            hold_for_yaw = self._holding_for_yaw(frame)
+            if not hold_for_yaw and (err_mm != err_mm or err_mm <= tube or playing_forward):
                 if last:
                     # Finishing is the tight test, not the advancing one -- unless the
                     # correction is frozen, in which case nothing is going to move the error and
@@ -754,6 +827,62 @@ class TrackingEpisode:
             self.reports.append(StepReport(title, len(errs), errs[-1],
                                            errs[-1] <= self.cfg.tol_mm * 4))
 
+    # -- the grasp -------------------------------------------------------------------------------
+
+    def _holding_for_yaw(self, frame: ReferenceFrame) -> bool:
+        """Whether the descent onto the brick is still waiting for the hover estimate to settle.
+
+        Only at the last frame before the descent, and only for a pick: everywhere else yaw is
+        one more thing the loop corrects while it goes, but here it decides whether the jaws
+        come down around the brick or on top of it.
+        """
+        cfg = self.cfg
+        if not (cfg.pick and cfg.closed_loop) or self.frozen or self._descent_k is None:
+            return False
+        if self.k != self._descent_k - 1 or self._regrasping:
+            return False
+        if self.yaw_err == self.yaw_err:
+            self._yaw_settled = (self._yaw_settled + 1
+                                 if abs(self.yaw_err) <= math.radians(cfg.grasp_yaw_deg) else 0)
+        return (self._yaw_settled < cfg.grasp_yaw_ticks
+                and self.holds < cfg.grasp_yaw_wait)
+
+    def _grasp_missed(self, frame: ReferenceFrame, command: Command) -> bool:
+        """Did the jaws close somewhere other than where they were sent? If so, go back up.
+
+        The reading is forward kinematics on the joint angles the bus reports, which is
+        mechanical state the controller is allowed to have. A tool that stopped short gripped
+        the brick near its top rim, where it does not stay: the brick slid 32 mm out of the jaws
+        between the lift and the press. So the grasp is opened and made again from the hover,
+        once.
+        """
+        cfg = self.cfg
+        if not (cfg.pick and cfg.closed_loop) or self._descent_k is None:
+            return False
+        if self._grasp_checked or self.k != self._grasp_k or self._regrasping:
+            return False
+        self._grasp_checked = True
+        tcp_z = float(self.world.feedback(command.grip).tcp_pos[2])
+        if tcp_z - self._grasp_z <= cfg.grasp_miss:
+            return False
+        short_mm = 1e3 * (tcp_z - self._grasp_z)
+        if self.regrasps:
+            self.failure = f"the grasp stopped {short_mm:.1f} mm short twice"
+            return False
+        self.regrasps += 1
+        self.k = self._descent_k - 1
+        self.holds = 0
+        self._step_index = -1
+        self._jacobian_at = -10 ** 6
+        self._yaw_settled = 0
+        self._grasp_checked = False
+        self._regrasping = True
+        self.pick_frozen = False
+        self._descending = False
+        if self._servo is not None:
+            self._servo.reset_in_hand()
+        return True
+
     # -- the inverse ------------------------------------------------------------------------------
 
     def _feedback(self, frame: ReferenceFrame) -> tuple[int, float, np.ndarray, int]:
@@ -764,6 +893,7 @@ class TrackingEpisode:
         holding, instead of reading as a displaced world, which the feedback would answer by
         driving the tool somewhere it should not go.
         """
+        self.yaw_err = float("nan")
         if (self._servo is None or self._step is None or not self.trusted
                 or getattr(self, "_pressing", False) or getattr(self, "_descending", False)):
             return self.k, float("nan"), np.zeros(3), 0
@@ -826,6 +956,7 @@ class TrackingEpisode:
                 self.unmatched += 1
                 return self.k, float("nan"), np.zeros(3), int(out["seen"])
         self.matched = best
+        self.yaw_err = float(out["d_r"][2])
 
         measured = np.array([out["d_r"][0] + out["d_b"][0],
                              out["d_r"][1] + out["d_b"][1], out["d_r"][2]])
