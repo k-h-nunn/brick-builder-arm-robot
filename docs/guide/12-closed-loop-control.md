@@ -208,11 +208,10 @@ ordering is what the term is trained on.
 
 ![Learned and analytic correction on held-out ticks](../media/action/learned_vs_analytic_action.png)
 
-*Learned and analytic correction on held-out ticks.*
-
 ![Prediction error over one closed-loop placement](../media/action/prediction_error.png)
 
-*Prediction error over one closed-loop placement, dashed rules at step boundaries.*
+Ticks where the loop took no reading -- pressing, frozen, or with too little in view to trust --
+are gaps rather than a held value.
 
 ## Closed loop
 
@@ -344,7 +343,15 @@ PlaceConfig(inverse="learned")    # loads brick_builder/action/weights/inverse.n
 ```
 
 Regenerate the figures on this page with
-`python -m brick_builder.action.learn.figures --out docs/media/action`.
+
+```bash
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl python -m brick_builder.action.learn.figures \
+  --out docs/media/action --data data_cache/action/placement data_cache/action/pick \
+  --weights brick_builder/action/weights/inverse_hindsight.npz
+```
+
+The scatter is of the hindsight-and-distal-teacher inverse, which is the one the closed-loop
+tables' `learned` column measures.
 
 ## C export
 
