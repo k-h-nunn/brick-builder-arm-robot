@@ -356,13 +356,19 @@ class SceneConfig:
     tray_brick: tuple[int, int] = (2, 4)
     """Footprint of the spare bricks in the tray, in studs."""
 
-    supply: tuple[tuple[int, int, str], ...] = ()
+    supply: tuple[tuple[int, int, str] | None, ...] = ()
     """Loose bricks lying on the table beside the plate, each `(nx, ny, colour)`.
 
     No tray, no pockets, no walls: the deliverable's hardware is a bare arm on a bare table, and
     a brick to be picked up simply lies there. They are laid out in a row along y at
     :attr:`supply_xy`, :data:`SUPPLY_SPACING` stud pitches apart, which is wide enough for the
     open jaws to come down around one without touching its neighbour.
+
+    A `None` entry is a row position with nothing standing in it. The bricks that are there keep
+    the name and the place their position in the row gives them, so the same brick is the same
+    body in a scene that has been picked from and one that has not. Numbering the bricks that
+    happen to be present instead renamed the spare from `supply_brick_1` to `supply_brick_0` and
+    moved it half a row, which cost the lift every reference blob it had.
     """
 
     supply_xy: tuple[float, float] = (0.13, -0.17)
@@ -552,7 +558,10 @@ def _add_supply(world: mujoco.MjSpec, cfg: SceneConfig) -> list[BrickHandle]:
     spec = cfg.spec
     sx, sy = cfg.supply_xy
     out = []
-    for k, (nx, ny, colour) in enumerate(cfg.supply):
+    for k, entry in enumerate(cfg.supply):
+        if entry is None:
+            continue
+        nx, ny, colour = entry
         y = sy + (k - (len(cfg.supply) - 1) / 2.0) * SUPPLY_SPACING * spec.pitch
         out.append(add_brick(
             world, name=f"{SUPPLY_PREFIX}{k}", nx=int(nx), ny=int(ny), colour=str(colour),

@@ -117,6 +117,13 @@ def build_pick_world(seed: int, *, displaced: bool = True, cameras=()):
 
 
 SUPPLY_BODY = "supply_brick_0"
+SPARE_BODY = "supply_brick_1"
+"""The two loose bricks, named for the part each plays rather than for what is on the table.
+
+Both names are fixed by the row position, not by how many bricks are standing in the row, so
+"the spare" is the same body in the world the sequence was recorded in and in the twin that has
+already picked the other one up.
+"""
 
 
 def brick_displacement(seed: int) -> tuple[np.ndarray, float]:
