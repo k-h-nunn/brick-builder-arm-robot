@@ -1,6 +1,6 @@
-"""Native-resolution filming for the Brick Builder Arm Robot.
+"""Native-resolution recording for the Brick Builder Arm Robot.
 
-This module renders the picture; :mod:`brick_builder.demo.cinema_panels` draws every piece of text on
+This module renders the picture; :mod:`brick_builder.demo.video_panels` draws every piece of text on
 top of it.  Together they are the whole video toolkit, and ``scripts/make_demo_video.py`` is the
 one program that drives them.
 
@@ -20,16 +20,16 @@ earlier attempt unreadable:
    own line.**  :func:`subject_span` measures, on every single frame, how wide the arm, the tray
    and the baseplate are in pixels; :func:`frame_overrun` measures how far outside the frame a
    given set of points reaches; :func:`ray_angle_deg` measures how far the line of sight is from
-   the shoulder-to-wrist line.  :class:`Film` refuses to write a frame that fails any of the
+   the shoulder-to-wrist line.  :class:`Recorder` refuses to write a frame that fails any of the
    three.  The first two pull against each other - this arm, its tray and its baseplate together
    are as tall as they are wide, so a 16:9 frame that holds all of the arm cannot also have it
-   span two thirds of the width - and the first cut of the film resolved that the wrong way: the
+   span two thirds of the width - and the first version of the video resolved that the wrong way: the
    shoulder and the upper arm were out of shot for the whole take and the machine read as two
    disconnected yellow objects.  The third rule is what the second cut was missing: it sat almost
    on the arm's own line, so the links collapsed into one unreadable vertical stack of yellow and
    the gripper disappeared behind the arm's own body at the moment it closed on the brick.
 
-Everything here only reads the physics modules (``brick_builder.scene``, ``brick_builder.render``); a film
+Everything here only reads the physics modules (``brick_builder.scene``, ``brick_builder.render``); a video
 is driven by a motion generator that yields ``(scene, phase, data)`` once per control tick, so the
 toolkit never has an opinion about how the arm is moved.
 """
@@ -53,13 +53,13 @@ import numpy as np
 from brick_builder.render.renderer import COLLISION_GEOM_GROUP, Frame, SceneRenderer
 from brick_builder.scene.compose import TABLE_GEOM, Scene
 
-from brick_builder.demo.cinema_panels import Overlay, Readout, Rect
+from brick_builder.demo.video_panels import Overlay, Readout, Rect
 
 __all__ = [
     "Quality", "QUALITIES", "quality_by_name",
-    "studio_look", "CinemaRenderer", "CamKey", "interp_camera", "ease",
+    "studio_look", "FreeCameraRenderer", "CamKey", "interp_camera", "ease",
     "backdrop", "floor_grid", "subject_points", "subject_span", "arm_points", "frame_overrun",
-    "ray_angle_deg", "downscale", "VideoWriter", "Film", "FilmResult", "Tick", "ReadoutSpec",
+    "ray_angle_deg", "downscale", "VideoWriter", "Recorder", "RecordingResult", "Tick", "ReadoutSpec",
     "CloseUp", "panel_size_for",
 ]
 
@@ -69,7 +69,7 @@ __all__ = [
 
 @dataclass(frozen=True)
 class Quality:
-    """One filming preset.  Both presets render at their own native size; neither is upscaled.
+    """One recording preset.  Both presets render at their own native size; neither is upscaled.
 
     ``hd1080`` is the deliverable: 1920x1080 native, and the only encode.
     ``draft`` is the same code path at a smaller native size, for the test suite and for checking
@@ -93,7 +93,7 @@ class Quality:
 
 
 QUALITIES: dict[str, Quality] = {
-    # 1920x1080 native, and the only encode this film needs: every text element is sized as a
+    # 1920x1080 native, and the only encode this video needs: every text element is sized as a
     # fraction of frame height, so the labels stay exactly as readable here as at 1440p while the
     # frame costs about half as much to render.
     "hd1080": Quality("hd1080", 1920, 1080, 30, msaa=4, shadowsize=4096, crf=18, preset="medium",
@@ -200,10 +200,10 @@ def assert_shape(array: np.ndarray, width: int, height: int, what: str) -> np.nd
     return array
 
 
-class CinemaRenderer(SceneRenderer):
+class FreeCameraRenderer(SceneRenderer):
     """:class:`SceneRenderer` plus a movable camera, and a shape check on every frame.
 
-    The parent renders only from named cameras fixed in the model.  A film needs to move the
+    The parent renders only from named cameras fixed in the model.  A video needs to move the
     camera, so :meth:`render_free` runs the same pipeline with MuJoCo's free camera
     (lookat / distance / azimuth / elevation) and hands back the same :class:`Frame`.
     """
@@ -584,7 +584,7 @@ class VideoWriter:
         self.close()
 
 
-# ======================================================================================= filming ===
+# ======================================================================================= recording ===
 
 
 def _export_path(master: Path) -> Path:
@@ -610,8 +610,8 @@ class Tick:
 
 
 @dataclass
-class FilmResult:
-    """What one filming run produced, in numbers a report can quote without re-measuring."""
+class RecordingResult:
+    """What one recording run produced, in numbers a report can quote without re-measuring."""
 
     master: Path
     export: Path | None
@@ -626,7 +626,7 @@ class FilmResult:
 
     min_ray_angle: float
     """The smallest angle, over the whole take, between the camera's line of sight and the line
-    the film was told to stay off (the shoulder-to-wrist line).  Degrees; 90 is broadside."""
+    the video was told to stay off (the shoulder-to-wrist line).  Degrees; 90 is broadside."""
 
     stills: list[Path]
     still_rects: list[dict[str, Rect]]
@@ -654,7 +654,7 @@ class ReadoutSpec:
     hi: float | None
     """Top of the trace's scale, or `None` to scale it to the biggest value the run has shown --
     which is the only honest choice when the number starts wherever the world happens to be
-    wrong and the point of the film is watching it come down."""
+    wrong and the point of the video is watching it come down."""
 
     fmt: str = "{:.1f}"
 
@@ -698,19 +698,19 @@ class CloseUp:
 def panel_size_for(quality: Quality, n: int = 4) -> tuple[int, int]:
     """The ``(width, height)`` each of ``n`` panel pictures must be, at this quality: a square.
 
-    The same answer as :attr:`Film.panel_size`, available before a :class:`Film` exists, for a
+    The same answer as :attr:`Recorder.panel_size`, available before a :class:`Recorder` exists, for a
     caller that has to build its panel sources first.
     """
 
     return Overlay(quality.width, quality.height).panel_size(int(n))
 
 
-class Film:
+class Recorder:
     """Renders a motion generator into a master clip (and a 1920x1080 export beside it).
 
     The generator is the only source of movement: it yields a :class:`Tick` per control tick, and
-    the film decides from the simulator's own clock when the next video frame is due.  The camera
-    path, the overlay and the panels are the film's business; the physics is not.
+    the video decides from the simulator's own clock when the next video frame is due.  The camera
+    path, the overlay and the panels are the video's business; the physics is not.
     """
 
     def __init__(
@@ -750,7 +750,7 @@ class Film:
         self.panel_images = panel_images
         """Supplies the right-hand grid: handed the tick, it returns ``n_panels`` pairs of
         ``(title, rgb)``, each array exactly the square :attr:`panel_size`.  With it set, the
-        film draws no single inset and needs no ``pip_camera``."""
+        video draws no single inset and needs no ``pip_camera``."""
 
         self.pip_camera = pip_camera
         self.caption_for = caption_for
@@ -769,7 +769,7 @@ class Film:
 
         if panel_images is None and pip_camera is None and pip_image is None:
             raise ValueError(
-                "a film draws either a column of panels (panel_images) or the single inset "
+                "a video draws either a column of panels (panel_images) or the single inset "
                 "(pip_camera / pip_image); it was given neither"
             )
 
@@ -777,12 +777,12 @@ class Film:
         pip_w = int(quality.pip_width)
         pip_h = int(round(pip_w * 9 / 16))
         self._pip_size = (pip_w, pip_h)
-        self._main = CinemaRenderer(scene.model, width=quality.width, height=quality.height)
+        self._main = FreeCameraRenderer(scene.model, width=quality.width, height=quality.height)
         self._main.instance_lut(scene.instance_ids)
-        self._close: CinemaRenderer | None = None
+        self._close: FreeCameraRenderer | None = None
         if panel_images is None and pip_image is None:
             # Only the path that actually renders an inset pays for a second GL context.
-            self._close = CinemaRenderer(scene.model, width=pip_w, height=pip_h)
+            self._close = FreeCameraRenderer(scene.model, width=pip_w, height=pip_h)
             self._close.instance_lut(scene.instance_ids)
         self._marks: list[float] = []
         """Video times where the step on screen changed -- the vertical rules on the trace."""
@@ -792,7 +792,7 @@ class Film:
 
     @property
     def panel_size(self) -> tuple[int, int]:
-        """The exact ``(width, height)`` of every panel picture this film will accept."""
+        """The exact ``(width, height)`` of every panel picture this video will accept."""
 
         return self.overlay.panel_size(self.n_panels)
 
@@ -801,7 +801,7 @@ class Film:
         if self._close is not None:
             self._close.close()
 
-    def __enter__(self) -> "Film":
+    def __enter__(self) -> "Recorder":
         return self
 
     def __exit__(self, *exc) -> None:
@@ -844,7 +844,7 @@ class Film:
             panels = tuple(self.panel_images(tick))
             if len(panels) != self.n_panels:
                 raise ValueError(
-                    f"the film is laid out for {self.n_panels} panels and was handed "
+                    f"the video is laid out for {self.n_panels} panels and was handed "
                     f"{len(panels)}"
                 )
         elif self.pip_image is not None:
@@ -917,7 +917,7 @@ class Film:
         still_times: Sequence[float] = (),
         stills_dir=None,
         still_when: Callable[[Tick, float], str | None] | None = None,
-    ) -> FilmResult:
+    ) -> RecordingResult:
         """Write the clip.  ``still_times`` are clock times to grab a still at.
 
         ``still_when`` grabs one at a moment nobody can put a time on in advance: it is handed
@@ -1012,7 +1012,7 @@ class Film:
             if export is not None:
                 export.close()
 
-        return FilmResult(
+        return RecordingResult(
             master=out_path,
             export=export_path,
             frames=frames,

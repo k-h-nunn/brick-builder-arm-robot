@@ -6,7 +6,7 @@ loose bricks. A CS 6341 (Robotics) team project at UT Dallas.
 
 [![Closed-loop placement, step Verify](docs/media/hd/closed-loop-verify.png)](docs/demos/videos.md)
 
-*Closed-loop placement of a DUPLO 2x2 brick, 1920x1080, one take ([film](docs/demos/videos.md)).*
+*Closed-loop placement of a DUPLO 2x2 brick, 1920x1080, one take ([video](docs/demos/videos.md)).*
 
 ## Contents
 
@@ -53,19 +53,19 @@ CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python scripts/run_placement.py 
 ```
 
 About forty seconds. `--cnn` drives the loop from the trained convolutional scene model, which is
-what the film shows; without it the same loop runs on simulator ground truth instead.
+what the video shows; without it the same loop runs on simulator ground truth instead.
 
-The film, at draft resolution:
+The video, at draft resolution:
 
 ```bash
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python scripts/make_demo_video.py \
     --quality draft --cnn-drives --stills 0 --out media_out/placement.mp4
 ```
 
-`--cnn-drives` runs the loop on the convolutional scene model, which is what the published film
+`--cnn-drives` runs the loop on the convolutional scene model, which is what the published video
 shows; `--quality hd1080` is the 1920x1080 version and takes considerably longer. Add `--pick`
 for the whole job -- fetch the brick off the table, then place it -- which is the second
-[film](docs/demos/videos.md).
+[video](docs/demos/videos.md).
 
 The docs:
 
@@ -124,9 +124,9 @@ Architecture, training set, accuracy table, latency and failure modes are in
 | `brick_builder/export/` | C export of a trained actor, and its parity harness |
 | `brick_builder/experiments/` | the experiment runs teammates execute |
 | `brick_builder/language/` | the text front end that compiles a build into a placement list |
-| `brick_builder/demo/` | the demo gallery and the film |
+| `brick_builder/demo/` | the demo gallery and the video |
 | `configs/` | training configs and the measured-parameter file |
-| `scripts/` | train, eval, run one placement, render the film, regenerate figures |
+| `scripts/` | train, eval, run one placement, render the video, regenerate figures |
 | `tests/` | one directory per package |
 | `docs/` | the MkDocs site |
 | `third_party/so101/` | the vendored SO-101 model |

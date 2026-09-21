@@ -56,10 +56,10 @@ placement: seated=True at_target_cell=True lateral=0.15 mm depth_error=0.00 mm
 RESULT: placed
 ```
 
-`--cnn` drives the loop from the trained convolutional scene model, which is what the film shows.
+`--cnn` drives the loop from the trained convolutional scene model, which is what the video shows.
 Without it the same loop runs on simulator ground truth instead. `--seed` redraws the baseplate
 offset and the brick's offset in the jaws; `--pick` fetches the brick from the table first,
-which is the whole job and the second [film](demos/videos.md).
+which is the whole job and the second [video](demos/videos.md).
 
 ## Watch a scripted press
 
@@ -74,16 +74,16 @@ That is the limit this simulator is built to measure, and the reason the closed 
 Every demo records to a file rather than opening a window: `scene`, `teleop`, `press`, `rocking`,
 `force-map`, `policy`, `tokens`. See [the demo gallery](demos/README.md).
 
-## Render the film
+## Render the video
 
 ```bash
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python scripts/make_demo_video.py \
     --quality draft --cnn-drives --stills 0 --out media_out/placement.mp4
 ```
 
-`--cnn-drives` runs the loop on the convolutional scene model, which is what the published film
+`--cnn-drives` runs the loop on the convolutional scene model, which is what the published video
 shows. The annotated 1920x1080 version is `--quality hd1080`, which takes considerably longer;
-[the film page](demos/videos.md) has the exact command it was made with, and what every on-screen
+[the video page](demos/videos.md) has the exact command it was made with, and what every on-screen
 panel means.
 
 ## Train a policy

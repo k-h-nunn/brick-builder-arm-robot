@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 MODELS = Path(__file__).resolve().parents[3] / "brick_builder" / "action" / "models"
-FORBIDDEN_MODULES = ("readout", "producers", "conventional_scene_model", "cinema", "demo",
+FORBIDDEN_MODULES = ("readout", "producers", "conventional_scene_model", "video", "demo",
                      "torch", "mujoco")
 
 

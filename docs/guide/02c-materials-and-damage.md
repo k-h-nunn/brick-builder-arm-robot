@@ -952,7 +952,7 @@ covers why an aged or dark brick is a different material.
 **Push-on.** Place a 0.1 g kitchen scale on the table and a baseplate flat on the scale. Tare it.
 Press a new 2x2 down onto the plate, slowly and squarely, with one finger on the middle of the
 brick, until fully home. Read the **peak** the scale showed on the way down — most kitchen scales
-settle too slowly to catch it, so film the display with a phone at 60 fps and step through the
+settle too slowly to catch it, so record the display with a phone at 60 fps and step through the
 frames, or use a scale with a peak-hold mode. Repeat five times, on five different stud positions
 if there is room. Repeat with a 2x4.
 
@@ -1006,7 +1006,7 @@ on a brick for the jaw pair. Replaces the one number on this page with no source
 cost.
 
 **7.4 Force against depth, non-destructive, needs the arm.** Stand the baseplate on a kitchen
-scale, press a brick on by hand slowly, filming the scale. The peak reading is the push-on force;
+scale, press a brick on by hand slowly, recording the scale. The peak reading is the push-on force;
 the trace shape against descent is the curve `engagement()` is guessing at. Repeat with the arm,
 its own force gauge: the servo's `Present_Load` register gives the firmware duty, the identified
 law turns duty into torque (35.2 mN·m per 1 % of duty at 7.4 V), and the Jacobian turns torque into
@@ -1020,7 +1020,7 @@ re-measuring pull-off force every hundred cycles by the method in 7.2. Measures 
 section 6.1 currently anchors on a hobbyist's 37,112-cycle System result — the only way to get a
 DUPLO number, since none exists.
 
-**7.6 Restitution, ten minutes.** Drop a brick from a measured height onto a hard table, film at
+**7.6 Restitution, ten minutes.** Drop a brick from a measured height onto a hard table, record at
 high frame rate, measure rebound height. e = √(h′/h). Fills the gap in section 3.3.
 
 **7.7 Wall strength, destructive, three bricks.** The only test that costs bricks, and the one

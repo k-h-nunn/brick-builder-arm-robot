@@ -7,7 +7,7 @@ nothing is drawn small and scaled up, which is what made the earlier attempt unr
 Four elements exist, and no others:
 
 ============  ==========================================================================
-title block   top left, over the opening seconds: the film's name and one spec line
+title block   top left, over the opening seconds: the video's name and one spec line
 phase label   top left, once the title has gone: the step the arm is on
 panel grid    right-hand column: `n` equal square panels, each titled above itself
 data strip    along the bottom of the main view: five readouts, one a full-width plot
@@ -401,7 +401,7 @@ class Overlay:
         ``panels`` is a sequence of ``(title, rgb)`` pairs drawn as a grid of equal square
         panels in the right-hand column; each array must be exactly :meth:`panel_size`.  ``pip``
         and
-        ``pip_label`` are the older single inset, kept for the scripted film.  ``caption`` is
+        ``pip_label`` are the older single inset, kept for the scripted video.  ``caption`` is
         gone: the layout has no caption element and a non-``None`` one is refused.
         """
 

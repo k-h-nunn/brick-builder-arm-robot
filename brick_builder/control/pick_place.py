@@ -37,10 +37,10 @@ Driving the arm
 steps, one read, with :class:`~brick_builder.robot.bus_emulator.BusEmulator` supplying the command
 latency, read skew and packet loss.  It reuses ``envs.base_env._pose_ik`` rather than keeping a
 second copy of the warm-started IK: this module is a scripted sequence for benchmarking and for
-filming, not something that has to be transcribed into firmware, so the portability rule that
+recording, not something that has to be transcribed into firmware, so the portability rule that
 :mod:`brick_builder.control.primitives` keeps to does not apply to it.
 
-Filming
+Recording
 -------
 :meth:`PickPlace.run` is a generator.  It yields one :class:`Step` per control tick, carrying the
 live :class:`~brick_builder.scene.compose.Scene` and the phase name, so a video script can render a
@@ -434,7 +434,7 @@ class PickPlaceConfig:
 
 @dataclass
 class Step:
-    """What one control tick of the sequence looked like, for a film or a trace."""
+    """What one control tick of the sequence looked like, for a video or a trace."""
 
     tick: int
     t: float

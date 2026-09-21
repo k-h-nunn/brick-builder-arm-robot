@@ -12,7 +12,7 @@ at the vision rate; the correction freezes after Align, and the press runs open 
 converged pose. `verify_placement` then reads the answer back out of the simulator.
 
 `--cnn` drives the loop from the trained convolutional scene model instead of simulator ground
-truth, which is the same path the film uses. Exit status is 0 when the brick seated at the
+truth, which is the same path the video uses. Exit status is 0 when the brick seated at the
 target cell, 1 when it did not -- the run itself is not a failure either way.
 
 No display and no GPU: `MUJOCO_GL` defaults to `egl` (set `osmesa` instead where there is no

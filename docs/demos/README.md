@@ -1,6 +1,6 @@
 # Demo gallery
 
-**[Closed-loop placement film](videos.md)** — 1920x1080, one continuous take. The film and three frames
+**[Closed-loop placement video](videos.md)** — 1920x1080, one continuous take. The video and three frames
 are under `docs/media/hd/`.
 
 [![Closed-loop placement, step Verify](../media/hd/closed-loop-verify.png)](videos.md)
@@ -9,7 +9,7 @@ Every demo is a subcommand of `python -m brick_builder.demo <name>`. All run hea
 has no display attached) and write a file with `--record out.mp4` (or `.png` for the two demos
 producing a single picture: `scene`, `force-map`). `scripts/make_media.py --only demos` regenerates
 every demo's default output under `docs/media/demos/` from a fixed seed in one call. Videos
-(`.mp4`) are git-ignored, with one exception: the pick-and-place film above, whose 1080p copy is
+(`.mp4`) are git-ignored, with one exception: the pick-and-place video above, whose 1080p copy is
 checked in under `docs/media/hd/` so a reader can open it. Everything else is reproduced by the
 command printed next to it, in a few seconds to a couple of minutes. Low-resolution GIFs (320x240)
 are no longer shown inline: too small to read.

@@ -45,7 +45,7 @@ bricks:
     notes: >
       Matches the simulator's own bare placeholder (SnapParams.f_clutch=1.0 N), so the shipped
       file is consistent with every test, the scripted pick-and-place study and the
-      demonstration film, none of which have ever run at anything else. Not a measurement: DUPLO
+      demonstration video, none of which have ever run at anything else. Not a measurement: DUPLO
       is moulded for toddlers' hands, and no measured DUPLO clutch figure exists anywhere.
       A first-principles estimate from press-fit geometry and ABS material properties
       (docs/guide/02c-materials-and-damage.md section 2.3) gives 4.79 N, band 2.7 to 10.0 --
@@ -72,7 +72,7 @@ bricks:
     # What: the shape of the force-against-depth curve as a stud goes in. "ramp" = smooth build
     #   to full force at full seat. "plateau" = full force the instant it engages. "detent" = an
     #   entry bump (a "click") then easier sliding.
-    # Measure: docs/guide/10 -- press a brick on slowly by hand while filming a kitchen scale.
+    # Measure: docs/guide/10 -- press a brick on slowly by hand while recording a kitchen scale.
     #   Does the force build smoothly (ramp) or is there a click (detent)?
     value: ramp
     status: assumed

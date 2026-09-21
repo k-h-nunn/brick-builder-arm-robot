@@ -1,4 +1,4 @@
-"""Film one closed-loop pick and place at 1920x1080, in one continuous take.
+"""Record one closed-loop pick and place at 1920x1080, in one continuous take.
 
 Usage:
 
@@ -9,7 +9,7 @@ The motion comes from `brick_builder.action`: a reference sequence recorded in a
 world, tracked in a world nobody described to the controller. The layout is four square
 panels (the arm camera, the scene model's labels, the target frame's labels, the
 renderer's labels) and a data strip. Every string on screen is a title with its units; the
-old scripted film and its narration are gone.
+old scripted video and its narration are gone.
 """
 
 from __future__ import annotations
@@ -42,9 +42,9 @@ from brick_builder.control.pick_place import (
     verify_placement,
 )
 from brick_builder.robot.patch_so101 import WRIST_CAM
-from brick_builder.demo.cinema import (
+from brick_builder.demo.video import (
     CamKey,
-    Film,
+    Recorder,
     ReadoutSpec,
     Tick,
     arm_points,
@@ -68,7 +68,7 @@ CAPTION_PHASES = frozenset({"home", "to_tray", "open"})
 It says what the viewer is watching and none of it changes during the take, so once the arm is
 at work it is three lines of dead type sitting on the picture.  In the first cut it stayed up to
 the last frame and covered the upper arm and the wrist during the closing hold on the seated
-brick, which is the one shot in the film with nothing else in it."""
+brick, which is the one shot in the video with nothing else in it."""
 
 BRICK = "tray_brick_0"
 """Which of the two spare bricks in the tray the arm picks."""
@@ -77,9 +77,9 @@ TARGET = (3.5, 3.5, 0)
 """Where it goes: the middle of the baseplate, bottom layer.  A 2-wide footprint straddles two
 stud columns, which is why the cell coordinates are halves."""
 
-# ================================================================== the closed-loop film ===
+# ================================================================== the closed-loop video ===
 #
-# The second thing this script can film: one closed-loop placement driven by `brick_builder.
+# The second thing this script can record: one closed-loop placement driven by `brick_builder.
 # action`'s ideal-sequence tracking. Same toolkit; what changes is where the motion comes from
 # and what the panels show.
 
@@ -253,7 +253,7 @@ class Panels:
 
 def closed_loop_motion(scene, episode, panels, truth, brick, *, lead_seconds=2.0,
                        hold_seconds=3.0):
-    """`brick_builder.action`'s per-tick records, turned into ticks the film understands."""
+    """`brick_builder.action`'s per-tick records, turned into ticks the video understands."""
     from brick_builder.control.pick_place import gripper_press_force
 
     last: dict = {}
@@ -342,7 +342,7 @@ def closed_loop_film(out: Path, *, quality_name: str = "hd1080", seed: int = 1,
                          offset_mm=1e3 * float(np.linalg.norm(d_xy)),
                          offset_deg=abs(math.degrees(d_yaw)), pick=pick)
 
-    with Film(
+    with Recorder(
         scene, quality=quality,
         shot=[CamKey(0.0, CL_LOOKAT, CL_DISTANCE, CL_AZIMUTH, CL_ELEVATION)],
         title=CL_TITLE, subtitle=subtitle, readouts=CL_READOUTS,
@@ -360,7 +360,7 @@ def closed_loop_film(out: Path, *, quality_name: str = "hd1080", seed: int = 1,
     return result, episode, check, (d_xy, d_yaw)
 
 
-FROZEN = Path(__file__).resolve().parents[1] / "results" / "film" / "vision_model_frozen.pt"
+FROZEN = Path(__file__).resolve().parents[1] / "results" / "video" / "vision_model_frozen.pt"
 FROZEN_SHA = "3e07a382"
 
 

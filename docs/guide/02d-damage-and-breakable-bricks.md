@@ -234,8 +234,8 @@ Breakable bricks are the path that catches an impact, because the weld criterion
 by design: a piece that has come apart is not a stress that might be noise. 0.6 m/s releases a
 wall and latches `broken`.
 
-The same three speeds driven by the arm itself, filmed in one take, are in
-[Brick damage film](../demos/videos.md#brick-damage-film).
+The same three speeds driven by the arm itself, recorded in one take, are in
+[Brick damage video](../demos/videos.md#brick-damage-video).
 
 ### 6.2 Over-squeeze
 

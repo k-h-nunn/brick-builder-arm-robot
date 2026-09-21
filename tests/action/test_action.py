@@ -1,6 +1,6 @@
 """Fast checks on the closed-loop action package.
 
-Nothing here renders a film or runs a whole placement: those are minutes, and these are seconds.
+Nothing here renders a video or runs a whole placement: those are minutes, and these are seconds.
 What they do check is the three things that would quietly rot -- the twin being repeatable, the
 twin's expectation matching the camera when the world really is nominal, and the controller not
 growing a dependency on viewer or decode code.
@@ -16,7 +16,7 @@ import pytest
 
 ACTION = Path(__file__).resolve().parents[2] / "brick_builder" / "action"
 
-FORBIDDEN_MODULES = ("readout", "producers", "conventional_scene_model", "cinema", "demo")
+FORBIDDEN_MODULES = ("readout", "producers", "conventional_scene_model", "video", "demo")
 """A controller reads slot numbers. A dense label image is a viewer's business."""
 
 

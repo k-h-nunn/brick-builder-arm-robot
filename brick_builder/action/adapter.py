@@ -59,7 +59,7 @@ class WorldAdapter:
         self._renderer.instance_lut(scene.instance_ids)
         # `source` swaps the scene model without the controller noticing: the trained
         # convolutional model and the simulator's ground-truth one publish the same slot states,
-        # so either can drive the loop and the film says which one did.
+        # so either can drive the loop and the video says which one did.
         self._vision = source if source is not None else IdealSceneModel(
             K=K, build_decode=build_decode)
         self._frames = 0
@@ -114,7 +114,7 @@ class WorldAdapter:
         return state
 
     def observe_rgb(self) -> tuple[SceneState, np.ndarray]:
-        """As `observe`, and also hands back the raw wrist image -- for the film's inset only.
+        """As `observe`, and also hands back the raw wrist image -- for the video's inset only.
         Control code calls `observe`."""
         frame, _ = render_view(self._scene, WRIST_FULL, self._renderer)
         state = self._vision.observe(
@@ -127,13 +127,13 @@ class WorldAdapter:
     def close(self) -> None:
         self._renderer.close()
 
-    # -- the one back door, for scoring and filming only ----------------------------------------
+    # -- the one back door, for scoring and recording only ----------------------------------------
 
     @property
     def scene_for_scoring(self) -> Scene:
         """The simulator itself. **Not for control**: `place.py` never touches this, and the
         guard test in `tests/action/` checks it does not. The scorer (`verify_placement`) and
-        the film's outside camera do, because both are allowed to know the truth."""
+        the video's outside camera do, because both are allowed to know the truth."""
         return self._scene
 
     @property

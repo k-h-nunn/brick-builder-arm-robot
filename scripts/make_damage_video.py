@@ -1,4 +1,4 @@
-"""Film a breakable DUPLO 2x4 being struck on the baseplate, at 1920x1080, in one take.
+"""Record a breakable DUPLO 2x4 being struck on the baseplate, at 1920x1080, in one take.
 
 Usage:
 
@@ -8,7 +8,7 @@ Usage:
 
 The arm is the striker: the closed jaws are driven at a wall of a breakable 2x4 standing on
 the baseplate, three times, at 0.1, 0.3 and 0.6 m/s of commanded tool speed.  Nothing in the
-film is staged - a piece comes away only when its weld passes ``F/F_limit + M/M_limit >= 1``
+video is staged - a piece comes away only when its weld passes ``F/F_limit + M/M_limit >= 1``
 in :class:`~brick_builder.bricks.breakable.BreakableBricks`.
 
 The take is real time and continuous, and it ends on three seconds of the aftermath, because
@@ -35,10 +35,10 @@ from brick_builder.bricks import materials as mat
 from brick_builder.bricks.snap_api import SnapParams
 from brick_builder.bricks.structures import Placement
 from brick_builder.control.pick_place import CONTROL_DT, ArmDriver, cell_world
-from brick_builder.demo.cinema import (
+from brick_builder.demo.video import (
     CamKey,
     CloseUp,
-    Film,
+    Recorder,
     ReadoutSpec,
     Tick,
     quality_by_name,
@@ -231,7 +231,7 @@ def strike_motion(scene, bricks: dict, *, lead_seconds: float = 3.0,
     strike_motion.report = {"strikes": per_strike, "ik_failures": driver.ik_failures}
 
 
-# ========================================================================= the film ===
+# ========================================================================= the video ===
 
 LOOKAT_DZ = -0.014
 """Where the camera is aimed, relative to the plate's top [m].  Below it, so the row of bricks
@@ -259,7 +259,7 @@ def damage_film(out: Path, *, quality_name: str = "hd1080", stills: int = 6,
     length = lead_seconds + 4.9 + hold_seconds
     still_times = list(np.linspace(0.02 * length, 0.99 * length, stills)) if stills else []
 
-    with Film(
+    with Recorder(
         scene, quality=quality,
         shot=[CamKey(0.0, lookat, DISTANCE, AZIMUTH, ELEVATION)],
         title=TITLE, subtitle=SUBTITLE, readouts=READOUTS,
@@ -270,8 +270,8 @@ def damage_film(out: Path, *, quality_name: str = "hd1080", stills: int = 6,
         pip_label=lambda phase: "Struck wall",
         phase_name=lambda phase: phase,
         title_seconds=lead_seconds, min_span=0.10, trace_seconds=1e6,
-    ) as film:
-        result = film.run(
+    ) as recorder:
+        result = recorder.run(
             strike_motion(scene, bricks, lead_seconds=lead_seconds,
                           hold_seconds=hold_seconds),
             out, still_times=still_times, stills_dir=stills_dir,

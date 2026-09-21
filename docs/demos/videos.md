@@ -1,4 +1,4 @@
-# Closed-loop placement film
+# Closed-loop placement video
 
 <video controls preload="metadata" width="100%"
        poster="../../media/hd/closed-loop-verify.png">
@@ -42,7 +42,7 @@
 
 ## Results
 
-Filmed run: brick seated on the target cell; lateral error 0.11 mm; depth error 0.01 mm; Align converged to 0.85 mm over 157 vision ticks.
+Recorded run: brick seated on the target cell; lateral error 0.11 mm; depth error 0.01 mm; Align converged to 0.85 mm over 157 vision ticks.
 
 Ten seeds, identical displaced worlds:
 
@@ -87,12 +87,12 @@ CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=4 \
     --out media_out/hd/brick_builder_arm_robot_closed_loop_placement_1080p.mp4
 ```
 
-The film uses checkpoint `3e07a382`, which is the shipped
+The video uses checkpoint `3e07a382`, which is the shipped
 `brick_builder/perception/weights/vision_model.pt`. A local copy at
-`results/film/vision_model_frozen.pt` (git-ignored) takes precedence when present; without it the
+`results/video/vision_model_frozen.pt` (git-ignored) takes precedence when present; without it the
 script loads the shipped weights.
 
-# Closed-loop pick-and-place film
+# Closed-loop pick-and-place video
 
 <video controls preload="metadata" width="100%"
        poster="../../media/hd/closed-loop-pick-press.png">
@@ -121,11 +121,11 @@ script loads the shipped weights.
 | Open-loop steps | Final descent onto the brick, Press the brick down, Release, Retract |
 | Video | 1920x1080, 30 fps, H.264, 38.3 s, 1150 frames, single take, seed 1 |
 
-On-screen elements are the same as the placement film.
+On-screen elements are the same as the placement video.
 
 ## Results
 
-Filmed run (seed 1, convolutional scene model driving): brick seated on the target cell; lateral error 0.08 mm; depth error 0.00 mm; Align converged to 0.71 mm over 71 vision ticks.
+Recorded run (seed 1, convolutional scene model driving): brick seated on the target cell; lateral error 0.08 mm; depth error 0.00 mm; Align converged to 0.71 mm over 71 vision ticks.
 
 Ten seeds, identical displaced worlds:
 
@@ -180,7 +180,7 @@ One run of the same loop, headless:
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl python scripts/run_placement.py --pick --seed 0
 ```
 
-# Brick damage film
+# Brick damage video
 
 <video controls preload="metadata" width="100%"
        poster="../../media/hd/brick-damage-aftermath.png">

@@ -346,7 +346,7 @@ weld mode stays the default for training.
 
 `brick_builder.control.pick_place` drives the job through the servo bus at 50 Hz: home, over the
 tray, open, down onto a brick, close, lift, carry, line up over the target studs, seat it, let
-go, retreat, home. A generator, one step per control tick, so a video script can film it.
+go, retreat, home. A generator, one step per control tick, so a video script can record it.
 `verify_placement` reads the result from the simulator: connected, at the intended cell, within
 0.3 mm of full depth, still there once the arm has left.
 

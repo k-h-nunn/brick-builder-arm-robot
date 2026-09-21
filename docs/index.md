@@ -17,7 +17,7 @@ with the [Quickstart](quickstart.md).
 | Perception | one wrist-camera frame to a handful of per-object slot states, from three interchangeable sources | [Perception](guide/06-perception.md) |
 | Control | scripted primitives, a skill FSM, Gymnasium environments with a residual policy | [Environments](guide/04-environments.md) |
 | Learning | PPO and SAC with an asymmetric critic, evaluation reports with Wilson intervals, C export | [Training and evaluation](guide/05-training-and-evaluation.md) |
-| Closed loop | target-sequence tracking against a digital twin | [the film](demos/videos.md) |
+| Closed loop | target-sequence tracking against a digital twin | [the video](demos/videos.md) |
 
 ## How a placement works
 

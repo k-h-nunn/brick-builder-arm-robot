@@ -53,7 +53,7 @@ you haven't exported it in your shell already.
   [Materials and damage](02c-materials-and-damage.md#11-the-brick-plastic)), and this whole page
   is about measuring the material the simulator is supposed to represent.
 - A kitchen scale, ideally reading to 0.1 g, ideally with a peak-hold mode. If it doesn't have
-  one, your phone's camera at 60 fps does: film the display and step through the frames.
+  one, your phone's camera at 60 fps does: record the display and step through the frames.
 - A ruler.
 - The arm, connected, with whatever tool LeRobot or the servo manufacturer gives you for reading
   a servo's registers (voltage, P gain).
@@ -80,7 +80,7 @@ section does, gives you exactly what the parameter needs, plus the asymmetry `be
 
 **Push-on.** Put the kitchen scale on the table and a baseplate flat on the scale. Tare it. With
 one finger on the middle of a new 2x2, press it down onto the plate slowly and squarely until it
-is fully home. Read the **peak** force the scale showed on the way down (film it if your scale
+is fully home. Read the **peak** force the scale showed on the way down (record it if your scale
 doesn't hold a peak). Do this once for a 2x2 and once for a 2x4. If you have time, repeat five
 times each and use the mean — the spread across repeats is itself useful (it's the width you'd
 randomize this parameter over).

@@ -50,7 +50,7 @@ Editable, so code changes take effect without reinstalling. The extras:
 | `dev` | `pytest` | the test suite |
 | `docs` | `mkdocs-material`, `mkdocstrings[python]` | building this site |
 
-`imageio[ffmpeg]` is what writes the demo mp4s; `pillow` is what draws the film's text panels;
+`imageio[ffmpeg]` is what writes the demo mp4s; `pillow` is what draws the video's text panels;
 `tensorboard` is optional at runtime (training skips the event log if it is missing) but is
 declared so a fresh install gets it.
 

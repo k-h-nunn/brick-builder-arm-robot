@@ -17,7 +17,7 @@ __pycache__/
 /brick_builder/export/_build/
 
 *.mp4
-# ... except the one film the documentation embeds.  A high-resolution asset that lives only in
+# ... except the one video the documentation embeds.  A high-resolution asset that lives only in
 # a git-ignored directory is not delivered: the reader cannot open it.
 !docs/media/hd/*.mp4
 

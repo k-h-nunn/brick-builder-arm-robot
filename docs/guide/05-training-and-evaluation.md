@@ -14,7 +14,7 @@ any brick_builder environment.
     `PressFromHeld`, `AlignFromTokens`, the positioning dead band, deflection under load) were
     measured before the servo model's encoder was moved to the output shaft
     ([Robot and servo model](03-robot-and-servo-model.md)) and have not been re-measured.
-    Current closed-loop results are in [Closed-loop films](../demos/videos.md).
+    Current closed-loop results are in [Closed-loop videos](../demos/videos.md).
 
 ## Purpose
 

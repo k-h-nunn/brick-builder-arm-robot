@@ -242,7 +242,7 @@ class PlaceConfig:
 
 @dataclass
 class TickRecord:
-    """One 20 ms control tick, for the film and the log."""
+    """One 20 ms control tick, for the video and the log."""
 
     tick: int
     t: float
