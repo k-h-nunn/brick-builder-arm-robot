@@ -20,6 +20,7 @@ module is not on the control path.
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import math
 import os
@@ -85,14 +86,20 @@ def predictor_metrics(data: ds.Episodes, model: Mlp, *, held_only: bool = True,
     many = {"model": per_field(roll_model - target, mask=keep),
             "no change": per_field(roll_none - target, mask=keep)}
 
+    # The conversion was calibrated against the norm of the whole stacked centre difference, so
+    # a per-entry root-mean-square is scaled by the square root of how many entries a tick
+    # typically has before it is quoted in millimetres.
     mm = ds.mm_per_centre_unit(data)
+    entries = math.sqrt(float(_rows_from_flat(w)[:, :, 1].sum(axis=1).mean()))
     return {
         "n_pairs": int(len(sel)),
         "mm_per_centre_unit": mm,
+        "slate_entries_per_tick": entries ** 2,
         "one_step": {k: v.tolist() for k, v in one.items()},
-        "one_step_centre_mm": {k: float(mm * math.hypot(v[1], v[2])) for k, v in one.items()},
+        "one_step_centre_mm": {k: float(mm * entries * math.hypot(v[1], v[2]))
+                               for k, v in one.items()},
         f"{horizon}_step": {k: v.tolist() for k, v in many.items()},
-        f"{horizon}_step_centre_mm": {k: float(mm * math.hypot(v[1], v[2]))
+        f"{horizon}_step_centre_mm": {k: float(mm * entries * math.hypot(v[1], v[2]))
                                       for k, v in many.items()},
         "fields": list(FIELDS),
         "analytic_one_step_mm": analytic_prediction_mm(data),
@@ -167,8 +174,9 @@ def inverse_metrics(data: ds.Episodes, inverse: Mlp, predictor: Mlp, *, seed: in
     mm = ds.mm_per_centre_unit(data)
 
     def centre_mm(rows_delta: np.ndarray) -> np.ndarray:
+        """The stacked centre difference of one tick, in millimetres of tool motion."""
         d = rows_delta[:, :, ds.CENTRE] * both[:, :, None]
-        return mm * np.sqrt((d ** 2).sum(axis=(1, 2)) / np.maximum(both.sum(axis=1), 1))
+        return mm * np.sqrt((d ** 2).sum(axis=(1, 2)))
 
     def landed(action_xy_spin: np.ndarray) -> np.ndarray:
         action = ff.copy()
@@ -189,6 +197,7 @@ def inverse_metrics(data: ds.Episodes, inverse: Mlp, predictor: Mlp, *, seed: in
         "n_held_out": int(len(sel)),
         "action_rmse": [float(v) for v in (np.sqrt((err ** 2).mean(axis=0)) * scale)],
         "action_mae": [float(v) for v in (np.abs(err).mean(axis=0) * scale)],
+        "action_bias": [float(v) for v in (err.mean(axis=0) * scale)],
         "analytic_rms": [float(v) for v in (np.sqrt((y ** 2).mean(axis=0)) * scale)],
         "units": ["mm", "mm", "deg"],
         "correlation": [float(np.corrcoef(g[:, c], y[:, c])[0, 1]) for c in range(3)],
@@ -241,6 +250,8 @@ def run_episode(task: str, seed: int, *, inverse: str = "analytic", residual: bo
         check = verify_placement(scene, brick, (4.5, 3.5, 0))
     finally:
         episode.close()
+    depth_mm = float(check.depth_error_mm)
+    seated, at_cell, lateral = bool(check.seated), bool(check.at_target_cell), float(check.lateral_mm)
 
     converge = {}
     for key, errs in per_step.items():
@@ -253,18 +264,21 @@ def run_episode(task: str, seed: int, *, inverse: str = "analytic", residual: bo
                          "final_mm": errs[-1]}
     preds = [p for p in episode.pred_errors if p == p]
     errs = [e for e in episode.errors if e == e]
+    failure, ticks = episode.failure or "", len(episode.errors)
+    del episode, scene, check
+    gc.collect()
     return {
         "task": task, "seed": seed, "inverse": inverse, "residual": residual,
-        "seated": bool(check.seated), "at_target_cell": bool(check.at_target_cell),
-        "lateral_mm": float(check.lateral_mm), "depth_error_mm": float(check.depth_error_mm),
+        "seated": seated, "at_target_cell": at_cell,
+        "lateral_mm": lateral, "depth_error_mm": depth_mm,
         "plate_offset_mm": float(1e3 * np.linalg.norm(d_xy)),
         "plate_yaw_deg": float(math.degrees(d_yaw)),
         "brick_offset_mm": float(1e3 * np.linalg.norm(b_xy)),
         "dwells": converge,
         "median_prediction_mm": float(statistics.median(preds)) if preds else float("nan"),
         "median_tracking_mm": float(statistics.median(errs)) if errs else float("nan"),
-        "vision_ticks": len(episode.errors),
-        "failure": episode.failure or "",
+        "vision_ticks": ticks,
+        "failure": failure,
         "wall_s": float(time.perf_counter() - t0),
     }
 

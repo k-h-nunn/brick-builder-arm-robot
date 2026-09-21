@@ -16,9 +16,22 @@
  * The normalizer divides rather than multiplying by a stored reciprocal, because the NumPy
  * reference (brick_builder/action/models/mlp.py) divides: the two then agree bit for bit on the
  * normalizer and parity is limited only by the order of the dot products.
+ *
+ * Each dot product accumulates in double. The predictor's outputs reach 2.6 in magnitude, where
+ * three float32 units in the last place is already 1.2e-6, so a float accumulator puts the C and
+ * the NumPy reference on opposite sides of the 1e-6 parity bound for no reason other than
+ * summation order. Building with -DACTION_ACC_FLOAT accumulates in float instead, for a device
+ * with no double at all: it costs a few 1e-6 on the predictor's largest outputs and nothing
+ * measurable on the inverse's, whose answers are millimetres of tool motion.
  */
 #include "action_net.h"
 #include "action_theta.h"
+
+#ifdef ACTION_ACC_FLOAT
+typedef float action_acc_t;
+#else
+typedef double action_acc_t;
+#endif
 
 #ifdef ACTION_TANH_TABLE
 #include "tanh_table.h"
@@ -67,12 +80,12 @@ static void action_forward(const float *x, float *y,
         int n_in = layer_in[layer];
         int n_out = layer_out[layer];
         for (i = 0; i < n_out; i++) {
-            float acc = b[i];
+            action_acc_t acc = (action_acc_t)b[i];
             const float *row = w + (long)i * n_in;
             for (j = 0; j < n_in; j++) {
-                acc += row[j] * cur[j];
+                acc += (action_acc_t)row[j] * (action_acc_t)cur[j];
             }
-            scratch[i] = (layer < n_layers - 1) ? action_tanh(acc) : acc;
+            scratch[i] = (layer < n_layers - 1) ? action_tanh((float)acc) : (float)acc;
         }
         {
             float *swap = cur;

@@ -27,6 +27,7 @@ never trained on.
 from __future__ import annotations
 
 import argparse
+import gc
 import math
 import os
 import time
@@ -213,7 +214,7 @@ def collect_episode(task: str, seed: int, ideal, *, mode: str, rng: np.random.Ge
         check = verify_placement(scene, brick, (4.5, 3.5, 0))
     finally:
         episode.close()
-    return collector.arrays(
+    out = collector.arrays(
         seed=np.int64(seed), mode=np.asarray(mode, dtype="<U8"),
         task=np.asarray(task, dtype="<U12"),
         plate_offset_mm=np.float32(1e3 * float(np.linalg.norm(d_xy))),
@@ -224,6 +225,13 @@ def collect_episode(task: str, seed: int, ideal, *, mode: str, rng: np.random.Ge
         failure=np.asarray(episode.failure or "", dtype="<U96"),
         wall_s=np.float32(time.perf_counter() - t0),
     )
+    # One episode builds three simulator models and three render contexts. They are closed, but
+    # they sit in reference cycles the generational collector would only reach much later, and a
+    # run of a few hundred episodes reaches several gigabytes before it does. Collecting here
+    # keeps the process flat.
+    del episode, scene, collector
+    gc.collect()
+    return out
 
 
 # --------------------------------------------------------------------------------------- CLI ---

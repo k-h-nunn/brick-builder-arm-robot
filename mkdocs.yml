@@ -56,6 +56,7 @@ nav:
       - Running the robot: guide/09-running-the-robot.md
       - Measure and enter parameters: guide/10-measure-and-enter-parameters.md
       - Commands: guide/11-commands.md
+      - Closed-loop control: guide/12-closed-loop-control.md
       - Lab notebook template: experiments/TEMPLATE.md
   - Demos:
       - Gallery: demos/README.md
