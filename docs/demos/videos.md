@@ -134,8 +134,13 @@ Ten seeds, identical displaced worlds:
 | Control input | Seated on target cell | Lateral error |
 |---|---|---|
 | Ground-truth scene model | 8/10 | 0.02-0.23 mm on seated runs |
-| Convolutional scene model | see below | 0.10-0.33 mm on seated runs |
+| Convolutional scene model | 8/10 | 0.07-0.33 mm on seated runs |
 | Camera corrections off | 0/10 | median 16.2 mm |
+
+Both scene models reach the same count on these ten seeds, and they do not fail on the same
+ones: ground truth misses seeds 1 and 4, the convolutional model seeds 0 and 2, and on three of
+those four the brick is on the target cell but short of full depth rather than on the wrong
+cell. The take above is driven by ground truth.
 
 The camera-off column is a clean zero here, unlike the placement task's. The brick's own
 8-15 mm offset on the table is added to the baseplate's, and the grasp is scripted from the
