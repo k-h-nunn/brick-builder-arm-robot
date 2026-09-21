@@ -1,0 +1,9 @@
+# Normalize line endings to LF for everything git considers text, auto-detecting text vs binary.
+* text=auto eol=lf
+
+# Known binary types: never diff, never touch line endings.
+*.stl binary
+*.pt binary
+*.png binary
+*.gif binary
+*.mp4 binary

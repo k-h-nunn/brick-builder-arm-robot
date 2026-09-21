@@ -1,0 +1,46 @@
+Brick Builder Arm Robot
+Copyright 2026 the Brick Builder Arm Robot authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE in this repository).
+
+This file lists third-party components used by Brick Builder Arm Robot, per the Apache License's NOTICE-file
+convention (see LICENSE section 4(d)). It is informational; the terms that actually govern each
+component are that component's own license, linked or included below.
+
+--------------------------------------------------------------------------------
+
+SO-101 robot model (vendored)
+
+  third_party/so101/ vendors the SO-101 robot model from TheRobotStudio/SO-ARM100
+  (https://github.com/TheRobotStudio/SO-ARM100), the Simulation/SO101 subtree.
+
+  Licensed under the Apache License, Version 2.0. The exact upstream commit and file list are
+  recorded in third_party/so101/VENDORED.md; the upstream license text is copied at
+  third_party/so101/LICENSE.
+
+  Brick Builder Arm Robot applies its own programmatic corrections on top of this model at load time (see
+  brick_builder/robot/patch_so101.py); the vendored files themselves are not hand-edited.
+
+--------------------------------------------------------------------------------
+
+STS3215 servo constants (cited, not vendored)
+
+  Brick Builder Arm Robot's servo model (brick_builder/robot/servo_model.py) uses numeric constants — the motor
+  torque constant and resistance, backlash range, and joint damping/friction/armature values —
+  that were measured and published by the Rhoban BAM project ("Better Actuator Models"):
+
+    https://github.com/Rhoban/bam (Apache License, Version 2.0)
+    Paper: arXiv:2410.08650
+
+  No source code from that project is included in or copied into Brick Builder Arm Robot; only the
+  published numeric constants are cited. See docs/guide/03-robot-and-servo-model.md for exactly
+  which numbers are used and how.
+
+--------------------------------------------------------------------------------
+
+MuJoCo
+
+  Brick Builder Arm Robot depends on MuJoCo (https://github.com/google-deepmind/mujoco) as an ordinary Python
+  package dependency; no MuJoCo source is vendored in this repository.
+
+  Licensed under the Apache License, Version 2.0.

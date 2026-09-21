@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Outputs, all at the repository root. Training runs, evaluation results, rendered media and
+# generated datasets are reproducible from the code and the configs; they do not belong in
+# history. The leading slash matters: `eval/` unanchored would also swallow brick_builder/eval/.
+/build/
+/runs/
+/eval/
+/results/
+/media_out/
+/data_cache/
+/site/
+/brick_builder/export/_build/
+
+*.mp4
+# ... except the one film the documentation embeds.  A high-resolution asset that lives only in
+# a git-ignored directory is not delivered: the reader cannot open it.
+!docs/media/hd/*.mp4
+
+# MuJoCo writes its warnings here from wherever a script runs
+MUJOCO_LOG.TXT

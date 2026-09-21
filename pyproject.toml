@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brick_builder"
+version = "0.1.0"
+description = "A simulated SO-101 arm that builds LEGO DUPLO structures in MuJoCo."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+dependencies = [
+    "mujoco>=3.13",
+    "gymnasium>=1.0",
+    "numpy>=2.0",
+    "scipy>=1.11",
+    "torch>=2.4",
+    "opencv-python-headless>=4.9",
+    "pillow>=10.0",
+    "pyyaml>=6.0",
+    "tensorboard>=2.15",
+    "imageio[ffmpeg]>=2.34",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.24",
+]
+
+[tool.setuptools.packages.find]
+include = ["brick_builder*"]
+
+[tool.setuptools.package-data]
+brick_builder = ["perception/weights/*.pt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# tests/<package>/test_*.py may reuse basenames across packages; importlib mode keeps them from colliding
+addopts = "--import-mode=importlib"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
