@@ -187,9 +187,10 @@ SCHEMA: dict[str, FieldSpec] = {
         default_status="derived",
         doc="Where a contact's solref/solimp come from. All three derive a flat-punch contact "
             "stiffness from the ABS contact modulus and a stated patch size and then clip it. "
-            "'material' clips at the solver's floor (4 ms at a 2 ms step) on the table, the jaw "
-            "pads and the arm links, and leaves brick-on-brick on MuJoCo's own settings, "
-            "because the derived one stops the press 4.50 mm short of seated. 'derived' clips "
+            "'material' clips at the solver's floor (4 ms at a 2 ms step) on the jaw pads and the "
+            "arm links, and leaves brick-on-brick, brick-on-baseplate and brick-on-table on "
+            "MuJoCo's own settings, because the derived ones stop the press 4.50 mm short and "
+            "the pick-and-place 0.39 mm short of seated. 'derived' clips "
             "at the solver floor on every pair, which is what the material asks for. 'mujoco' "
             "leaves MuJoCo's shipped defaults everywhere. Sets SceneConfig.contact_model."),
     "bricks.youngs_modulus_GPa": FieldSpec(

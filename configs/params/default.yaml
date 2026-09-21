@@ -301,9 +301,10 @@ bricks:
     #   11.8 MN/m), turned into a solref time constant against the 12.5 g brick -- and differ
     #   only in where they clip it.
     #     material  the shipped default: the solver's floor of twice the 2 ms step (4 ms,
-    #               solimp 0.95/0.999/0.0005) on the table, the jaw pads and the arm links, and
-    #               MuJoCo's own settings on brick-on-brick, because the derived one stops the
-    #               10-14 N press 4.50 mm short of seated -- one stud height, on every seed.
+    #               solimp 0.95/0.999/0.0005) on the jaw pads and the arm links, and MuJoCo's own
+    #               settings on brick-on-brick, brick-on-baseplate and brick-on-table, because the
+    #               derived ones stop the 10-14 N press 4.50 mm short of seated and the
+    #               pick-and-place 0.39 mm short.
     #     derived   the solver floor on every pair. What the material asks for; it jams the
     #               press, and is kept selectable so that measurement can be repeated.
     #     mujoco    MuJoCo's shipped defaults everywhere, 20 ms and 0.9/0.95/0.001.
