@@ -8,17 +8,16 @@ wrist-camera window and publishes the same `SceneState` as every other producer.
 ## Purpose
 
 The controller consumes slot states, not pixels: up to eight rows of named numbers per frame plus
-an ordinal per-slot depth, described in [Perception](06-perception.md). Two
-producers filled that interface before this one. `IdealSceneModel` reads the simulator's ground
-truth and is unavailable on hardware. `ColourSegmentationSceneModel` thresholds colours on the CPU
-and fails on touching same-coloured bricks, on lighting change, and on green bricks over the green
-baseplate.
+an ordinal per-slot depth ([Perception](06-perception.md)). Two producers filled that interface
+before this one: `IdealSceneModel` (simulator ground truth, unavailable on hardware) and
+`ColourSegmentationSceneModel` (CPU colour thresholding, fails on touching same-coloured bricks,
+lighting change, and green bricks over the green baseplate).
 
-This is the laptop-scale third option: an ordinary U-Net encoder-decoder trained on simulator
-frames only. Cost is 46 ms per frame on three CPU threads against 21 ms for
-colour thresholding, in exchange for a 2.7x smaller centre error and a working answer in the cases
-colour cannot resolve. It is the fallback when the microcontroller path is unavailable and a
-second opinion when it is not; any further source plugs into the same interface unchanged.
+The laptop-scale third option: an ordinary U-Net encoder-decoder trained on simulator frames only.
+46 ms/frame on three CPU threads against 21 ms for colour thresholding, for a 2.7x smaller centre
+error and a working answer where colour cannot resolve. Fallback when the microcontroller path is
+unavailable, second opinion when it is not; any further source plugs into the same interface
+unchanged.
 
 ## Architecture
 
@@ -248,7 +247,7 @@ closing the gap once real frames exist:
 2. **Label.** Four classes and one instance id per brick. The arm mask can be rendered from the
    joint angles and the baseplate mask projected from a measured plate pose, leaving only the
    bricks to draw by hand. Depth may be left unlabelled; the loss masks invalid pixels, so an
-   unlabelled depth channel simply does not train that head.
+   unlabelled depth channel does not train that head.
 3. **Mix.** Roughly one real frame to four rendered ones. Fine-tuning on real frames alone
    discards the variation the rendered set supplies.
 4. **Rate.** Start from the shipped checkpoint at about a tenth of the training rate and stop
