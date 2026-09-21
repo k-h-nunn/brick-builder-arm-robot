@@ -60,6 +60,6 @@ nav:
       - Lab notebook template: experiments/TEMPLATE.md
   - Demos:
       - Gallery: demos/README.md
-      - Closed-loop placement film: demos/videos.md
+      - Films: demos/videos.md
   - On-screen wording: terminology.md
   - Glossary: glossary.md
