@@ -48,7 +48,8 @@ def _scene_model(name: str):
     return CnnSceneModel()
 
 
-def run(seed: int = 1, pick: bool = False, model: str = "ideal") -> int:
+def run(seed: int = 1, pick: bool = False, model: str = "ideal",
+        controller: str = "python") -> int:
     from brick_builder.action.place import PlaceConfig, TrackingEpisode, record_ideal
     from brick_builder.action.worlds import SUPPLY_BODY, build_pick_world, build_world
     from brick_builder.control.pick_place import verify_placement
@@ -72,6 +73,21 @@ def run(seed: int = 1, pick: bool = False, model: str = "ideal") -> int:
           f"{abs(math.degrees(d_yaw)):.2f} deg (unknown to the controller)")
 
     episode = TrackingEpisode(scene, ideal, cfg=cfg, seed=seed, source=source)
+    driver = None
+    if controller != "python":
+        # The C library, reached one of three ways. The twin's per-step work is measured once
+        # into a target bundle first, which is the only thing that changes on the Python side.
+        from brick_builder.hil import controller as hil_controller
+        from brick_builder.hil import episode as hil_episode
+        from brick_builder.hil.library import load as load_lib
+
+        lib, build = load_lib()
+        made, blob = hil_episode.prepare(episode)
+        episode.plan = made
+        driver = hil_controller.make(controller, lib=lib, build=build)
+        episode.controller = hil_episode.ControllerEpisode(driver, blob)
+        print(f"target bundle: {len(blob)} bytes, {made.n_frames} frames, "
+              f"controller {controller}")
     t0 = time.perf_counter()
     try:
         for _ in episode.run():
@@ -85,6 +101,8 @@ def run(seed: int = 1, pick: bool = False, model: str = "ideal") -> int:
         check = verify_placement(scene, brick, (4.5, 3.5, 0))
     finally:
         episode.close()
+        if driver is not None:
+            driver.close()
 
     print(f"scene model: {'ground truth' if source is None else 'convolutional'}  "
           f"seed {seed}  {time.perf_counter() - t0:.1f} s")
@@ -104,8 +122,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="fetch the brick from the table first instead of starting with it held")
     parser.add_argument("--cnn", dest="model", action="store_const", const="cnn", default="ideal",
                         help="drive the loop from the trained convolutional scene model")
+    parser.add_argument("--controller", default="python",
+                        help="python (default), c, process, process:tcp, or serial:/dev/ttyACM0")
     args = parser.parse_args(argv)
-    return run(seed=args.seed, pick=args.pick, model=args.model)
+    return run(seed=args.seed, pick=args.pick, model=args.model, controller=args.controller)
 
 
 if __name__ == "__main__":

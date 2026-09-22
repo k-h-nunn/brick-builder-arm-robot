@@ -284,6 +284,57 @@ SCHEMA: dict[str, FieldSpec] = {
     "camera.distortion_k2": FieldSpec(
         "camera", "-", float, -1.0, 1.0, default=0.04,
         doc="4th-order radial lens distortion, same convention."),
+    "camera.fx_px": FieldSpec(
+        "camera", "px", float, 10.0, 8000.0, default=254.828,
+        doc="Calibrated focal length in pixels, x, at resolution_width_px x resolution_height_px. "
+            "Read from cv2.calibrateCamera; the procedure is in docs/guide/08."),
+    "camera.fy_px": FieldSpec(
+        "camera", "px", float, 10.0, 8000.0, default=254.828,
+        doc="Calibrated focal length in pixels, y.  See fx_px."),
+    "camera.cx_px": FieldSpec(
+        "camera", "px", float, 0.0, 4096.0, default=319.5,
+        doc="Calibrated principal point, x [px].  See fx_px."),
+    "camera.cy_px": FieldSpec(
+        "camera", "px", float, 0.0, 4096.0, default=239.5,
+        doc="Calibrated principal point, y [px].  See fx_px."),
+    "camera.opencv_k1": FieldSpec(
+        "camera", "-", float, -2.0, 2.0, default=0.0,
+        doc="OpenCV (Brown-Conrady) 2nd-order radial distortion, as cv2.calibrateCamera returns "
+            "it.  A different parametrization from distortion_k1, which is the image-space remap "
+            "render.domain_rand uses; the two are not interchangeable."),
+    "camera.opencv_k2": FieldSpec(
+        "camera", "-", float, -2.0, 2.0, default=0.0,
+        doc="OpenCV 4th-order radial distortion.  See opencv_k1."),
+    "camera.opencv_p1": FieldSpec(
+        "camera", "-", float, -1.0, 1.0, default=0.0,
+        doc="OpenCV 1st tangential distortion coefficient.  See opencv_k1."),
+    "camera.opencv_p2": FieldSpec(
+        "camera", "-", float, -1.0, 1.0, default=0.0,
+        doc="OpenCV 2nd tangential distortion coefficient.  See opencv_k1."),
+    "camera.opencv_k3": FieldSpec(
+        "camera", "-", float, -2.0, 2.0, default=0.0,
+        doc="OpenCV 6th-order radial distortion.  See opencv_k1."),
+    "camera.mount_x_mm": FieldSpec(
+        "camera", "mm", float, -200.0, 200.0, default=2.5,
+        doc="Camera position in the gripper body frame, x.  Hand-eye result from "
+            "cv2.calibrateHandEye, converted to MuJoCo's camera convention; compare against "
+            "patch_so101.WRIST_CAM_POS_IN_GRIPPER."),
+    "camera.mount_y_mm": FieldSpec(
+        "camera", "mm", float, -200.0, 200.0, default=73.44,
+        doc="Camera position in the gripper body frame, y.  See mount_x_mm."),
+    "camera.mount_z_mm": FieldSpec(
+        "camera", "mm", float, -200.0, 200.0, default=6.59,
+        doc="Camera position in the gripper body frame, z.  See mount_x_mm."),
+    "camera.mount_roll_deg": FieldSpec(
+        "camera", "deg", float, -180.0, 180.0, default=-25.073,
+        doc="Camera orientation in the gripper body frame, rotation about x.  The vendored mount "
+            "is a pure x rotation, so the other two are nominally zero; see mount_x_mm."),
+    "camera.mount_pitch_deg": FieldSpec(
+        "camera", "deg", float, -180.0, 180.0, default=0.0,
+        doc="Camera orientation in the gripper body frame, rotation about y.  See mount_roll_deg."),
+    "camera.mount_yaw_deg": FieldSpec(
+        "camera", "deg", float, -180.0, 180.0, default=0.0,
+        doc="Camera orientation in the gripper body frame, rotation about z.  See mount_roll_deg."),
     # -- workspace ------------------------------------------------------------------------------
     "workspace.baseplate_x_m": FieldSpec(
         "workspace", "m", float, -1.0, 1.0, default=0.17,

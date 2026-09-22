@@ -67,9 +67,16 @@ class WorldAdapter:
     # -- write ---------------------------------------------------------------------------------
 
     def command(self, tcp, spin: float, grip: float, *, c_vert: float = 1.0,
-                c_lat: float = 1.0) -> None:
+                c_lat: float = 1.0, q_goal=None) -> None:
         """Write one tool target (solved to joint targets by the arm's own inverse kinematics,
-        tool pointing down) and let one 20 ms control tick of physics run."""
+        tool pointing down) and let one 20 ms control tick of physics run.
+
+        `q_goal` seeds that solve with joint angles a controller has already worked out, so a
+        controller running off-process drives the arm with its own answer and the driver's solve
+        only checks it. `joint_goal` afterwards says whether it was kept.
+        """
+        if q_goal is not None:
+            self._driver.q_goal = np.asarray(q_goal, dtype=float).copy()
         self._driver.step(np.asarray(tcp, dtype=float), float(spin), float(grip),
                           c_vert=c_vert, c_lat=c_lat)
 
@@ -92,6 +99,16 @@ class WorldAdapter:
     @property
     def joint_position(self) -> np.ndarray:
         return np.asarray(self._driver.reading.position, dtype=float).copy()
+
+    @property
+    def joint_goal(self) -> np.ndarray:
+        """The joint angles the bus was last told to hold, before the gravity term."""
+        return np.asarray(self._driver.q_goal, dtype=float).copy()
+
+    @property
+    def kinematics(self):
+        """The arm's own forward/inverse kinematics -- geometry, not a view of the world."""
+        return self._driver.kin
 
     @property
     def tick(self) -> int:

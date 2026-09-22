@@ -553,6 +553,131 @@ camera:
     measured_on:
     notes: "See distortion_k1."
 
+  # ---- calibrated intrinsics: what cv2.calibrateCamera returns -------------------------------
+  # These five plus the four distortion coefficients below are ONE measurement: 15-20
+  # chessboard shots through cv2.calibrateCamera. The procedure is in
+  # docs/guide/08-hardware-wiring-calibration.md. They are in pixels at
+  # resolution_width_px x resolution_height_px and mean nothing at another resolution.
+
+  fx_px:
+    # What: focal length in pixels, x.
+    # Measure: docs/guide/08, "camera intrinsics".
+    value: 254.828
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Derived from diagonal_fov_deg 115 at 640x480 with a centred principal point and square pixels, not measured. The simulator's own wrist camera uses exactly this focal length."
+
+  fy_px:
+    value: 254.828
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See fx_px. Square pixels until a calibration says otherwise."
+
+  cx_px:
+    # What: principal point, x [px].
+    value: 319.5
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Frame centre, (width - 1) / 2. A real board lens is typically a few pixels off centre."
+
+  cy_px:
+    value: 239.5
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See cx_px."
+
+  opencv_k1:
+    # What: OpenCV (Brown-Conrady) 2nd-order radial distortion. NOT the same parametrization as
+    #   distortion_k1 above, which is render.domain_rand's image-space remap: do not copy one
+    #   into the other.
+    value: 0.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Zero = an undistorted pinhole, which is what the simulator renders. A real wide-angle board lens is not zero; the calibration gives the number."
+
+  opencv_k2:
+    value: 0.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See opencv_k1."
+
+  opencv_p1:
+    # What: 1st tangential distortion coefficient (sensor not parallel to the lens).
+    value: 0.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See opencv_k1."
+
+  opencv_p2:
+    value: 0.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See opencv_k1."
+
+  opencv_k3:
+    value: 0.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See opencv_k1."
+
+  # ---- extrinsics: where the camera sits on the gripper --------------------------------------
+  # One measurement, cv2.calibrateHandEye over the same shots as the intrinsics, converted from
+  # OpenCV's camera convention (+z forward, +y down) to MuJoCo's (-z forward, +y up).
+
+  mount_x_mm:
+    # What: camera position in the gripper body frame, x.
+    # Measure: docs/guide/08, "hand-eye calibration".
+    value: 2.5
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "CAD-nominal, composed from the vendored mount and camera bodies (patch_so101.WRIST_CAM_POS_IN_GRIPPER). Uncertainty about 3-5 mm: print clearance and the sensor's placement inside a purchased 32x32 mm module."
+
+  mount_y_mm:
+    value: 73.44
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See mount_x_mm."
+
+  mount_z_mm:
+    value: 6.59
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See mount_x_mm."
+
+  mount_roll_deg:
+    # What: camera orientation in the gripper body frame, rotation about x.
+    value: -25.073
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "The vendored mount is a pure x rotation, so pitch and yaw are nominally zero. Uncertainty about 3-5 degrees in pitch and yaw; roll is fixed by the rigid mount."
+
+  mount_pitch_deg:
+    value: 0.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See mount_roll_deg."
+
+  mount_yaw_deg:
+    value: 0.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See mount_roll_deg."
+
 workspace:
 
   baseplate_x_m:

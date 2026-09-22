@@ -23,3 +23,4 @@ __pycache__/
 
 # MuJoCo writes its warnings here from wherever a script runs
 MUJOCO_LOG.TXT
+firmware/control_lib/_build/

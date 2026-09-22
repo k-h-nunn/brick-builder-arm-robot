@@ -57,6 +57,7 @@ nav:
       - Measure and enter parameters: guide/10-measure-and-enter-parameters.md
       - Commands: guide/11-commands.md
       - Closed-loop control: guide/12-closed-loop-control.md
+      - Hardware in the loop: guide/13-hardware-in-the-loop.md
       - Simulator page: guide/14-simulator-gui.md
       - Lab notebook template: experiments/TEMPLATE.md
   - Demos:
