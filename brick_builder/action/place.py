@@ -469,22 +469,41 @@ class Geometry:
     """
 
     twin_scene: Scene
-    target: tuple[int, int]
+    target: tuple[int, int] | tuple[int, int, int]
+    """The target cell: the footprint's minimum corner in studs, and the stacking layer.
+
+    A two-element target is layer 0, which is what every single-brick task asks for.
+    """
+
     held: HeldBrick
     cfg: PlaceConfig
 
     def __post_init__(self) -> None:
         spec = self.twin_scene.cfg.spec
         self.spec = spec
+        self.layer = int(self.target[2]) if len(self.target) > 2 else 0
         self.grasp = (self.twin_scene.grasp if self.twin_scene.grasp is not None
                       else grasp_pose(self.held.nx, self.held.ny, spec))
         cx = self.target[0] + (self.held.nx - 1) / 2.0
         cy = self.target[1] + (self.held.ny - 1) / 2.0
         self.cell_nominal = cell_world(self.twin_scene, cx, cy)
-        self.seat_bottom = float(self.cell_nominal[2])
-        self.carry_z = self.seat_bottom + 0.045 + float(self.grasp.pos_in_tcp[2])
+        self.plate_top = float(self.cell_nominal[2])
+        # Where the held brick's bottom face ends up. On the baseplate that is the plate's own
+        # top face; one layer up it is a brick height above it, because the brick underneath is
+        # what it seats on. Every height the script derives -- the hover, the low dwell, the
+        # press, the clearance and the push on the roof -- is measured from here, so a target
+        # that names a layer moves the whole descent with it instead of aiming at the plate.
+        self.seat_bottom = self.plate_top + self.layer * spec.height
+        # The carry has two jobs: clear whatever is standing on the plate, and be no lower than
+        # the hover it descends from. At layer 0 the first is what binds and this is the height
+        # it has always been.
+        self.carry_z = (max(self.plate_top + 0.045, self.seat_bottom + self.cfg.hover)
+                        + float(self.grasp.pos_in_tcp[2]))
+        # Over the plate's centre, looking at the whole build, so it is the plate's own top face
+        # this stands off -- not the cell's seat, which on an upper layer would put the empty
+        # jaws out past the arm's reach for no gain.
         self.view_tcp = np.array([NOMINAL_PLATE_XY[0], NOMINAL_PLATE_XY[1],
-                                  self.seat_bottom + 0.058])
+                                  self.plate_top + 0.058])
         self.grip_closed = (gripper_command(self.twin_scene)
                             if self.twin_scene.grasp is not None
                             else jaw_angle_for_clearance(self.grasp.contact_point,
@@ -530,6 +549,10 @@ def record_ideal(cfg: PlaceConfig, *, seed: int = 0, target=TARGET_CELL,
     reference bricks the single-brick tasks use. A build whose second brick goes down beside
     the first has to record against a plate that already carries it, or the run's own view of
     the brick it just placed matches nothing in the recording.
+
+    `target` is `(x, y)` on the baseplate, or `(x, y, layer)` for a brick that goes on top of
+    one already there. The layer is what the script's heights are measured from, so a stacked
+    placement has to carry it here as well as in `placed`.
     """
     from .worlds import build_nominal_world
 
@@ -541,7 +564,7 @@ def record_ideal(cfg: PlaceConfig, *, seed: int = 0, target=TARGET_CELL,
     # and the observed one, where it cancels instead of steering.
     world = WorldAdapter(scene, rng=np.random.default_rng(seed), build_decode=build_decode,
                          source=source)
-    geometry = Geometry(scene, (int(target[0]), int(target[1])), held, cfg)
+    geometry = Geometry(scene, tuple(int(v) for v in target), held, cfg)
     if cfg.pick:
         geometry.supply_nominal = supply_nominal_xy(scene)
 
