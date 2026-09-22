@@ -162,6 +162,26 @@ class PlaceConfig:
 
     hover: float = 0.020
     low: float = 0.006
+
+    neighbour_clear: float = 0.002
+    """How far above a flush neighbour's studs the align dwell stands [m].
+
+    The hover is 20 mm over the seat and a neighbour's studs stand 23.7 mm over it, so a cell
+    with a brick already flush against it puts the align pose 3.7 mm *below* the thing beside
+    it. Measured on the build's second cycle: the held brick's wall touches the neighbour during
+    `Transport`, 0.4 mm under its roof, and the four-second dwell that is supposed to settle the
+    estimate is spent resting against it. With a neighbour the hover goes above its studs
+    instead, and the descent from there onto the cell is straight down.
+    """
+
+    neighbour_bias: float = 0.0003
+    """How far off the cell the aim leans, away from a flush neighbour [m].
+
+    Two bricks on adjacent cells are 32 mm apart and 31.8 mm across, so the whole air gap is
+    0.2 mm -- 0.1 mm a side, which is under the loop's own lateral floor. Leaning the aim a few
+    tenths of a millimetre the other way means the studs' 0.5 mm chamfer guides the brick in
+    rather than the neighbour's wall, and the studs pull it back onto the cell as it seats.
+    """
     align_hold: float = 4.0
     """Seconds the script stands still at the align pose. In the nominal world nothing happens;
     in the real one this is where the feedback does its work."""
@@ -430,7 +450,7 @@ class Script:
         else:
             yield from self._hold("Transport", 0.2, grip=g.grip_closed)
 
-        yield from self._move("Transport", g.place_tcp(cfg.hover), speed=cfg.travel_speed,
+        yield from self._move("Transport", g.place_tcp(g.hover), speed=cfg.travel_speed,
                               grip=g.grip_closed, spin=0.0)
         yield from self._hold("Align", cfg.align_hold)
         yield from self._move("Press the brick down", g.place_tcp(cfg.low),
@@ -494,10 +514,19 @@ class Geometry:
         # press, the clearance and the push on the roof -- is measured from here, so a target
         # that names a layer moves the whole descent with it instead of aiming at the plate.
         self.seat_bottom = self.plate_top + self.layer * spec.height
+        # Which way to lean off the cell, and how high to dwell, when a brick already stands
+        # flush against it. Both are zero-effect on a cell with nothing beside it.
+        self.away = self._flush_neighbour()
+        self.has_neighbour = bool(np.any(self.away))
+        self.bias = self.away * self.cfg.neighbour_bias
+        self.hover = self.cfg.hover
+        if self.has_neighbour:
+            self.hover = max(self.cfg.hover,
+                             spec.height + spec.stud_h + self.cfg.neighbour_clear)
         # The carry has two jobs: clear whatever is standing on the plate, and be no lower than
         # the hover it descends from. At layer 0 the first is what binds and this is the height
         # it has always been.
-        self.carry_z = (max(self.plate_top + 0.045, self.seat_bottom + self.cfg.hover)
+        self.carry_z = (max(self.plate_top + 0.045, self.seat_bottom + self.hover)
                         + float(self.grasp.pos_in_tcp[2]))
         # Over the plate's centre, looking at the whole build, so it is the plate's own top face
         # this stands off -- not the cell's seat, which on an upper layer would put the empty
@@ -514,9 +543,38 @@ class Geometry:
         self.grip_together = gripper_angle_for_width(0.002)
         self.supply_nominal = np.array([0.0, 0.0, 0.0])
 
+    def _flush_neighbour(self) -> np.ndarray:
+        """Unit vector pointing away from the bricks standing flush against the target cell.
+
+        Read off the goal -- which bricks the plate is supposed to carry -- and not off the
+        world: this is nominal task knowledge like the cell itself. Only the target's own layer
+        counts, because a brick a layer down is what the new one seats on rather than something
+        it can be pressed against.
+        """
+        x0, y0 = int(self.target[0]), int(self.target[1])
+        x1, y1 = x0 + self.held.nx - 1, y0 + self.held.ny - 1
+        away = np.zeros(2)
+        for p in self.twin_scene.cfg.placed:
+            if int(p.z) != self.layer:
+                continue
+            px1, py1 = p.x + p.w - 1, p.y + p.h - 1
+            side_by_side = not (p.y > y1 or py1 < y0)
+            end_to_end = not (p.x > x1 or px1 < x0)
+            if side_by_side and p.x == x1 + 1:
+                away[0] -= 1.0
+            if side_by_side and px1 == x0 - 1:
+                away[0] += 1.0
+            if end_to_end and p.y == y1 + 1:
+                away[1] -= 1.0
+            if end_to_end and py1 == y0 - 1:
+                away[1] += 1.0
+        norm = float(np.linalg.norm(away))
+        return away / norm if norm else away
+
     def place_tcp(self, height: float) -> np.ndarray:
         return tcp_for_brick(
-            [self.cell_nominal[0], self.cell_nominal[1], self.seat_bottom + height],
+            [self.cell_nominal[0] + self.bias[0], self.cell_nominal[1] + self.bias[1],
+             self.seat_bottom + height],
             0.0, self.grasp,
         )
 
