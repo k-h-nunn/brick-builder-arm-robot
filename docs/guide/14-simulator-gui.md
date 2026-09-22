@@ -164,9 +164,10 @@ during a fast move: the twin's own servos chase the reported positions with thei
 the strip measures is that lag plus whatever the two parameter files disagree about, which is
 what the same strip will measure when the first world is a real arm.
 
-`real arm` and `microcontroller` are listed and greyed out. Their adapters are built elsewhere and
-this package imports nothing from them; connecting one means giving the session a source of joint
-readings in place of `WorldAdapter`, and nothing else on the page changes.
+`real arm` and `microcontroller` are listed and greyed out. Their adapters belong to
+[Hardware in the loop](13-hardware-in-the-loop.md) and this package imports nothing from them;
+connecting one means giving the session a source of joint readings in place of `WorldAdapter`,
+and nothing else on the page changes.
 
 ## Keyboard shortcuts
 
