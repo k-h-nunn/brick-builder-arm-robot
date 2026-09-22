@@ -13,7 +13,7 @@ LeRobot SO-101 documentation. Brick names are LEGO's own.
 | On screen | Never |
 | --- | --- |
 | Brick Builder Arm Robot | the package name `brick_builder`, or any short form of it |
-| simulated in MuJoCo | sim, simulator run, digital twin |
+| simulated in MuJoCo; on the simulator page, the mode labels `sim` and `twin (sim)` | simulator run, digital twin (as prose) |
 
 The package directory in this repository is still called `brick_builder/`; that is a path, not a name a
 viewer ever sees.

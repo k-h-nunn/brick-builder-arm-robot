@@ -40,7 +40,7 @@ hardware = [
 include = ["brick_builder*"]
 
 [tool.setuptools.package-data]
-brick_builder = ["perception/weights/*.pt"]
+brick_builder = ["perception/weights/*.pt", "action/weights/*", "gui/static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

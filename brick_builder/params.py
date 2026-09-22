@@ -836,9 +836,11 @@ def to_scene_config(params: ParamFile, base: Any = None, **overrides: Any) -> tu
         "damage_monitor_every": int(params.value("bricks.damage_monitor_every")),
         "breakable": params.value("bricks.breakable") == "on",
         "breakable_limit_scale": float(params.value("bricks.breakable_limit_scale")),
+        # The offscreen buffer must hold the largest render anyone asks for: the camera's own
+        # resolution and the 512 px wrist window the scene model reads.
         "offscreen": (
-            int(params.value("camera.resolution_width_px")),
-            int(params.value("camera.resolution_height_px")),
+            max(int(params.value("camera.resolution_width_px")), base.offscreen[0]),
+            max(int(params.value("camera.resolution_height_px")), base.offscreen[1]),
         ),
         **overrides,
     }
