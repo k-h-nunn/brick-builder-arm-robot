@@ -520,15 +520,22 @@ class Geometry:
 
 def record_ideal(cfg: PlaceConfig, *, seed: int = 0, target=TARGET_CELL,
                  prepare=None, build_decode: bool = False,
-                 source=None, label_hook=None) -> tuple[IdealSequence, WorldAdapter]:
+                 source=None, label_hook=None,
+                 placed=None) -> tuple[IdealSequence, WorldAdapter]:
     """Run the task in the nominal world and keep what it saw and did.
 
     Returns the sequence and the adapter it was recorded through; the caller closes the adapter.
+
+    `placed` overrides what is already on the plate in the nominal world; `None` is the two
+    reference bricks the single-brick tasks use. A build whose second brick goes down beside
+    the first has to record against a plate that already carries it, or the run's own view of
+    the brick it just placed matches nothing in the recording.
     """
     from .worlds import build_nominal_world
 
     held = HeldBrick(nx=WANTED[0], ny=WANTED[1], colour=WANTED[2])
-    scene = build_nominal_world(cfg.pick, held=None if cfg.pick else held, prepare=prepare)
+    scene = build_nominal_world(cfg.pick, held=None if cfg.pick else held, prepare=prepare,
+                                placed=placed)
     # `source` records the reference sequence through the *same* scene model that will drive
     # the run. A model with a systematic bias then has that bias in both the target state
     # and the observed one, where it cancels instead of steering.

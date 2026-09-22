@@ -1,0 +1,114 @@
+"""The campaign's tables, in the documentation's own style.
+
+    python -m brick_builder.campaign.tables --campaign results/campaign/closed_loop
+
+One table per task: a row per round and inverse, with the analytic baseline and the published
+numbers repeated in every one of them so a column is never read without what it is against.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+from typing import Sequence
+
+from .curves import read_summary
+
+PUBLISHED_TEXT = {"placement": "10/10", "pick_and_place": "8/10"}
+"""What the closed-loop page reports with ground-truth driving. `build_2` has no published
+number: this campaign is the first measurement of it."""
+
+
+def _fmt(value: float, digits: int = 2) -> str:
+    return "--" if value != value else f"{value:.{digits}f}"
+
+
+def task_table(rows: Sequence[dict], task: str) -> str:
+    """One markdown table for one task."""
+    keep = [r for r in rows if r["task"] == task]
+    if not keep:
+        return ""
+    analytic = [r for r in keep if r["inverse"] == "analytic"]
+    learned = sorted([r for r in keep if r["inverse"] == "learned"], key=lambda r: r["round"])
+    learned = [r for r in learned if r["predictor"] == "learned"] or learned
+
+    head = ("| Round | Inverse | Version | Seated on target cell | Wilson 95 % | "
+            "Lateral error [mm] | Median tracking [mm] | Median prediction [mm] | "
+            "Ticks at Align | Tuples trained on |")
+    rule = "|" + "---|" * 10
+    lines = [head, rule]
+    if analytic:
+        a = analytic[0]
+        lines.append(
+            f"| fixed | analytic | -- | {a['seated_on_target']} | "
+            f"{100 * a['wilson_low']:.0f}-{100 * a['wilson_high']:.0f} % | "
+            f"{_fmt(a['lateral_mm_median'])} | {_fmt(a['median_tracking_mm'])} | "
+            f"{_fmt(a['median_prediction_mm'])} | {_fmt(a['ticks_align'], 0)} | -- |")
+    if task in PUBLISHED_TEXT:
+        lines.append(f"| published | ground truth | -- | {PUBLISHED_TEXT[task]} | -- | -- | "
+                     "-- | -- | -- | -- |")
+    for r in learned:
+        lines.append(
+            f"| {r['round']} | learned | {r['version']} | {r['seated_on_target']} | "
+            f"{100 * r['wilson_low']:.0f}-{100 * r['wilson_high']:.0f} % | "
+            f"{_fmt(r['lateral_mm_median'])} | {_fmt(r['median_tracking_mm'])} | "
+            f"{_fmt(r['median_prediction_mm'])} | {_fmt(r['ticks_align'], 0)} | "
+            f"{r['ticks_trained_on'] or '--'} |")
+    return "\n".join(lines)
+
+
+def cost_table(state: dict) -> str:
+    """Wall clock per phase per round, in minutes."""
+    lines = ["| Round | Perform [min] | Train [min] | Evaluate [min] | Episodes logged | "
+             "Tuples |", "|---|---|---|---|---|---|"]
+    for index in sorted(int(k) for k in state.get("rounds", {})):
+        r = state["rounds"][str(index)]
+        wall = r.get("wall_s", {}) or {}
+        lines.append(
+            f"| {index} | {wall.get('perform', 0) / 60.0:.1f} | "
+            f"{wall.get('train', 0) / 60.0:.1f} | {wall.get('evaluate', 0) / 60.0:.1f} | "
+            f"{r.get('episodes_logged', 0)} | {r.get('ticks', 0)} |")
+    return "\n".join(lines)
+
+
+def failure_table(rows: Sequence[dict]) -> str:
+    """What the failures were, per task and round, for the learned inverse."""
+    lines = ["| Round | Task | Seated on target cell | Failures |", "|---|---|---|---|"]
+    for r in sorted(rows, key=lambda r: (r["round"], r["task"])):
+        if r["inverse"] != "learned" or (r["predictor"] != "learned" and r["round"] > 0):
+            continue
+        lines.append(f"| {r['round']} | {r['task'].replace('_', ' ')} | "
+                     f"{r['seated_on_target']} | {r['failures'] or 'none'} |")
+    return "\n".join(lines)
+
+
+def render(campaign_dir: Path) -> str:
+    campaign_dir = Path(campaign_dir)
+    rows = read_summary(campaign_dir / "summary.csv")
+    state = json.loads((campaign_dir / "campaign.json").read_text())
+    blocks = []
+    for task in ("placement", "pick_and_place", "build_2"):
+        table = task_table(rows, task)
+        if table:
+            blocks.append(f"### {task.replace('_', ' ').capitalize()}, seeds 0-9\n\n{table}")
+    blocks.append("### Cost per round\n\n" + cost_table(state))
+    blocks.append("### Failures\n\n" + failure_table(rows))
+    return "\n\n".join(blocks) + "\n"
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="tables", description=__doc__.split("\n\n")[0])
+    parser.add_argument("--campaign", default="results/campaign/closed_loop")
+    parser.add_argument("--out", default=None)
+    args = parser.parse_args(argv)
+    text = render(Path(args.campaign))
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(text)
+    print(text)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

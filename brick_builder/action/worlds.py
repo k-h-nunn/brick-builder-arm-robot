@@ -163,9 +163,14 @@ def nominal_cfg(*, held: HeldBrick | None, placed=None, supply=()) -> SceneConfi
 
 
 
-def build_nominal_world(pick: bool, *, held, prepare=None) -> Scene:
-    """The world the twin runs the job in: everything exactly where the task says it is."""
-    cfg = nominal_cfg(held=held, supply=(WANTED, DISTRACTOR) if pick else ())
+def build_nominal_world(pick: bool, *, held, prepare=None, placed=None) -> Scene:
+    """The world the twin runs the job in: everything exactly where the task says it is.
+
+    `placed` is what is already on the plate; `None` is the two reference bricks. A build places
+    its second brick on a plate that already carries its first, and the recording has to be made
+    against that plate.
+    """
+    cfg = nominal_cfg(held=held, placed=placed, supply=(WANTED, DISTRACTOR) if pick else ())
     scene = build_scene(cfg)
     if prepare is not None:
         prepare(scene.model)
