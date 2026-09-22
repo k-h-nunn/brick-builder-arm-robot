@@ -127,6 +127,9 @@ def train_predictor(data: ds.Episodes, cfg: TrainConfig, out: Path, *,
     held_idx = np.nonzero(held)[0]
 
     t0 = time.perf_counter()
+    val = float("nan")
+    # A resume that is already at `epochs` runs no epoch at all and simply republishes the
+    # weights it resumed, which is what a round called twice with the same budget should do.
     for epoch in range(start, cfg.epochs):
         order = rng.permutation(train_idx)
         total = 0.0

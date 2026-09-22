@@ -152,6 +152,14 @@ class PlaceConfig:
     the dwells, the end conditions -- is untouched, so the two are measurable against each other
     on the same seeds. The default is the analytic one until the learned one matches it."""
 
+    predictor: str = "analytic"
+    """Which one-step prediction the reported prediction error is measured against.
+
+    `"analytic"` is the loop's own rule -- the residual will change by exactly the correction just
+    commanded. `"learned"` loads `action/weights/predictor.npz` and reads the predicted residual
+    back through the same servo (`models/predictor.py`). Reported only: nothing on the control
+    path reads the prediction, so the two are measurable on the same seeds with the same run."""
+
     hover: float = 0.020
     low: float = 0.006
     align_hold: float = 4.0
@@ -605,9 +613,17 @@ class TrackingEpisode:
 
     def __init__(self, scene: Scene, ideal: IdealSequence, *, cfg: PlaceConfig = PlaceConfig(),
                  seed: int = 0, target=TARGET_CELL, twin_prepare=None,
-                 build_decode: bool = False, source=None, inverse=None, observer=None) -> None:
+                 build_decode: bool = False, source=None, inverse=None, predictor=None,
+                 observer=None, plan=None, controller=None) -> None:
         self.cfg = cfg
         self.ideal = ideal
+        self.seed = seed
+        self.plan = plan
+        """Steps measured in the twin ahead of the run instead of during it (`hil/plan.py`).
+        The loop is unchanged; only where the numbers come from is."""
+        self.controller = controller
+        """Runs the tick logic somewhere else -- the C library, a native process or the board
+        (`hil/episode.py`). `None` is this class's own loop."""
         # `inverse` overrides `cfg.inverse`; `None` means "whatever the config asks for". The
         # learned one is a few thousand multiply-accumulates on slot-row differences and is
         # loaded here, once, so the tick itself only runs the forward pass.
@@ -616,6 +632,11 @@ class TrackingEpisode:
 
             inverse = LearnedInverse.load()
         self.inverse = inverse
+        if predictor is None and cfg.predictor == "learned":
+            from .models.predictor import LearnedPredictor
+
+            predictor = LearnedPredictor.load()
+        self.predictor = predictor
         self.observer = observer
         """Called once per vision tick with everything a tuple log needs. Off the control path:
         the loop's own behaviour does not depend on it (see `action/learn/collect.py`)."""
@@ -735,6 +756,8 @@ class TrackingEpisode:
         self._settle_servo(held, frame, bodies)
 
     def _build(self, frame, bodies, held, pose):
+        if self.plan is not None:
+            return self.plan.step_for(frame.k)
         return self.twin.build_step(
             frame.step, pose.pos, pose.spin, bodies,
             brick_body=held, tol_mm=self.cfg.tol_mm, min_refs=1,
@@ -787,6 +810,9 @@ class TrackingEpisode:
         self.trusted = self.gain >= self.cfg.min_gain and (len(bodies) >= 2 or alone)
 
     def run(self) -> Iterator[TickRecord]:
+        if self.controller is not None:
+            yield from self.controller.run(self)
+            return
         cfg = self.cfg
         frames = self.ideal.frames
         settled = 0
@@ -1103,7 +1129,8 @@ class TrackingEpisode:
         if self.observer is not None:
             self.observer(self, frame, best, out, measured, analytic, delta)
 
-        self._predicted = measured + delta
+        self._predicted = (measured + delta if self.predictor is None
+                           else self.predictor.predict(self, frame, out, measured, delta))
         return best, 1e3 * float(np.linalg.norm(measured[:2])), delta, int(out["seen"])
 
     def _learned(self, frame: ReferenceFrame, out: dict, analytic: np.ndarray) -> np.ndarray:

@@ -215,13 +215,19 @@ def inverse_metrics(data: ds.Episodes, inverse: Mlp, predictor: Mlp, *, seed: in
 
 
 def run_episode(task: str, seed: int, *, inverse: str = "analytic", residual: bool = False,
-                weights: Path | None = None, source=None, ideal=None) -> dict:
-    """One closed-loop episode, scored. `ideal` lets a caller reuse a recorded sequence."""
+                weights: Path | None = None, source=None, ideal=None,
+                predictor: str = "analytic") -> dict:
+    """One closed-loop episode, scored. `ideal` lets a caller reuse a recorded sequence.
+
+    `predictor` selects which one-step prediction the reported prediction error is measured
+    against. It is off the control path, so two runs of the same seed that differ only in it
+    produce the same trajectory and the same placement, and only `median_prediction_mm` moves.
+    """
     from ..place import PlaceConfig, TrackingEpisode, record_ideal
     from ..worlds import SUPPLY_BODY, build_pick_world, build_world
     from ...control.pick_place import verify_placement
 
-    cfg = PlaceConfig(pick=task == "pick", inverse=inverse)
+    cfg = PlaceConfig(pick=task == "pick", inverse=inverse, predictor=predictor)
     if ideal is None:
         ideal, nominal = record_ideal(cfg, seed=seed, source=source)
         nominal.close()
@@ -360,6 +366,21 @@ def _variant(name: str) -> dict:
             "weights": Path(weights) if weights else None}
 
 
+def _with_predictors(variants: list[dict], choice: str) -> list[dict]:
+    """Cross each inverse variant with the predictions to report for it.
+
+    `both` runs every seed twice. The second run is not a second measurement of the controller --
+    the prediction is off the control path, so the trajectory and the placement are the same --
+    it is the same run scored with the other prediction rule.
+    """
+    names = ("analytic", "learned") if choice == "both" else (choice,)
+    if names == ("analytic",):
+        return variants
+    return [{**v, "name": f"{v['name']} / F {p}" if len(names) > 1 else v["name"],
+             "predictor": p}
+            for v in variants for p in names]
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
     os.environ.setdefault("MUJOCO_GL", "egl")
@@ -372,6 +393,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     cl.add_argument("--variants", default="analytic,learned",
                     help="comma-separated: analytic, learned, residual, or learned:<weights.npz>")
     cl.add_argument("--seeds", default="0-9")
+    cl.add_argument("--predictor", choices=("analytic", "learned", "both"), default="analytic",
+                    help="which one-step prediction the reported prediction error is measured "
+                         "against; 'both' scores every variant with each")
     cl.add_argument("--out", default=None)
 
     off = sub.add_parser("offline")
@@ -385,7 +409,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.cmd == "closed-loop":
         lo, _, hi = args.seeds.partition("-")
         seeds = list(range(int(lo), int(hi) + 1)) if hi else [int(lo)]
-        variants = [_variant(name) for name in args.variants.split(",") if name]
+        variants = _with_predictors([_variant(name) for name in args.variants.split(",") if name],
+                                    args.predictor)
         report = compare(args.task, seeds, variants,
                          log=lambda line: print(line, flush=True))
         print(json.dumps({name: {k: v for k, v in col.items() if k != "rows"}
