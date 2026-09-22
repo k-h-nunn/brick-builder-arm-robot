@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulator</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header>
+  <h1>Simulator</h1>
+  <span class="badge" id="status">empty</span>
+  <span class="msg" id="message"></span>
+  <span class="spacer"></span>
+  <span class="msg" id="rates"></span>
+</header>
+
+<main>
+
+<section id="left">
+
+  <details open>
+    <summary>Scene setup</summary>
+
+    <label for="instruction">Instruction</label>
+    <textarea id="instruction" rows="2">put the blue 2x2 at column 5 row 4</textarea>
+    <div class="row">
+      <button id="btn-compile">Compile</button>
+      <span class="msg" id="compile-msg"></span>
+    </div>
+    <label>Placement</label>
+    <pre id="placement"></pre>
+    <label>Expected grid</label>
+    <table id="grid" class="grid"></table>
+
+    <label for="job">Job</label>
+    <select id="job"></select>
+
+    <label for="placed">Bricks on the plate</label>
+    <textarea id="placed" rows="3"></textarea>
+
+    <label for="seed">Seed [-]</label>
+    <input id="seed" type="number" value="1" min="0" step="1">
+
+    <label for="plate-offset">Baseplate displacement</label>
+    <select id="plate-offset"></select>
+    <div class="row triple" id="plate-typed">
+      <label>dx [mm]<input id="plate-dx" type="number" value="0" step="0.5"></label>
+      <label>dy [mm]<input id="plate-dy" type="number" value="0" step="0.5"></label>
+      <label>yaw [deg]<input id="plate-yaw" type="number" value="0" step="0.5"></label>
+    </div>
+
+    <label for="supply-offset">Supply brick displacement</label>
+    <select id="supply-offset"></select>
+    <div class="row triple" id="supply-typed">
+      <label>dx [mm]<input id="supply-dx" type="number" value="0" step="0.5"></label>
+      <label>dy [mm]<input id="supply-dy" type="number" value="0" step="0.5"></label>
+      <label>yaw [deg]<input id="supply-yaw" type="number" value="0" step="0.5"></label>
+    </div>
+
+    <label for="source">Scene-model source</label>
+    <select id="source"></select>
+
+    <label for="controller">Controller</label>
+    <select id="controller"></select>
+
+    <label for="mode">Mode</label>
+    <select id="mode"></select>
+
+    <div class="row">
+      <label class="check"><input id="breakable" type="checkbox"> Breakable bricks</label>
+      <label class="check"><input id="damage" type="checkbox" checked> Damage monitor</label>
+    </div>
+
+    <label for="params-file">Parameter file</label>
+    <div class="row">
+      <select id="params-file"></select>
+      <input id="params-upload" type="file" accept=".yaml,.yml">
+    </div>
+    <input id="params-filter" type="text" placeholder="filter">
+    <div class="scroll"><table id="params" class="params"></table></div>
+    <div class="msg" id="params-msg"></div>
+
+    <div class="row">
+      <button id="btn-apply" class="primary">Apply</button>
+      <button id="btn-reset">Reset</button>
+    </div>
+    <div class="msg" id="setup-problems"></div>
+  </details>
+
+  <details open>
+    <summary>Run</summary>
+    <div class="row">
+      <button id="btn-run" class="primary">Run</button>
+      <button id="btn-pause">Pause</button>
+      <button id="btn-step">Step</button>
+    </div>
+    <label for="speed">Speed</label>
+    <select id="speed"></select>
+    <label>Displacement</label>
+    <table id="displacement" class="kv"></table>
+  </details>
+
+  <details>
+    <summary>Disturbances</summary>
+    <label for="dist-body">Brick</label>
+    <select id="dist-body"></select>
+    <div class="row triple">
+      <label>dx [mm]<input id="dist-dx" type="number" value="2" step="0.5"></label>
+      <label>dy [mm]<input id="dist-dy" type="number" value="0" step="0.5"></label>
+      <label>yaw [deg]<input id="dist-yaw" type="number" value="0" step="1"></label>
+    </div>
+    <div class="row">
+      <button id="btn-nudge">Nudge</button>
+      <button id="btn-remove">Remove</button>
+    </div>
+    <label>Baseplate</label>
+    <div class="row triple">
+      <label>dx [mm]<input id="plate-ddx" type="number" value="2" step="0.5"></label>
+      <label>dy [mm]<input id="plate-ddy" type="number" value="0" step="0.5"></label>
+      <label>yaw [deg]<input id="plate-dyaw" type="number" value="0" step="0.5"></label>
+    </div>
+    <button id="btn-plate">Displace</button>
+    <label for="hold-ticks">Torque off [ticks]</label>
+    <div class="row">
+      <input id="hold-ticks" type="number" value="10" min="1" step="1">
+      <button id="btn-hold">Hold</button>
+    </div>
+  </details>
+
+  <details>
+    <summary>Record</summary>
+    <div class="row">
+      <button id="btn-record">Record</button>
+      <button id="btn-still">Still</button>
+      <button id="btn-log">Save log</button>
+    </div>
+    <label>Files</label>
+    <ul id="files" class="files"></ul>
+  </details>
+
+  <details>
+    <summary>Batch</summary>
+    <label for="batch-seeds">Seeds [-]</label>
+    <input id="batch-seeds" type="number" value="5" min="1" step="1">
+    <div class="row">
+      <button id="btn-batch">Start</button>
+      <button id="btn-batch-cancel">Cancel</button>
+      <button id="btn-batch-csv">Export CSV</button>
+    </div>
+    <div class="bar"><div id="batch-bar"></div></div>
+    <div class="msg" id="batch-msg"></div>
+    <table id="batch-summary" class="kv"></table>
+    <div class="scroll"><table id="batch-rows" class="rows"></table></div>
+  </details>
+
+</section>
+
+<section id="right">
+  <div id="views">
+    <figure>
+      <img id="view" src="/stream/view.mjpg" alt="Main view">
+      <figcaption>Main view — <span id="camera"></span></figcaption>
+    </figure>
+    <figure id="twin-figure" hidden>
+      <img id="twin" src="" alt="Twin view">
+      <figcaption>Twin (sim)</figcaption>
+    </figure>
+  </div>
+
+  <div id="tables">
+    <div>
+      <h2>Readouts</h2>
+      <table id="readouts" class="kv"></table>
+    </div>
+    <div>
+      <h2>Steps</h2>
+      <table id="steps" class="rows"></table>
+    </div>
+    <div>
+      <h2>Result</h2>
+      <table id="result" class="kv"></table>
+      <h2 id="twin-head" hidden>Discrepancy</h2>
+      <table id="twin-table" class="kv"></table>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <span>Space Run / Pause</span><span>S Step</span><span>R Reset</span><span>C Record</span>
+  <span>P Still</span><span>Arrows Orbit</span><span>+ / - Zoom</span><span>0 Camera home</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
