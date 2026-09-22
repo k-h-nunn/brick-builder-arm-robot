@@ -149,7 +149,8 @@ was shared with other work throughout and the rate was 420-440 ticks per minute 
 220 for the pick, which is where the figure comes from.
 
 A second set of 16 012 ticks from 105 episodes was collected with the learned inverse driving, for
-the DAgger-style remedy below, bringing the log to 63 210 ticks from 374 episodes in all. Every state in it comes
+the DAgger-style remedy below, and a third of 8 146 ticks from 35 pick-and-place episodes for the
+second round, bringing the log to 71 356 ticks from 409 episodes in all. Every state in it comes
 from the ground-truth scene model; a second set through the convolutional one was not collected.
 
 ## Offline metrics
@@ -182,6 +183,34 @@ The controller's own one-step prediction -- this tick's residual plus the correc
 -- has a median error of **0.475 mm** over the same log. It is not the same reduction and the two
 numbers should not be subtracted: that one is the residual after the Jacobian's least-squares
 projection onto the two directions the tool can move, and the table above is the whole slot row.
+
+### The prediction in the loop
+
+`PlaceConfig.predictor` selects which of those two rules the loop's reported prediction error is
+measured against.
+
+- `"analytic"`, the default, is the loop's own line: the residual will change by exactly the
+  correction just commanded, and nothing else.
+- `"learned"` loads `action/weights/predictor.npz`, runs `F` on the tick's slate and the tool
+  motion about to be commanded, writes the predicted rows back into a copy of the scene state and
+  reads a predicted residual out of it through the **same** `VisualServo.update` the real reading
+  goes through (`action/models/predictor.py`). What comes out is in the same metres of tool
+  motion, through the same feature matching, the same weights and the same pseudo-inverse, so the
+  two are comparable tick for tick.
+
+Nothing on the control path reads the prediction, so the switch changes what is measured and not
+what is done: on placement seeds 0-4 every tick's correction, tracking error and prediction error
+is bit-for-bit identical with the field absent and with it set to either value.
+
+Measured on placement seeds 0-9, one run per seed per rule, the analytic inverse driving:
+
+| One-step prediction | Median prediction error [mm] | Seated on target cell | Lateral error, seated runs [mm] |
+|---|---|---|---|
+| the loop's own rule | 0.24 | 10/10 | 0.02-0.13 |
+| `F` read back through the servo | 0.17 | 10/10 | 0.02-0.13 |
+
+`F` is better on every one of the ten seeds (0.14-0.22 mm against 0.19-0.28 mm), and the placement
+columns are identical because the two are the same run scored twice.
 
 ### Inverse
 
@@ -283,11 +312,33 @@ seated against 7/10 and 8/10 on the target cell against 7/10, with one stall.
 | analytic | 7/10 | 7/10 | 0.05-0.11 | 0/10 |
 | DAgger relabelling | 6/10 | 8/10 | 0.05-0.21 | 1/10 |
 
-**The default stays `analytic`.** The learned inverse matches it on placement and does not on the
-pick, and "matches on both" is the bar. `brick_builder/action/weights/inverse.npz` -- what
-`inverse="learned"` loads -- is the DAgger-relabelled one; `inverse_hindsight.npz` is the
-hindsight-and-distal-teacher one the first two tables measure, kept so those rows can be
-reproduced.
+### A second DAgger round, on the pick
+
+The first round relabelled placement states only. The second collects **8 146 ticks from 35
+pick-and-place episodes with the learned inverse driving** and retrains on all four sets --
+placement, pick, the first round's placement states and these -- with the same `--teacher 1.0`.
+Sixty epochs in 1.7 minutes; the held-out hindsight loss settled at 0.581.
+
+All three columns were run back to back against the same ten recordings on the current tree.
+
+| Inverse | Seated on target cell | On target cell | Lateral error, seated runs [mm] | Stalled | Median prediction error [mm] | Ticks to converge at Align |
+|---|---|---|---|---|---|---|
+| analytic | 9/10 | 10/10 | 0.05-0.18 | 0/10 | 0.28 | 42 |
+| DAgger round 1 | 7/10 | 9/10 | 0.01-0.12 | 1/10 | 0.26 | 45 |
+| DAgger round 2 | 7/10 | 10/10 | 0.04-0.21 | 1/10 | 0.32 | 44 |
+
+The analytic column is 9/10 here against the 7/10 two tables above; that is the tree moving under
+the measurement again, not the inverse, which is why the round-1 column was re-run beside it
+rather than quoted. Against that baseline the second round is **not an improvement**: the same
+7/10 seated as the first round, one stall each, and a slightly worse lateral spread and prediction
+error. Every seed it seats, the analytic inverse seats too.
+
+**The default stays `analytic`, and the shipped inverse stays the first round's.** The learned
+inverse matches the analytic one on placement and does not on the pick, and "matches on both" is
+the bar; a second round of relabelling on the task it loses did not close the gap.
+`brick_builder/action/weights/inverse.npz` -- what `inverse="learned"` loads -- is the
+first-round DAgger-relabelled one; `inverse_hindsight.npz` is the hindsight-and-distal-teacher one
+the first two tables measure, kept so those rows can be reproduced.
 
 ## Cost per tick
 
@@ -308,6 +359,36 @@ copy of the scene, rendering it six times and running the scene model over each 
 step boundary and every eighth frame in between. That is a renderer, a physics model and a second
 scene-model pass on the device. `G` replaces all of it with one matrix stack over slot rows the
 device already has.
+
+## Rounds
+
+`brick_builder/action/learn/rounds.py` is the stable entry point for repeating the whole loop --
+perform the task, train `F` and `G` on what happened, redeploy, measure. It owns nothing the rest
+of the package does not already do and adds the three things a repeated loop needs: version ids, a
+record of what is deployed, and a gate that refuses to deploy a round that did not earn it.
+
+| Call | What it does |
+|---|---|
+| `collect_round(specs)` | runs task episodes with whichever inverse is named and logs one `.npz` per episode; `CollectSpec(task, minutes, inverse, seed, name)` |
+| `train_round(cfg)` | fits `F` on next-state prediction, then `G` on hindsight, distal-teacher and analytic-relabelling terms, and writes a versioned pair; `RoundConfig(data, seed, minutes, epochs, hidden, distal, teacher, ...)` |
+| `measure_round(result, seeds, tasks)` | the closed-loop table for a round, against the analytic inverse on the same seeds |
+| `deploy_if_better(result, scores)` | writes the shipped pair only when the learned inverse matches the analytic one on **every** task |
+
+    data_cache/action/<set>/ep_*.npz                  logged episodes, one file per episode
+    data_cache/action/rounds/<version>/predictor.npz  the round's own checkpoints
+    data_cache/action/rounds/<version>/inverse.npz
+    data_cache/action/rounds/<version>/report.json    config, data, held-out losses, wall clock
+    data_cache/action/rounds/<version>/state/*.pt     optimizer state, for resuming
+    brick_builder/action/weights/predictor.npz        what the loop loads today
+    brick_builder/action/weights/inverse.npz
+    brick_builder/action/weights/deployed.json        which version those two are, and its scores
+
+A version id is a hash of the datasets and the hyperparameters that decide the fit, and not of the
+time budget, so the same call is the same round: it writes to the same directory, resumes from the
+same optimizer state, and -- given the same `seed` -- produces the same weights. A round stopped by
+its own `minutes` budget continues from the epoch it reached when called again. Everything under
+`data_cache/` is git-ignored and rebuildable; the two deployed checkpoints and the one JSON record
+are what ships, and `rounds.py` is the only thing that writes them.
 
 ## Running it
 
@@ -339,6 +420,22 @@ CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=3 \
 CUDA_VISIBLE_DEVICES="" python scripts/train_action_model.py --teacher 1.0 \
   --data data_cache/action/placement data_cache/action/pick data_cache/action/dagger
 ```
+
+The second round, on the pick, and the three-column measurement it was rejected by:
+
+```bash
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=3 \
+  python -m brick_builder.action.learn.collect --task pick --minutes 24 --seed 8 \
+    --inverse learned --out data_cache/action/dagger_pick
+CUDA_VISIBLE_DEVICES="" python scripts/train_action_model.py --teacher 1.0 --only inverse \
+  --weights <a scratch directory> --data data_cache/action/placement data_cache/action/pick \
+    data_cache/action/dagger data_cache/action/dagger_pick
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl python -m brick_builder.action.learn.evaluate \
+  closed-loop --task pick --variants analytic,learned,learned:<that>/inverse.npz --seeds 0-9
+```
+
+A candidate is trained into a scratch directory and measured before anything is copied over the
+shipped checkpoint, which is what `learn/rounds.py` does for a campaign.
 
 `data_cache/` is git-ignored; the three checkpoints under `brick_builder/action/weights/` are
 shipped. Training is deterministic given `--seed`, time-budgeted by `--minutes` and resumable:
