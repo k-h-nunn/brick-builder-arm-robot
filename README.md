@@ -67,6 +67,9 @@ shows; `--quality hd1080` is the 1920x1080 version and takes considerably longer
 for the whole job -- fetch the brick off the table, then place it -- which is the second
 [video](docs/demos/videos.md).
 
+`python -m brick_builder.gui` serves the same loop as a browser page -- scene setup, run and step,
+the live views, disturbances, recording and a seed sweep ([Simulator page](docs/guide/14-simulator-gui.md)).
+
 The docs:
 
 ```bash

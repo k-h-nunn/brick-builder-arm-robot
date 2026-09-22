@@ -61,6 +61,10 @@ Without it the same loop runs on simulator ground truth instead. `--seed` redraw
 offset and the brick's offset in the jaws; `--pick` fetches the brick from the table first,
 which is the whole job and the second [video](demos/videos.md).
 
+`MUJOCO_GL=egl .venv/bin/python -m brick_builder.gui` serves the same loop as a browser page at
+<http://127.0.0.1:8765>, with scene setup, stepping and disturbances
+([Simulator page](guide/14-simulator-gui.md)).
+
 ## Watch a scripted press
 
 ```bash
