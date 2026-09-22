@@ -113,9 +113,14 @@ def param_files() -> list[str]:
 
 
 def params_path(name: str) -> Path:
-    """The path a parameter file name resolves to. An absolute path is taken as it stands."""
+    """The path a parameter file name resolves to.
+
+    A path that exists as it is written is taken as it is written, so `--params my_params.yaml`
+    finds the copy in the working directory the guide tells a teammate to make. A bare name that
+    does not is looked up on the shelf.
+    """
     p = Path(name)
-    return p if p.is_absolute() else PARAMS_DIR / p.name
+    return p if p.is_absolute() or p.exists() else PARAMS_DIR / p.name
 
 
 def load_edited(name: str, edits: dict[str, Any], scratch: Path) -> tuple[ParamFile, list[str]]:

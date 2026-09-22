@@ -308,6 +308,12 @@ async function flush() {
 }
 
 function bindCamera(img) {
+  // A stream that ends leaves a still frame behind, so ask for it again.
+  img.addEventListener("error", () => {
+    const src = img.getAttribute("src");
+    if (!src) return;
+    setTimeout(() => { img.src = `${src.split("?")[0]}?t=${Date.now()}`; }, 1000);
+  });
   img.addEventListener("pointerdown", (e) => {
     drag = { x: e.clientX, y: e.clientY };
     img.setPointerCapture(e.pointerId);

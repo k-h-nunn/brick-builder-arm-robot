@@ -26,6 +26,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 BOUNDARY = "frameboundary"
 
 MAX_BODY = 4 * 1024 * 1024
+STREAM_SECONDS = 24 * 3600.0
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -113,13 +114,17 @@ class Handler(BaseHTTPRequestHandler):
         if slot is None:
             self._send(404, b"no such view", "text/plain")
             return
+        # The body has no length and never ends on its own, so this connection is not reused.
+        self.close_connection = True
         self.send_response(200)
         self.send_header("Content-Type", f"multipart/x-mixed-replace; boundary={BOUNDARY}")
         self.send_header("Cache-Control", "no-store")
         self.send_header("Connection", "close")
         self.end_headers()
         seen = -1
-        deadline = time.time() + 3600.0
+        # The thread ends when the reader goes away, which raises on the next write. The deadline
+        # is only there so a reader that neither reads nor closes cannot hold a thread for ever.
+        deadline = time.time() + STREAM_SECONDS
         while time.time() < deadline:
             buf, seen = slot.get(seen, timeout=5.0)
             if buf is None:
@@ -175,8 +180,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _options(self) -> dict:
         scene = self.session._scene                           # noqa: SLF001
+        files = worldmod.param_files()
+        # A file named on the command line, or uploaded, is not on the shelf; it still has to be
+        # in the list or the page's own selection would not be one of its options.
+        if self.session.setup.params_file not in files:
+            files.append(self.session.setup.params_file)
         return {
-            "param_files": worldmod.param_files(),
+            "param_files": files,
             "sources": [{"name": n, "label": SOURCE_LABELS.get(n, n)} for n in source_names()],
             "controllers": list(worldmod.CONTROLLERS),
             "jobs": list(worldmod.JOBS),
