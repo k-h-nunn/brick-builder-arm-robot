@@ -5,7 +5,7 @@ renderer and, when the convolutional scene model drives, its own copy of it, so 
 they share is the directory of recorded target sequences -- and the driver partitions the seeds
 so that two processes never want the same one.
 
-    python -m brick_builder.campaign.worker jobs.json
+    python -m brick_builder.campaign.runner jobs.json
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     os.environ.setdefault("MUJOCO_GL", "egl")
     argv = list(sys.argv[1:] if argv is None else argv)
     if len(argv) != 1:
-        print("usage: python -m brick_builder.campaign.worker <jobs.json>", file=sys.stderr)
+        print("usage: python -m brick_builder.campaign.runner <jobs.json>", file=sys.stderr)
         return 2
     payload = json.loads(Path(argv[0]).read_text())
     failed = run_jobs(payload["jobs"], Path(payload["out"]),

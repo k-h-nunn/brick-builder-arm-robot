@@ -56,7 +56,7 @@ class CampaignConfig:
     source: str = "ideal"
     """`ideal` for the simulator's own scene model, `cnn` for the convolutional one."""
 
-    workers: int = 2
+    processes: int = 2
     """Episode processes at once. Two, because the machine is shared."""
 
     threads: int = 3
@@ -80,12 +80,17 @@ class CampaignConfig:
     recheck_analytic: bool = True
     """Re-measure the analytic baseline on one task in the last round."""
 
+    sparse_tasks: tuple[str, ...] = ()
+    """Tasks evaluated in the first and the last round only, and performed in every one. A build
+    is two closed-loop cycles per seed, so ten held-out builds are half of what a round of
+    evaluation costs; naming it here buys rounds with the budget."""
+
     round_minutes: float = 38.0
     """What a round is expected to cost. The budget is checked against it before a round starts,
     so the campaign stops between rounds rather than in the middle of one."""
 
     ideal_pool_seed: int = 900_000
-    """Seeds the performing rounds record their target sequences from. One per worker, reused
+    """Seeds the performing rounds record their target sequences from. One per process, reused
     across every performing episode and every round, so recording is not paid per episode."""
 
     episode_timeout_s: int = 7200
@@ -103,6 +108,12 @@ class RoundRecord:
     scores: dict = field(default_factory=dict)
     metrics: dict = field(default_factory=dict)
     wall_s: dict = field(default_factory=dict)
+    would_ship: dict = field(default_factory=dict)
+    """What `rounds.deploy_if_better` would have decided about the shipped pair this round:
+    whether the learned inverse matched the analytic baseline on every task it was measured on,
+    and the two fractions per task. The campaign deploys to its own directory whatever this says;
+    this is the separate question of whether the round earned the checkpoints the repository
+    ships."""
 
 
 # ----------------------------------------------------------------------------------- the driver ---
@@ -135,6 +146,7 @@ class Campaign:
                 "wall_s": 0.0}
 
     def _save(self) -> None:
+        self.state["config"] = asdict(self.cfg)
         self.state["updated"] = _now()
         self.state["wall_s"] = self.spent_s + (time.perf_counter() - self.t0)
         self.state_path.write_text(json.dumps(self.state, indent=2, default=str) + "\n")
@@ -157,7 +169,8 @@ class Campaign:
                            ticks=int(raw.get("ticks", 0)),
                            episodes_logged=int(raw.get("episodes_logged", 0)),
                            scores=raw.get("scores", {}), metrics=raw.get("metrics", {}),
-                           wall_s=raw.get("wall_s", {}))
+                           wall_s=raw.get("wall_s", {}),
+                           would_ship=raw.get("would_ship", {}))
 
     def _put_round(self, record: RoundRecord) -> None:
         self.state["rounds"][str(record.index)] = asdict(record)
@@ -193,10 +206,10 @@ class Campaign:
     # -- running episodes ------------------------------------------------------------------------
 
     def _run_jobs(self, jobs: list[dict], label: str, out_dir: Path) -> list[EpisodeRecord]:
-        """Split the jobs across the worker processes by seed and wait for all of them.
+        """Split the jobs across the episode processes by seed and wait for all of them.
 
         By seed, not round robin: two episodes of the same task and seed want the same recorded
-        target sequence, and a worker that owns the seed records it once instead of both
+        target sequence, and a process that owns the seed records it once instead of both
         recording it at the same time.
         """
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -204,7 +217,7 @@ class Campaign:
         if records_path.exists():
             records_path.unlink()
 
-        buckets: list[list[dict]] = [[] for _ in range(max(self.cfg.workers, 1))]
+        buckets: list[list[dict]] = [[] for _ in range(max(self.cfg.processes, 1))]
         for job in jobs:
             key = int(job.get("ideal_seed") or job["seed"])
             buckets[key % len(buckets)].append(job)
@@ -220,25 +233,25 @@ class Campaign:
                 continue
             job_file = out_dir / f"{label}_jobs_{i}.json"
             job_file.write_text(json.dumps({"jobs": bucket, "out": str(records_path)}, indent=1))
-            log_file = out_dir / f"{label}_worker_{i}.log"
+            log_file = out_dir / f"{label}_process_{i}.log"
             cmd = ["nice", "-n", str(self.cfg.nice), sys.executable, "-u",
-                   "-m", "brick_builder.campaign.worker", str(job_file)]
+                   "-m", "brick_builder.campaign.runner", str(job_file)]
             handle = log_file.open("w")
             procs.append((subprocess.Popen(cmd, cwd=str(REPO_ROOT), env=env, stdout=handle,
                                            stderr=subprocess.STDOUT), handle, log_file))
-            self.log(f"  worker {i}: {len(bucket)} episodes -> {log_file}")
+            self.log(f"  process {i}: {len(bucket)} episodes -> {log_file}")
 
         deadline = time.time() + self.cfg.episode_timeout_s
         for proc, handle, log_file in procs:
             try:
                 proc.wait(timeout=max(deadline - time.time(), 1.0))
             except subprocess.TimeoutExpired:
-                self.log(f"  worker timed out after {self.cfg.episode_timeout_s} s; terminating")
+                self.log(f"  process timed out after {self.cfg.episode_timeout_s} s; terminating")
                 proc.terminate()
                 proc.wait(timeout=60)
             handle.close()
             if proc.returncode:
-                self.log(f"  worker exited {proc.returncode}; see {log_file}")
+                self.log(f"  process exited {proc.returncode}; see {log_file}")
 
         records = []
         if records_path.exists():
@@ -278,7 +291,7 @@ class Campaign:
                                       predictor=predictor, predictor_weights=predictor_path,
                                       inverse_version=version or "analytic",
                                       predictor_version=version or "analytic",
-                                      ideal_seed=self.cfg.ideal_pool_seed + i % self.cfg.workers,
+                                      ideal_seed=self.cfg.ideal_pool_seed + i % self.cfg.processes,
                                       tuples=self.data / f"r{index}",
                                       tuple_prefix=f"ep_r{index}"))
         t0 = time.perf_counter()
@@ -373,6 +386,10 @@ class Campaign:
         prediction rule, and on `predictor_pairs` tasks with the analytic one as well: the pair
         is the same run scored twice, so the two prediction errors are compared on identical
         trajectories rather than across runs.
+
+        A task named in `sparse_tasks` is evaluated in the first and the last round only. It is
+        still performed every round; what it costs is the ten held-out episodes, and a build is
+        two of them. This is the knob a wall-clock budget turns before it gives up a round.
         """
         columns: list[dict] = []
         wanted: list[tuple[str, Path | None, str]] = []
@@ -387,8 +404,10 @@ class Campaign:
         for inverse, weights, tag in wanted:
             base = {"inverse": inverse, "weights": weights, "inverse_version": tag}
             tasks = self.cfg.tasks
+            if 0 < index < self.cfg.rounds:
+                tasks = tuple(t for t in tasks if t not in self.cfg.sparse_tasks)
             if inverse == "analytic" and index > 0:
-                tasks = tuple(t for t in self.cfg.predictor_pairs if t in self.cfg.tasks)
+                tasks = tuple(t for t in self.cfg.predictor_pairs if t in tasks)
             columns.append({**base, "predictor": "learned" if predictor_path else "analytic",
                             "predictor_weights": predictor_path,
                             "predictor_version": version if predictor_path else "analytic",
@@ -450,6 +469,7 @@ class Campaign:
         for key, entry in self.state["phases"].items():
             if key.startswith(f"r{index}.") and "wall_s" in entry:
                 record.wall_s[key.split(".", 1)[1]] = float(entry["wall_s"])
+        record.would_ship = self.would_ship(index, record.scores)
         self._put_round(record)
         for name, row in sorted(record.scores.items()):
             self.log(f"  {name:44s} {row['seated_on_target']:>7s}  "
@@ -481,15 +501,51 @@ class Campaign:
                 "analytic_rms_deg": metrics["analytic_rms"][2],
                 "action_held_out_ticks": metrics["n_held_out"]}
 
+    def would_ship(self, index: int, scores: dict) -> dict:
+        """What `rounds.deploy_if_better` would have decided, on the tasks this round measured.
+
+        The gate the shipped pair is behind: the learned inverse has to match the analytic one on
+        every task, not win on one and lose on another. The analytic baseline is the fixed one
+        from round 0, whatever round the learned column comes from.
+        """
+        from ..action.learn.rounds import seated_fraction
+
+        baseline = self._round(0).scores
+        out: dict = {"tasks": {}, "ship": True, "version": self._round(index).version}
+        for key, row in scores.items():
+            if row["inverse"] != "learned" or row["predictor"] == "analytic":
+                continue
+            task = row["task"]
+            against = next((r for k, r in baseline.items()
+                            if r["task"] == task and r["inverse"] == "analytic"), None)
+            if against is None:
+                continue
+            learned, analytic = seated_fraction(row), seated_fraction(against)
+            out["tasks"][task] = {"learned": row["seated_on_target"],
+                                  "analytic": against["seated_on_target"],
+                                  "meets": learned >= analytic}
+            out["ship"] &= learned >= analytic
+            del key
+        out["ship"] = bool(out["ship"] and out["tasks"])
+        return out
+
     def summarize(self) -> Path:
         """One CSV over the whole campaign: a row per round, task, inverse and prediction rule."""
         rows = []
         for index in sorted(int(k) for k in self.state["rounds"]):
             record = self._round(index)
+            ship = record.would_ship or {}
             for name, row in sorted(record.scores.items()):
+                would = ""
+                if row["inverse"] == "learned":
+                    entry = (ship.get("tasks") or {}).get(row["task"])
+                    if entry is not None:
+                        would = ("yes" if ship.get("ship") else
+                                 ("meets" if entry["meets"] else "no"))
                 rows.append({"round": index, "version": record.version,
                              "ticks_trained_on": record.ticks,
-                             "episodes_trained_on": record.episodes_logged, **row})
+                             "episodes_trained_on": record.episodes_logged,
+                             "would_ship": would, **row})
         out = self.dir / "summary.csv"
         if rows:
             with out.open("w", newline="") as fh:

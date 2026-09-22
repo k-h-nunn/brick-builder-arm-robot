@@ -19,6 +19,12 @@ PUBLISHED_TEXT = {"placement": "10/10", "pick_and_place": "8/10"}
 """What the closed-loop page reports with ground-truth driving. `build_2` has no published
 number: this campaign is the first measurement of it."""
 
+SHIP_NOTE = """`Would ship` is what `action.learn.rounds.deploy_if_better` would have decided
+about the pair the repository ships: `yes` when the round's learned inverse matched the fixed
+analytic baseline on every task it was measured on, `meets` when it matched on this task but not
+on all of them, `no` when it did not match here. The campaign deploys every round to its own
+weights directory whatever this says."""
+
 
 def _fmt(value: float, digits: int = 2) -> str:
     return "--" if value != value else f"{value:.{digits}f}"
@@ -35,8 +41,8 @@ def task_table(rows: Sequence[dict], task: str) -> str:
 
     head = ("| Round | Inverse | Version | Seated on target cell | Wilson 95 % | "
             "Lateral error [mm] | Median tracking [mm] | Median prediction [mm] | "
-            "Ticks at Align | Tuples trained on |")
-    rule = "|" + "---|" * 10
+            "Ticks at Align | Tuples trained on | Would ship |")
+    rule = "|" + "---|" * 11
     lines = [head, rule]
     if analytic:
         a = analytic[0]
@@ -44,17 +50,17 @@ def task_table(rows: Sequence[dict], task: str) -> str:
             f"| fixed | analytic | -- | {a['seated_on_target']} | "
             f"{100 * a['wilson_low']:.0f}-{100 * a['wilson_high']:.0f} % | "
             f"{_fmt(a['lateral_mm_median'])} | {_fmt(a['median_tracking_mm'])} | "
-            f"{_fmt(a['median_prediction_mm'])} | {_fmt(a['ticks_align'], 0)} | -- |")
+            f"{_fmt(a['median_prediction_mm'])} | {_fmt(a['ticks_align'], 0)} | -- | -- |")
     if task in PUBLISHED_TEXT:
         lines.append(f"| published | ground truth | -- | {PUBLISHED_TEXT[task]} | -- | -- | "
-                     "-- | -- | -- | -- |")
+                     "-- | -- | -- | -- | -- |")
     for r in learned:
         lines.append(
             f"| {r['round']} | learned | {r['version']} | {r['seated_on_target']} | "
             f"{100 * r['wilson_low']:.0f}-{100 * r['wilson_high']:.0f} % | "
             f"{_fmt(r['lateral_mm_median'])} | {_fmt(r['median_tracking_mm'])} | "
             f"{_fmt(r['median_prediction_mm'])} | {_fmt(r['ticks_align'], 0)} | "
-            f"{r['ticks_trained_on'] or '--'} |")
+            f"{r['ticks_trained_on'] or '--'} | {r.get('would_ship') or '--'} |")
     return "\n".join(lines)
 
 
@@ -92,6 +98,7 @@ def render(campaign_dir: Path) -> str:
         table = task_table(rows, task)
         if table:
             blocks.append(f"### {task.replace('_', ' ').capitalize()}, seeds 0-9\n\n{table}")
+    blocks.append(SHIP_NOTE)
     blocks.append("### Cost per round\n\n" + cost_table(state))
     blocks.append("### Failures\n\n" + failure_table(rows))
     return "\n\n".join(blocks) + "\n"

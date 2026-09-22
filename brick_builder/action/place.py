@@ -621,9 +621,13 @@ class TrackingEpisode:
     def __init__(self, scene: Scene, ideal: IdealSequence, *, cfg: PlaceConfig = PlaceConfig(),
                  seed: int = 0, target=TARGET_CELL, twin_prepare=None,
                  build_decode: bool = False, source=None, inverse=None, predictor=None,
-                 observer=None, plan=None, controller=None) -> None:
+                 observer=None, plan=None, controller=None, placed=None) -> None:
         self.cfg = cfg
         self.ideal = ideal
+        self.placed = placed
+        """What is already on the plate, for the twins the Jacobians are measured in. `None` is
+        the two reference bricks. It has to match what the recording was made against: a twin
+        missing a brick the recording lines itself up on drops that reference silently."""
         self.seed = seed
         self.plan = plan
         """Steps measured in the twin ahead of the run instead of during it (`hil/plan.py`).
@@ -656,7 +660,7 @@ class TrackingEpisode:
         # is in the hand and gone from the table. One twin cannot answer both, and the in-hand
         # Jacobian has nothing to measure in the first.
         self.twins = {
-            False: DigitalTwin(nominal_cfg(held=None,
+            False: DigitalTwin(nominal_cfg(held=None, placed=placed,
                                            supply=(WANTED, DISTRACTOR) if cfg.pick else ()),
                                seed=seed, prepare=twin_prepare),
         }
@@ -665,10 +669,11 @@ class TrackingEpisode:
             # keeps the body name and the place it has in the world the sequence was recorded
             # in. `_prepare_step` matches the recording's reference bodies to the twin's by
             # name, and renumbering the row silently emptied the reference set.
-            self.twins[True] = DigitalTwin(nominal_cfg(held=held, supply=(None, DISTRACTOR)),
+            self.twins[True] = DigitalTwin(nominal_cfg(held=held, placed=placed,
+                                                       supply=(None, DISTRACTOR)),
                                            seed=seed, prepare=twin_prepare)
         else:
-            self.twins[True] = DigitalTwin(nominal_cfg(held=held), seed=seed,
+            self.twins[True] = DigitalTwin(nominal_cfg(held=held, placed=placed), seed=seed,
                                            prepare=twin_prepare)
         self.twin = self.twins[not cfg.pick]
         self.reports: list[StepReport] = []

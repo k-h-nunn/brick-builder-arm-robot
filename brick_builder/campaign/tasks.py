@@ -354,8 +354,9 @@ def run_cycle(spec: TaskSpec, seed: int, cycle: int, placed, *, inverse: str = "
         scene, d_xy, d_yaw, b_xy = held_world(seed, placed)
         brick = scene.held_name
 
-    episode = TrackingEpisode(scene, ideal, cfg=cfg, seed=seed, source=source, inverse=g,
-                              observer=observer, **_episode_kwargs(p))
+    episode = TrackingEpisode(scene, ideal, cfg=cfg, seed=seed, target=cell, source=source,
+                              inverse=g, observer=observer, placed=list(placed),
+                              **_episode_kwargs(p))
     t0 = time.perf_counter()
     try:
         for _ in episode.run():
@@ -421,7 +422,6 @@ def run_episode(spec: TaskSpec, seed: int, *, phase: str = "evaluate", round_ind
         predictor=predictor, inverse_version=inverse_version,
         predictor_version=predictor_version, source=source_name)
 
-    placed = list(BASE_PLACED)
     observed: list[Placement] = []
     tracking: list[float] = []
     prediction: list[float] = []
@@ -430,6 +430,13 @@ def run_episode(spec: TaskSpec, seed: int, *, phase: str = "evaluate", round_ind
     for cycle in range(spec.cycles):
         ideal = record_for(spec, cycle, seed if ideal_seed is None else ideal_seed,
                            source=source, cache=cache)
+        # The plate the cycle runs on carries the bricks the earlier cycles were sent to place,
+        # on the cells they were sent to, whether or not they landed there. The plan carries over
+        # and the physics does not: the recording, the twins the Jacobians are measured in and
+        # the world all describe the same plate, which is what makes the second cycle's result
+        # a measurement of the second cycle rather than of the first one's luck.
+        placed = list(BASE_PLACED) + [
+            Placement(h=2, w=2, x=c[0], y=c[1], z=0, colour="blue") for c in spec.cells[:cycle]]
         attempts = 0
         result = None
         while attempts < (2 if replan else 1):
@@ -488,11 +495,6 @@ def run_episode(spec: TaskSpec, seed: int, *, phase: str = "evaluate", round_ind
         if on_target:
             cell = spec.cells[cycle]
             observed.append(Placement(h=2, w=2, x=cell[0], y=cell[1], z=0, colour="blue"))
-            placed = list(BASE_PLACED) + list(observed)
-        elif cycle + 1 < spec.cycles:
-            # The next cycle still runs -- the build is scored brick by brick -- but it runs on
-            # a plate that does not carry this one, because this one is not on its cell.
-            placed = list(BASE_PLACED) + list(observed)
 
     record.median_tracking_mm = (float(statistics.median(tracking)) if tracking
                                  else float("nan"))

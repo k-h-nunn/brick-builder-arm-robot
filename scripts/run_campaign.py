@@ -47,10 +47,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--seeds", default="0-9", help="the held-out evaluation seeds")
     parser.add_argument("--source", choices=("ideal", "cnn"), default="ideal",
                         help="which scene model drives the loop")
-    parser.add_argument("--workers", type=int, default=2, help="episode processes at once")
+    parser.add_argument("--processes", type=int, default=2,
+                        help="episode processes at once")
     parser.add_argument("--threads", type=int, default=3)
     parser.add_argument("--budget-minutes", type=float, default=240.0)
     parser.add_argument("--train-minutes", type=float, default=4.0, help="budget per model")
+    parser.add_argument("--sparse-tasks", nargs="*", default=[],
+                        help="tasks evaluated in the first and last round only")
     parser.add_argument("--round-minutes", type=float, default=38.0,
                         help="expected cost of a round, checked against the budget")
     parser.add_argument("--train-epochs", type=int, default=60)
@@ -77,10 +80,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     cfg = CampaignConfig(
         name=args.name, root=args.root, rounds=args.rounds, episodes=args.episodes,
-        tasks=tuple(args.tasks), eval_seeds=seeds, source=args.source, workers=args.workers,
+        tasks=tuple(args.tasks), eval_seeds=seeds, source=args.source, processes=args.processes,
         threads=args.threads, budget_minutes=args.budget_minutes,
         train_minutes=args.train_minutes, train_epochs=args.train_epochs, seed=args.seed,
-        round_minutes=args.round_minutes,
+        round_minutes=args.round_minutes, sparse_tasks=tuple(args.sparse_tasks),
         baseline_learned=args.baseline_learned)
     campaign = Campaign(cfg, log=lambda line: print(line, flush=True))
 
