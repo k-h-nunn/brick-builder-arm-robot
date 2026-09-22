@@ -473,7 +473,8 @@ def evaluate(checkpoint: Path | None, seeds, env_cfg: VisionControlConfig, *,
                 done = terminated or truncated
             rows.append({"seed": int(seed), "steps": steps, "ret": ret,
                          "wall_s": round(time.perf_counter() - t0, 1),
-                         **{k: v for k, v in info.items() if k != "params"}})
+                         **{k: v for k, v in info.items()
+                            if k != "params" and np.size(v) == 1}})
             log(f"  seed {seed:3d} seated={rows[-1].get('success')} "
                 f"lateral={rows[-1].get('lateral_mm', float('nan')):6.3f} mm  "
                 f"track={rows[-1].get('median_tracking_mm', float('nan')):5.2f} mm  "
