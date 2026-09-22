@@ -32,6 +32,9 @@ docs = [
     "mkdocs-material>=9.5",
     "mkdocstrings[python]>=0.24",
 ]
+hardware = [
+    "pyserial>=3.5",
+]
 
 [tool.setuptools.packages.find]
 include = ["brick_builder*"]
