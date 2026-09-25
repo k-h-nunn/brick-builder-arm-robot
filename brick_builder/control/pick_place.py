@@ -823,11 +823,10 @@ class PlacementCheck:
     n_engaged: int
     success: bool
     at_target_layer: bool = True
-    """Whether the brick's bottom face is at the layer the target names, within half a brick.
+    """Target layer check: bottom face within half a brick height of the layer's height.
 
-    On the baseplate this is the only layer there is and it is always true. On a stacked target
-    it is what separates "seated on the brick it was sent to" from "seated on the plate beside
-    it": the lateral check answers the cell and this one answers the height.
+    Always true on the baseplate (layer 0). On a stacked target it tells a brick seated on the
+    lower brick from one seated on the plate beside it; the lateral check covers the cell.
     """
 
     height_error_mm: float = 0.0

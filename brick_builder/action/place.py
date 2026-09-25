@@ -164,23 +164,22 @@ class PlaceConfig:
     low: float = 0.006
 
     neighbour_clear: float = 0.002
-    """How far above a flush neighbour's studs the align dwell stands [m].
+    """Align hover clearance over a flush neighbour's stud tops [m].
 
-    The hover is 20 mm over the seat and a neighbour's studs stand 23.7 mm over it, so a cell
-    with a brick already flush against it puts the align pose 3.7 mm *below* the thing beside
-    it. Measured on the build's second cycle: the held brick's wall touches the neighbour during
-    `Transport`, 0.4 mm under its roof, and the four-second dwell that is supposed to settle the
-    estimate is spent resting against it. With a neighbour the hover goes above its studs
-    instead, and the descent from there onto the cell is straight down.
+    The default hover is 20 mm over the seat; a flush neighbour's stud tops are 23.7 mm over it,
+    which puts the align pose 3.7 mm below them. On `build_2`'s second cycle, without this
+    clearance, the held brick's wall touched the neighbour during `Transport`, 0.4 mm under its
+    roof, and stayed in contact through the 4 s align dwell. With a flush neighbour the hover is
+    the neighbour's stud tops plus this clearance, and the descent onto the cell is vertical.
     """
 
     neighbour_bias: float = 0.0003
-    """How far off the cell the aim leans, away from a flush neighbour [m].
+    """Aim offset away from a flush neighbour [m].
 
-    Two bricks on adjacent cells are 32 mm apart and 31.8 mm across, so the whole air gap is
-    0.2 mm -- 0.1 mm a side, which is under the loop's own lateral floor. Leaning the aim a few
-    tenths of a millimetre the other way means the studs' 0.5 mm chamfer guides the brick in
-    rather than the neighbour's wall, and the studs pull it back onto the cell as it seats.
+    Two bricks on adjacent cells are 32 mm apart and 31.8 mm across: 0.1 mm of air a side, below
+    the loop's lateral floor. With the aim 0.3 mm off the cell, away from the neighbour, the
+    studs' 0.5 mm chamfer guides the brick instead of the neighbour's wall, and the studs centre
+    it on the cell as it seats.
     """
     align_hold: float = 4.0
     """Seconds the script stands still at the align pose. In the nominal world nothing happens;
