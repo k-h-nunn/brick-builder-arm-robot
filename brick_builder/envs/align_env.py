@@ -76,15 +76,29 @@ from brick_builder.scene.compose import SceneConfig, grasp_pose
 # earlier code review measured before the servo-encoder correction. 11/20 seeds land at 1.0-1.7 mm,
 # comfortably inside this tolerance; 9/20 land at 7.6-11.8 mm, comfortably outside it (mean
 # 5.54 mm, range 1.0-11.8 mm -- almost unchanged from the pre-correction figure, 5.1 mm /
-# 2-14 mm). That is the tell: the *generic* joint-settling error the encoder correction fixed
-# fell from 3.6 mm to 0.43 mm (docs/guide/03-robot-and-servo-model.md), but this environment's
-# own error barely moved, so settling was never the bottleneck here. The bad cluster instead
-# matches this task's own high IK-fallback rate (35.8 %, docs/guide/04-environments.md#ik-
-# convergence-behavior): some of the brick poses this env's LOOK-pose geometry draws sit at the
-# edge of what five joints can reach at all, and the scripted controller simply cannot get closer
-# from there. The tolerance is kept at the spec's number, not loosened for this; the gap a
-# residual policy has to close is real, and it is workspace/IK reachability, not hidden play.
-# Reproducible measurement: the same 20 seeds this comment quotes are
+# 2-14 mm). The *generic* joint-settling error the encoder correction fixed fell from 3.6 mm to
+# 0.43 mm (docs/guide/03-robot-and-servo-model.md), but this environment's own error barely
+# moved, so settling was never the bottleneck here -- and it is not IK reachability either:
+# instrumented on the same 20 seeds, `ik_stats` shows zero fallbacks and a per-tick IK residual
+# under 0.15 mm on every single seed, bad cluster included (the task's own 35.8 % IK-fallback
+# figure, docs/guide/04-environments.md#ik-convergence-behavior, comes from a *different*
+# measurement -- random-policy rollouts with the residual driven to the edge of its box -- and
+# does not apply to this zero-residual controller). The actual cause, traced on the same seeds: a
+# fresh vision token only ever arrives once, at reset, while the tool is still at `LOOK_TCP` and
+# the loose brick has not yet taken a single physics step; `MoveTo` then ramps toward that one
+# reading and, once it leaves `LOOK_TOL_POS` of `LOOK_TCP`, nothing brings it back into range to
+# refresh (confirmed: the tool re-enters that zone on 0 of these 20 seeds). Meanwhile the brick
+# itself is a free body "resting on top of the studs" (module docstring above), placed at a
+# continuous pose that is not already a stable rest configuration for every orientation, so
+# physics settles it by anywhere from under 0.02 mm to about 9 mm over the episode; the true
+# grasp target moves after the one reading the controller ever gets, and how far it moves before
+# the controller commits is exactly what the seed splits on (measured shift between the reset
+# pose and the final settled pose, same 20 seeds: bad-cluster seeds moved 3.9-9.0 mm, good-cluster
+# seeds moved 0.01-1.30 mm -- both groups line up with `final_pos_error_m` almost seed for seed).
+# The tolerance is kept at the spec's number, not loosened for this: the gap a residual policy has
+# to close is real, and re-sampling the token after the arm moves (or holding the brick still
+# through settle before the first reading) is the fix, not a wider band -- open issue, not fixed
+# here. Reproducible measurement: the same 20 seeds this comment quotes are
 # `tests/envs/test_align_env.py::test_the_scripted_go_to_token_controller_beats_chance_at_zero_noise`
 # (slow), whose own bounds (max < 20 mm, median < 6 mm) the bad cluster above still clears.
 SUCCESS_TOL_POS = 0.003             # m

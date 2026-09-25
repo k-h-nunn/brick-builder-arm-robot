@@ -410,13 +410,14 @@ def test_success_streak_resets_when_error_leaves_the_band():
 @pytest.mark.slow
 def test_the_scripted_go_to_token_controller_beats_chance_at_zero_noise():
     """Zero residual, zero noise: the scripted `MoveTo`-based primitive alone must land inside
-    the success band on a clear majority... in practice this arm's own Coulomb-friction servo
-    deadband (the same ~4-5 mm floor `docs/guide/04-environments.md` documents for Reach's hand-
-    written P controller) means a *scripted* controller with no learned dithering residual does
-    not reach the strict 3 mm / 5 deg band every time. What is asserted here is the honest,
-    measured floor: comfortably better than never, and every episode's final position error is at
-    least within the same rough deadband (under 15 mm) -- i.e. the controller reliably gets close,
-    even where it does not clear the literal success flag.
+    the success band on a clear majority... in practice a *scripted* controller with no learned
+    dithering residual does not reach the strict 3 mm / 5 deg band every time. The shortfall is
+    bimodal, not a smooth deadband: 11/20 seeds settle at 1.0-1.7 mm, 9/20 at 7.6-11.8 mm (see
+    `align_env.py`'s module docstring for the traced cause -- the loose brick's own physical
+    settling after the single vision reading this scripted controller ever gets, not arm friction
+    or IK reachability). What is asserted here is the honest, measured floor: comfortably better
+    than never, and every episode's final position error stays under 20 mm -- i.e. the controller
+    reliably gets close, even where it does not clear the literal success flag.
     """
     env = AlignFromTokensEnv(horizon=150, seed=0, producer="surrogate", token_noise_mm=0.0,
                               dropout_p=0.0, yaw_jitter_rad=0.0)
