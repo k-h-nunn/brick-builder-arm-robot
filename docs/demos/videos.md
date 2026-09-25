@@ -275,9 +275,10 @@ Reproduction writes it to `media_out/hd/brick_builder_arm_robot_two_brick_build_
 | Item | Value |
 |---|---|
 | Command | `put a blue 2x2 at column 5 row 4 then put a blue 2x2 on top of the blue brick` |
-| Compiled placements | `2x2 (4,3,0) blue`, `2x2 (4,3,1) blue` (task `stack_2`) |
+| Compiled placements | `2x2 (4,3,0) blue`, `2x2 (4,3,1) blue`, the targets of task `stack_2` |
 | Cycle 1 | Placement of the DUPLO 2x2 held in the stock SO-101 gripper |
-| Cycle 2 | Fetch a DUPLO 2x2 off the table, place it on the first |
+| Cycle 2 | Pick-and-place: a DUPLO 2x2 off the table onto the first |
+| Relation to task `stack_2` | Same command and targets. `stack_2` runs both cycles as pick-and-place, each in its own world; this recording runs both in one world and starts cycle 1 with the brick in the jaws |
 | Baseplate offset from nominal | 6.1 mm, 2.2 deg (unknown to the controller) |
 | Scene model, control input | Simulator ground truth |
 | Scene model, panels | Convolutional scene model, checkpoint `3e07a382` |
@@ -296,6 +297,7 @@ As the placement video, with these changes:
 | Bottom-row panels | "Scene model segmentation" (the convolutional scene model's output, display only) beside "Ground truth segmentation" |
 | Command | Title line under the panels |
 | Press force [N] | Live value; a dash when the arm is not pushing down on the brick |
+| Scene-state error [mm] | A dash in a step that has returned no measurement; the trace keeps the measured values |
 
 ## Results
 
@@ -303,27 +305,26 @@ Recorded run: both bricks seated on target. First brick on the plate, lateral er
 depth error 0.00 mm. Second brick on the first (`lower_bodies` = the first brick), lateral error
 0.10 mm, depth error 0.00 mm, bottom face 0.44 mm below the nominal layer-1 height.
 
-After the jaws open the scene-state error readout holds the last value of the press on the
-brick's top, 2.03 mm (cycle 1) and 2.30 mm (cycle 2): Release, Retract and Verify returned no
-measurement on any tick of this run. It is not the placed brick's offset, which is the 0.07 and
-0.10 mm above; see
-[Closed-loop control, Two-brick builds](../guide/12-closed-loop-control.md#two-brick-builds-seeds-0-9).
+Release, Retract and Verify returned no scene-state measurement on any tick of this run, and
+the Scene-state error [mm] readout shows a dash through them; see
+[Closed-loop control, Two-brick recording](../guide/12-closed-loop-control.md#two-brick-recording).
 
-Seeds 0-9, each cycle in its own world, ground truth driving: second brick seated 10/10, whole
-build 9/10 (Wilson 95 % 60-98 %); see
+Task `stack_2` on seeds 0-9, both cycles pick-and-place, each in its own world, ground truth
+driving: second brick seated 10/10, whole build 9/10 (Wilson 95 % 60-98 %); see
 [Closed-loop control, Two-brick builds](../guide/12-closed-loop-control.md#two-brick-builds-seeds-0-9).
 
 ## Control input
 
 The take is driven by the simulator's ground truth, not the convolutional scene model. With the
-convolutional model driving, the same world was run headless first (`--probe`) and the second
-brick did not seat on any seed tried:
+convolutional model driving, this recording's world (cycle 1 a placement from the jaws, cycle 2 a
+pick-and-place) was run headless first (`--probe`, one run per seed), and no seed tried built
+both bricks. Task `stack_2` with `--source cnn` was not evaluated.
 
 | Build | Target sequences recorded with | Seeds | Result |
 |---|---|---|---|
-| Stack | ground truth | 0, 1 | first brick seated on both; second brick 61 mm (seed 0) and 95 mm (seed 1) off the cell |
+| Stack | ground truth | 0, 1 | first brick seated on both; second brick not seated, 61.2 mm (seed 0) and 94.6 mm (seed 1) off its cell |
 | Stack | the convolutional model | 1, 5 | first brick not seated on either |
-| Stack | the convolutional model | 0, 2, 3 | run stopped at Lift: no reference blob to line up on |
+| Stack | the convolutional model | 0, 2, 3 | run stopped at cycle 2's Lift: no reference blob to line up on |
 | Side by side | ground truth | 8 | neither brick seated |
 
 Two perception failures, read off the panels at the second cycle: at Lift the white 2x4 on the
@@ -345,17 +346,6 @@ Run on the file and the stills by the script after the take (`--qa-only` repeats
 | Step names | Approach, Grasp, Lift, Transport, Align, Press the brick down, Release, Retract, Verify |
 | Studs | one colour per brick and on the baseplate, over every visual geom |
 | Main view | mean horizontal pixel gradient 0.91-1.22 on the six stills, limit 5.0 |
-
-The main-view check was added after the first take of this video: that take closed the first
-cycle's episode mid-recording, `SceneRenderer.close` freed its GL objects in the recorder's
-context, and the main view was noise from the second cycle on. The script now closes both
-episodes after the take.
-
-The second take carried the checkpoint hash in its spec line and drew the title card, 70 %
-opaque, over the upper arm and the wrist for the first 2 s (18 175 arm pixels under the card's
-rectangle in the opening pose); the identifier check did not match hex strings and the layout
-check compared text boxes only with each other. Both checks were extended and the video recorded
-a third time; the file and the stills above are that take.
 
 ## Reproduction
 
