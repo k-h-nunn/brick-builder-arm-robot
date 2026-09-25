@@ -92,7 +92,7 @@ def test_env_checker_with_bit_exact_renders(tmp_path, level):
     """`check_env` with every determinism check on.
 
     Two settings make a run bit-reproducible: `render_samples=0` (the GPU's 4x multisample
-    resolve changes about 200 of 262,144 pixels by one grey level between identical renders)
+    resolve changes about 50 of 65,536 output pixels between two renders of one state)
     and `timings_in_info=False` (wall-clock timings are the one non-deterministic `info`
     entry). `test_default_rendering_differs_only_in_colour_fields` measures what the default
     rendering changes."""

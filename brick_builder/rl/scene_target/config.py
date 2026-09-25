@@ -199,8 +199,8 @@ class SceneTargetConfig:
     """Root of the calibration files; `None` = `<cache_dir>/calib`."""
     render_samples: int | None = None
     """Multisample count of the offscreen render; `None` = the model's own (4). With 4 samples
-    the GPU's resolve changes about 200 of 262,144 pixels by one grey level between identical
-    renders; 0 gives bit-exact renders."""
+    two renders of one state differ on about 50 of 65,536 output pixels (slot rows by up to
+    4e-5); 0 gives bit-exact renders."""
     K: int = 8
 
     def __post_init__(self) -> None:
