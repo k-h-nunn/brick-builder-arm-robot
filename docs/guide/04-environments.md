@@ -452,12 +452,12 @@ rate); read this as an order-of-magnitude re-measurement, not four-significant-f
 **This is not the pre-correction table either, and not in the direction the servo fix generally
 helps in: level 0 was 9/10 scripted / 10/10 oracle before the correction, and is now 3/10 / 7/10;
 level 2 was 1/10 / 9/10 and is now 1/10 / 2/10. Level 3 is close to unchanged (1/10 / 2/10 then,
-0/10 / 1/10 now).** The mechanism that produced the wrong all-10/10 table above (evaluate this
-page carried in an earlier revision) was a measurement bug, not a real result:
-`press_env.evaluate_point()` always passes an exact `(lateral, yaw)` pair, so a caller building
-that table with `lateral=0, yaw=0` silently ran every level at zero misalignment instead of the
-level's own box — the table above is measured with `misalign=None` instead, which is what draws
-from the box. The real result is worse than pre-correction at levels 0 and 2, not better: the
+0/10 / 1/10 now).** An earlier revision of this page reported 10/10 scripted and oracle at every
+level; that table was a measurement bug, not a real result: `press_env.evaluate_point()` always
+passes an exact `(lateral, yaw)` pair, so building the table with `lateral=0, yaw=0` silently ran
+every level at zero misalignment instead of the level's own box. The table above is measured with
+`misalign=None` instead, which is what draws from the box. The real result is worse than
+pre-correction at levels 0 and 2, not better: the
 old backlash creep this section used to credit for helping the search connect no longer happens
 (the tool now arrives within about half a millimetre of its commanded pose, not several), so
 whatever yaw the level's own box draws is delivered as commanded, with no lucky sideways drift to
