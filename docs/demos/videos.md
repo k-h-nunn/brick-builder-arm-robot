@@ -283,19 +283,31 @@ Reproduction writes it to `media_out/hd/brick_builder_arm_robot_two_brick_build_
 | Scene model, panels | Convolutional scene model, checkpoint `3e07a382` |
 | Controller | Target-sequence tracking at 10 Hz, analytic inverse |
 | Target sequences | Recorded in the digital twin from the goal and nominal parameters, one per cycle |
-| Video | 1920x1080, 30 fps, H.264, 58.7 s, 1762 frames, single take, seed 0, one world for both cycles |
+| Video | 1920x1080, 30 fps, H.264, 58.7 s, 1762 frames, 8.0 MB, single take, seed 0, one world for both cycles |
 
 ## On-screen elements
 
-As the placement video, with two changes: the bottom row holds "Observed scene state" (the
-convolutional scene model's segmentation) beside "Ground truth segmentation", and a title line
-under the panels carries the command.
+As the placement video, with these changes:
+
+| Element | This video |
+|---|---|
+| Title card | In the data strip's box, opaque, for the first 2.0 s; the strip takes the box back after it. The top left of the main view holds the upper arm and the wrist in this shot |
+| Spec line | "Control input: ground truth" and "Display: convolutional scene model", then controller, inverse, bricks and baseplate offset; no checkpoint hash |
+| Bottom-row panels | "Scene model segmentation" (the convolutional scene model's output, display only) beside "Ground truth segmentation" |
+| Command | Title line under the panels |
+| Press force [N] | Live value; a dash when the arm is not pushing down on the brick |
 
 ## Results
 
 Recorded run: both bricks seated on target. First brick on the plate, lateral error 0.07 mm,
 depth error 0.00 mm. Second brick on the first (`lower_bodies` = the first brick), lateral error
 0.10 mm, depth error 0.00 mm, bottom face 0.44 mm below the nominal layer-1 height.
+
+After the jaws open the scene-state error readout holds the last value of the press on the
+brick's top, 2.03 mm (cycle 1) and 2.30 mm (cycle 2): Release, Retract and Verify returned no
+measurement on any tick of this run. It is not the placed brick's offset, which is the 0.07 and
+0.10 mm above; see
+[Closed-loop control, Two-brick builds](../guide/12-closed-loop-control.md#two-brick-builds-seeds-0-9).
 
 Seeds 0-9, each cycle in its own world, ground truth driving: second brick seated 10/10, whole
 build 9/10 (Wilson 95 % 60-98 %); see
@@ -327,16 +339,23 @@ Run on the file and the stills by the script after the take (`--qa-only` repeats
 |---|---|
 | Frame size | 1920x1080 RGB, file and six stills |
 | Text boxes intersecting | none, on every frame (`check_layout`) and on each still |
+| Arm under a box | 0 px on every frame, for every box (title card, step label, data strip, panels, command), from the main view's segmentation pass with the arm's 7 bodies as one instance |
 | Smallest font | 24 px (panel titles); floor 22 px |
-| Code identifiers on screen | none |
+| Code identifiers or hashes on screen | none; the check matches snake_case, calls, file names, camelCase and hex strings of 6 or more characters with a digit and a letter |
 | Step names | Approach, Grasp, Lift, Transport, Align, Press the brick down, Release, Retract, Verify |
 | Studs | one colour per brick and on the baseplate, over every visual geom |
-| Main view | mean horizontal pixel gradient 0.93-2.74 on the six stills, limit 5.0 |
+| Main view | mean horizontal pixel gradient 0.91-1.22 on the six stills, limit 5.0 |
 
 The main-view check was added after the first take of this video: that take closed the first
 cycle's episode mid-recording, `SceneRenderer.close` freed its GL objects in the recorder's
 context, and the main view was noise from the second cycle on. The script now closes both
 episodes after the take.
+
+The second take carried the checkpoint hash in its spec line and drew the title card, 70 %
+opaque, over the upper arm and the wrist for the first 2 s (18 175 arm pixels under the card's
+rectangle in the opening pose); the identifier check did not match hex strings and the layout
+check compared text boxes only with each other. Both checks were extended and the video recorded
+a third time; the file and the stills above are that take.
 
 ## Reproduction
 

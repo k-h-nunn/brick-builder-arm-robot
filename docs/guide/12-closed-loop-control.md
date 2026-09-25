@@ -318,7 +318,9 @@ hover and the press target 19.2 mm inside the lower brick.
 within half a brick height (9.6 mm) of the height the layer names, and `lower_bodies` lists the
 bodies whose studs the brick is on. A brick sent to layer 1 that lands on the plate beside the
 lower brick passes the lateral and depth checks and fails this one; its failure class is
-`seated on the wrong layer`. The campaign's CSV writes a layer-1 cell as `x,y,1`.
+`seated on the wrong layer`. The campaign's CSV writes a layer-1 cell as `x,y,1` and the layer
+score as `brick{i}_at_layer`; a file written before that column existed reads back as on the
+layer.
 
 ### Flush neighbour
 
@@ -334,12 +336,20 @@ the goal has a brick on the target's layer flush against the target cell (read f
 A brick one layer down is not a neighbour. `build_2`'s second cell, (2, 3), has two: the first
 brick at +x and the yellow 2x4 at +y.
 
+The campaign's cache of recorded target sequences is keyed by task, cycle, seed, source, cell
+and align hover, e.g. `build_2_c1_s0_ideal_x2y3z0_h25.7`. A recording made for another cell, or
+before the raised hover, is not replayed; it is recorded again under the new name.
+
 ### Two-brick builds, seeds 0-9
 
 Ground-truth scene model, analytic inverse, one target sequence per seed and cycle. As in the
-campaign, each cycle runs in its own world, built with the earlier cycle's brick on its cell. The
-re-plan was off: with the ground-truth scene model a re-run rebuilds the same world from the same
-seed, and over the campaign's rounds none of 90 re-planned bricks changed outcome.
+campaign, each cycle runs in its own world, built with the earlier cycle's brick placed
+nominally on its cell, so "whole build" is the product of two separately scored cycles, not one
+continuous build: on seed 4 the first cycle is 0.42 mm short and the second cycle still seats,
+on a nominally placed first brick. The one continuous build in a single world is the recording
+below (seed 0). The re-plan was off: with the ground-truth scene model a re-run rebuilds the same
+world from the same seed, and none of the 99 bricks the campaign re-planned in rounds 0-5 (92
+episodes, `results/campaign/closed_loop/episodes.csv`) ended on target.
 
 | Task | Command | Cycle 1 seated on target | Cycle 2 seated on target | Whole build | Wilson 95 %, whole build |
 |---|---|---|---|---|---|
@@ -355,10 +365,10 @@ Seed 4 misses in both: 0.42 mm short of full depth against the 0.3 mm tolerance.
 0.95-2.76 deg, bottom face 0.27-0.70 mm below the nominal layer-1 height.
 
 `build_2`, cycle 2, (2, 3, 0): seated on seed 8 only. Eight of the nine misses are on the cell
-(lateral 0.04-2.00 mm) and 0.53-4.50 mm short of full depth at 0.73-4.29 deg tilt; seed 1 is on
-the neighbouring cell (16.33 mm). The brick is pressed between two flush neighbours and stops
-tilted. The campaign's round-0 evaluation, on the tree before the flush-neighbour hover and aim,
-had the same count for the second brick, 1/10, on seed 1.
+(lateral 0.04-2.00 mm) and 0.53-4.50 mm short of full depth at 0.73-3.58 deg tilt; seed 1 is on
+the neighbouring cell (16.33 mm, 4.29 deg). The brick is pressed between two flush neighbours
+and stops tilted. The campaign's round-0 evaluation, on the tree before the flush-neighbour hover
+and aim, had the same count for the second brick, 1/10, on seed 1.
 
 With the convolutional scene model driving, the stacked build's second cycle does not seat
 (`scripts/make_campaign_video.py --probe`, seeds 0 and 1 with ground-truth target sequences;
@@ -374,17 +384,26 @@ The side-by-side build fails at the same Align step (seed 8: no Align measuremen
 seated). The recording of the stacked build is driven by the ground-truth scene model and shows
 the convolutional model's output in its panels: [Two-brick stack video](../demos/videos.md#two-brick-stack-video).
 
+After the jaws open, the recording's scene-state error readout is not the placed brick's offset
+from its cell. Release, Retract and Verify are measured in relative mode (the placed brick
+against the baseplate and the bricks already placed), and on the recorded run none of their
+ticks returned a measurement (Release 0/84 and 0/84, Retract 0/60 and 0/24, Verify 0/93 and
+0/96 per cycle). The press on the brick's top with the jaws together counts as an in-hand step
+(`_in_hand`), so it is measured against the recorded frame, not relatively; its last value, 2.03
+mm in cycle 1 and 2.30 mm in cycle 2, stays on screen through Retract and Verify while the
+bricks are seated at 0.07 and 0.10 mm lateral and 0.00 mm depth error (`verify_placement`).
+
 Reproduction, 20 episodes in one process, 44.7 min at nice 19 and two threads:
 
 ```bash
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=2 \
-  python -m brick_builder.campaign.runner results/campaign/stacked_builds/evaluate_jobs.json
+  python -m brick_builder.campaign.runner --tasks stack_2 build_2 --seeds 0-9 --no-replan \
+    --out results/campaign/stacked_builds/evaluate.jsonl
 ```
 
-The job file lists `stack_2` and `build_2` on seeds 0-9, each job
-`{"source_name": "ideal", "inverse": "analytic", "predictor": "analytic", "replan": false,
-"phase": "evaluate", "round_index": 0}` with its `task`, `seed` and the recording cache; records
-append to the file its `out` names, one JSON line per episode.
+One `evaluate` job per task and seed, ground-truth scene model, analytic inverse and prediction
+rule, target sequences cached in `ideals/` beside `--out`; one JSON line per episode is appended
+to `--out`. The measured run used a job file with the same 20 jobs.
 
 ### Remedies
 
