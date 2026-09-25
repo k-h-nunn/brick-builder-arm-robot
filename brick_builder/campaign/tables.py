@@ -56,8 +56,11 @@ def task_table(rows: Sequence[dict], task: str) -> str:
         lines.append(f"| published | ground truth | -- | {PUBLISHED_TEXT[task]} | -- | -- | "
                      "-- | -- | -- | -- | -- | -- |")
     for r in learned:
+        # The version the episodes were run with; a resumed campaign re-scores its finished
+        # rounds and used to stamp the round record with the latest deployed version.
+        version = r.get("inverse_version") or r["version"]
         lines.append(
-            f"| {r['round']} | learned | {r['version']} | {r['seated_on_target']} | "
+            f"| {r['round']} | learned | {version} | {r['seated_on_target']} | "
             f"{100 * r['wilson_low']:.0f}-{100 * r['wilson_high']:.0f} % | "
             f"{r['bricks_on_target']} | "
             f"{_fmt(r['lateral_mm_median'])} | {_fmt(r['median_tracking_mm'])} | "

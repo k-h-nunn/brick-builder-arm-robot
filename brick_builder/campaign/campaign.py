@@ -444,8 +444,10 @@ class Campaign:
             result = self.train(index)
             if result is None:
                 break
-            self.redeploy(index, result)
+            deployed = self.redeploy(index, result)
             inverse_path, predictor_path, version = self.deployed_paths()
+            # On a resume the deployed pair is the latest round's; a finished round keeps its own.
+            version = deployed or version
             records = self.evaluate(index, self.columns_for(index, version, inverse_path,
                                                          predictor_path))
             self.score_round(index, version, records, result=result)

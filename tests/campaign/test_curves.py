@@ -97,3 +97,14 @@ def test_the_tables_carry_the_fixed_baselines(campaign_dir) -> None:
     assert "### Cost per round" in text
     assert "### Failures" in text
     assert "Build 2" in text
+
+
+def test_a_learned_row_names_the_version_its_episodes_ran_with(campaign_dir) -> None:
+    """A resumed campaign stamped every finished round with the latest version; the episodes
+    carry their own."""
+    rows = curves.read_summary(campaign_dir / "summary.csv")
+    for row in rows:
+        row["version"] = "r9"
+    text = tables.task_table(rows, "placement")
+    assert "| 1 | learned | r1 |" in text and "| 2 | learned | r2 |" in text
+    assert "r9" not in text
