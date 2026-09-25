@@ -9,7 +9,7 @@ import pytest
 
 from brick_builder.campaign.tasks import (
     BASE_PLACED, BUILD_COMMAND, CSV_FIELDS, EVAL_SEEDS, FIRST_PERFORM_SEED, STACK_COMMAND, TASKS,
-    BrickRecord, EpisodeRecord, build_goal, failure_class, perform_seeds,
+    BrickRecord, EpisodeRecord, build_goal, failure_class, ideal_key, perform_seeds,
 )
 
 
@@ -102,6 +102,16 @@ def test_performing_seeds_are_deterministic() -> None:
 
 
 # ------------------------------------------------------------------------------------ the record ---
+
+
+def test_the_recording_cache_key_names_the_cell_the_layer_and_the_hover() -> None:
+    """A cached target sequence is replayed only for the cell and the hover it was made for."""
+    build, stack = TASKS["build_2"], TASKS["stack_2"]
+    assert ideal_key(build, 0, 3, "ideal") == "build_2_c0_s3_ideal_x4y3z0_h20.0"
+    # Two flush neighbours beside the second cell: the dwell stands over their studs.
+    assert ideal_key(build, 1, 3, "ideal") == "build_2_c1_s3_ideal_x2y3z0_h25.7"
+    # One layer up, the brick below is what it seats on, not a neighbour.
+    assert ideal_key(stack, 1, 3, "cnn") == "stack_2_c1_s3_cnn_x4y3z1_h20.0"
 
 
 def test_an_episode_succeeds_only_when_every_brick_is_on_its_cell() -> None:

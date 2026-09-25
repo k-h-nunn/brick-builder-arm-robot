@@ -480,6 +480,43 @@ class Script:
         yield from self._hold("Verify", 1.0)
 
 
+def flush_away(target, nx: int, ny: int, placed) -> np.ndarray:
+    """Unit vector pointing away from the bricks standing flush against the target cell.
+
+    Read off the goal -- which bricks the plate is supposed to carry -- and not off the world:
+    this is nominal task knowledge like the cell itself. Only the target's own layer counts,
+    because a brick a layer down is what the new one seats on rather than something it can be
+    pressed against. Zero when nothing stands flush.
+    """
+    layer = int(target[2]) if len(target) > 2 else 0
+    x0, y0 = int(target[0]), int(target[1])
+    x1, y1 = x0 + int(nx) - 1, y0 + int(ny) - 1
+    away = np.zeros(2)
+    for p in placed:
+        if int(p.z) != layer:
+            continue
+        px1, py1 = p.x + p.w - 1, p.y + p.h - 1
+        side_by_side = not (p.y > y1 or py1 < y0)
+        end_to_end = not (p.x > x1 or px1 < x0)
+        if side_by_side and p.x == x1 + 1:
+            away[0] -= 1.0
+        if side_by_side and px1 == x0 - 1:
+            away[0] += 1.0
+        if end_to_end and p.y == y1 + 1:
+            away[1] -= 1.0
+        if end_to_end and py1 == y0 - 1:
+            away[1] += 1.0
+    norm = float(np.linalg.norm(away))
+    return away / norm if norm else away
+
+
+def align_hover(cfg: PlaceConfig, spec, has_neighbour: bool) -> float:
+    """Align dwell height over the seat [m]: `cfg.hover`, or above a flush neighbour's studs."""
+    if not has_neighbour:
+        return float(cfg.hover)
+    return float(max(cfg.hover, spec.height + spec.stud_h + cfg.neighbour_clear))
+
+
 @dataclass
 class Geometry:
     """Nominal task knowledge: where things are supposed to be and how big the tool is.
@@ -516,13 +553,11 @@ class Geometry:
         self.seat_bottom = self.plate_top + self.layer * spec.height
         # Which way to lean off the cell, and how high to dwell, when a brick already stands
         # flush against it. Both are zero-effect on a cell with nothing beside it.
-        self.away = self._flush_neighbour()
+        self.away = flush_away(self.target, self.held.nx, self.held.ny,
+                               self.twin_scene.cfg.placed)
         self.has_neighbour = bool(np.any(self.away))
         self.bias = self.away * self.cfg.neighbour_bias
-        self.hover = self.cfg.hover
-        if self.has_neighbour:
-            self.hover = max(self.cfg.hover,
-                             spec.height + spec.stud_h + self.cfg.neighbour_clear)
+        self.hover = align_hover(self.cfg, spec, self.has_neighbour)
         # The carry has two jobs: clear whatever is standing on the plate, and be no lower than
         # the hover it descends from. At layer 0 the first is what binds and this is the height
         # it has always been.
@@ -542,34 +577,6 @@ class Geometry:
         self.grip_open = jaw_angle_for_clearance(self.grasp.contact_point, self.open_clearance)
         self.grip_together = gripper_angle_for_width(0.002)
         self.supply_nominal = np.array([0.0, 0.0, 0.0])
-
-    def _flush_neighbour(self) -> np.ndarray:
-        """Unit vector pointing away from the bricks standing flush against the target cell.
-
-        Read off the goal -- which bricks the plate is supposed to carry -- and not off the
-        world: this is nominal task knowledge like the cell itself. Only the target's own layer
-        counts, because a brick a layer down is what the new one seats on rather than something
-        it can be pressed against.
-        """
-        x0, y0 = int(self.target[0]), int(self.target[1])
-        x1, y1 = x0 + self.held.nx - 1, y0 + self.held.ny - 1
-        away = np.zeros(2)
-        for p in self.twin_scene.cfg.placed:
-            if int(p.z) != self.layer:
-                continue
-            px1, py1 = p.x + p.w - 1, p.y + p.h - 1
-            side_by_side = not (p.y > y1 or py1 < y0)
-            end_to_end = not (p.x > x1 or px1 < x0)
-            if side_by_side and p.x == x1 + 1:
-                away[0] -= 1.0
-            if side_by_side and px1 == x0 - 1:
-                away[0] += 1.0
-            if end_to_end and p.y == y1 + 1:
-                away[1] -= 1.0
-            if end_to_end and py1 == y0 - 1:
-                away[1] += 1.0
-        norm = float(np.linalg.norm(away))
-        return away / norm if norm else away
 
     def place_tcp(self, height: float) -> np.ndarray:
         return tcp_for_brick(

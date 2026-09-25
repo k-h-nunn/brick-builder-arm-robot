@@ -322,7 +322,21 @@ def held_world(seed: int, placed):
 
 
 def ideal_key(spec: TaskSpec, cycle: int, seed: int, source: str) -> str:
-    return f"{spec.name}_c{cycle}_s{seed}_{source}"
+    """Cache name of one cycle's recorded target sequence.
+
+    Task, cycle, seed and source, plus what the recording is made for: the cell (x, y, layer)
+    and the align hover [mm]. A command that sends the cycle to another cell, or a geometry that
+    dwells at another height beside a flush neighbour, then records afresh instead of replaying
+    a sequence made for something else.
+    """
+    from ..action.place import PlaceConfig, align_hover, flush_away
+    from ..bricks.spec import DUPLO
+
+    cell = spec.cells[cycle]
+    x, y, layer = int(cell[0]), int(cell[1]), cell_layer(cell)
+    away = flush_away((x, y, layer), 2, 2, spec.placed_before(cycle))
+    hover = align_hover(PlaceConfig(pick=spec.pick), DUPLO, bool(np.any(away)))
+    return f"{spec.name}_c{cycle}_s{seed}_{source}_x{x}y{y}z{layer}_h{1e3 * hover:.1f}"
 
 
 def record_for(spec: TaskSpec, cycle: int, seed: int, *, source=None, cache: Path | None = None):
