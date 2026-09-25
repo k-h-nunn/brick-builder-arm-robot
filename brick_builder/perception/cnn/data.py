@@ -576,6 +576,97 @@ def _plate_scene(rng: np.random.Generator, frames: int) -> Iterator[Sample]:
         renderer.close()
 
 
+def _bias_table_bright(scene, rng: np.random.Generator) -> tuple[float, float, float]:
+    """Table colour drawn from the pale half of `TABLE_RGB_RANGE` only.
+
+    Plain `paint_table` covers the whole range uniformly; this scene kind exists to add density
+    at the end of it that the failure analysis flagged (see the guide's "White bricks on a
+    bright table" section), so it draws from the pale half only.
+    """
+    import mujoco
+
+    from ...scene.compose import TABLE_GEOM
+
+    gid = mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_GEOM, TABLE_GEOM)
+    if gid < 0:
+        return (0.0, 0.0, 0.0)
+    lo, hi = np.asarray(TABLE_RGB_RANGE[0]), np.asarray(TABLE_RGB_RANGE[1])
+    mid = 0.5 * (lo + hi)
+    rgb = tuple(float(v) for v in rng.uniform(mid, hi))
+    scene.model.geom_rgba[gid, :3] = rgb
+    return rgb
+
+
+def _brighten_lights(scene, rng: np.random.Generator, boost_range=(1.0, 1.45)) -> None:
+    """An extra brightness pass on top of `randomize_lights`, for the glare a pale table under a
+    strong light shows in the failure frames (docs/guide/06b, "White bricks on a bright table")."""
+    model = scene.model
+    for i in range(model.nlight):
+        boost = float(rng.uniform(*boost_range))
+        model.light_diffuse[i] = np.clip(model.light_diffuse[i] * boost, 0.0, 1.0)
+        model.light_specular[i] = np.clip(model.light_specular[i] * boost, 0.0, 1.0)
+
+
+def _repaint_bright_light(scene, rng: np.random.Generator, forced: dict[str, str]) -> dict:
+    """A fresh appearance draw biased towards this scene kind's target case: a pale table, a
+    forced light-coloured brick, and boosted lighting."""
+    meta = randomize_appearance(scene, rng)
+    meta["table_rgb"] = _bias_table_bright(scene, rng)
+    if forced:
+        meta["brick_colours"] = repaint_bricks(scene, rng, colours=forced)
+    _brighten_lights(scene, rng)
+    return meta
+
+
+def _bright_light_plate_scene(rng: np.random.Generator, frames: int) -> Iterator[Sample]:
+    """The baseplate with at least one light-coloured brick, on a pale table under boosted
+    lighting.
+
+    Targeted coverage for the failure documented in the guide ("White bricks on a bright
+    table"): a light-coloured brick loses contrast against a pale, brightly lit table, worst
+    where its apparent size is smallest. Not part of `DEFAULT_MIX`; generated on its own into a
+    separate split and mixed into training as extra data, so the general-purpose split stays
+    exactly what it was.
+    """
+    from ...bricks.structures import Placement
+    from ...render.renderer import SceneRenderer
+    from ...scene.compose import SceneConfig, build_scene, reset_scene, settle
+
+    placed: list = []
+    for _ in range(5):
+        placed = _random_structure(rng, touching_same_colour=False)
+        if placed:
+            break
+    if not placed:
+        placed = [Placement(h=2, w=4, x=2, y=2, z=0, colour="white")]
+    cfg = SceneConfig(held=None, placed=placed, tray=bool(rng.random() < 0.4), cameras=())
+    scene = build_scene(cfg)
+    jitter_plate(scene, rng)
+    reset_scene(scene, rng)
+
+    forced = {scene.placed_names[0]: "white" if rng.random() < 0.7 else "yellow"}
+    if len(placed) >= 3 and rng.random() < 0.35:
+        forced[scene.placed_names[1]] = "white" if rng.random() < 0.7 else "yellow"
+    _repaint_bright_light(scene, rng, forced)
+    settle(scene, 0.2)
+    plate_xy = _plate_centre(scene)[:2]
+
+    renderer = SceneRenderer(scene.model, width=RENDER_SIZE[0], height=RENDER_SIZE[1])
+    try:
+        renderer.instance_lut(perception_instance_lut(scene))
+        yield from _frames_at(
+            scene, renderer, rng, frames,
+            look_at=lambda r: plate_xy + r.uniform(-0.04, 0.04, size=2),
+            roi_centre=lambda r: np.array([plate_xy[0] + r.uniform(-0.05, 0.05),
+                                           plate_xy[1] + r.uniform(-0.05, 0.05), 0.02]),
+            meta={"kind": "bright_plate", "n_placed": len(placed),
+                  "forced_light": sorted(forced.values())},
+            repaint=lambda r: _repaint_bright_light(scene, r, forced),
+        )
+    finally:
+        renderer.close()
+
+
 def _held_scene(rng: np.random.Generator, frames: int) -> Iterator[Sample]:
     """A brick held in the jaws, hovering over the plate at a range of heights."""
     import mujoco
@@ -759,6 +850,7 @@ SCENE_KINDS = {
     "held": _held_scene,
     "approach": _approach_scene,
     "episode": _episode_scene,
+    "bright_plate": _bright_light_plate_scene,
 }
 
 DEFAULT_MIX: dict[str, float] = {
@@ -821,6 +913,9 @@ SEED_LISTS: dict[str, tuple[int, int]] = {
     "train": (1000, 1999),
     "train_b": (3000, 3999),
     "val": (7000, 7999),
+    # Targeted "bright_plate" frames (white/light bricks on a pale table), disjoint from every
+    # other split, mixed into training as extra data rather than merged into `train` itself.
+    "bright_white_v1": (5000, 5999),
 }
 """Disjoint seed ranges per split: a scene layout, colour draw or camera model from one split can
 never appear in the other. A scene's seed is `base + index`, so a given dataset is reproducible
