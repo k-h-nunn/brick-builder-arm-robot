@@ -6,6 +6,7 @@ to exploit if they are wrong, and they are invisible in an aggregate "the arm mo
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import mujoco
@@ -660,3 +661,47 @@ def test_measure_sag_is_monotone_in_torque():
     assert errors == pytest.approx(
         np.array([0.4, 0.9, 1.4]) / servo_kp(16, 7.4), rel=0.10
     )
+
+
+# ------------------------------------------------ error_deadband_ticks in the randomization ranges ---
+#
+# brick_builder/scene/randomize.py is this package's file; its own test directory (tests/scene) is
+# not, so this checks the wiring from here instead of duplicating scene-level fixtures.
+
+
+def test_error_deadband_ticks_is_a_randomization_range_with_a_nominal_value():
+    from brick_builder.scene import randomize as R
+
+    assert R.RANGES["command.error_deadband_ticks"] == S.ERROR_DEADBAND_TICKS_RANGE
+    assert R.NOMINAL["command.error_deadband_ticks"] == pytest.approx(ServoConfig().error_deadband_ticks)
+    lo, hi = R.RANGES["command.error_deadband_ticks"]
+    assert lo <= R.NOMINAL["command.error_deadband_ticks"] <= hi
+
+
+def test_error_deadband_ticks_reaches_servo_config_and_only_that_field():
+    from brick_builder.scene import randomize as R
+
+    sample = {"command.error_deadband_ticks": 7.0}
+    sc = R.servo_config(sample)
+    default_sc = ServoConfig()
+    assert sc.error_deadband_ticks == pytest.approx(7.0)
+    for f in dataclasses.fields(ServoConfig):
+        if f.name == "error_deadband_ticks":
+            continue
+        assert getattr(sc, f.name) == getattr(default_sc, f.name), f.name
+
+
+def test_error_deadband_ticks_is_sampled_but_kept_out_of_the_fixed_width_critic_observation():
+    """The randomization key exists and is drawn (`R.sample`), but is deliberately not one of
+    `envs.base_env.DR_PARAM_KEYS` -- growing that fixed-width vector is an environment-owned
+    decision this package does not make. See docs/guide/03, "Still to come"."""
+    from brick_builder.scene import randomize as R
+
+    rng = np.random.default_rng(0)
+    drawn = R.sample(rng, 1.0, groups=("command",))
+    assert "command.error_deadband_ticks" in drawn
+
+    from brick_builder.envs.base_env import DR_PARAM_KEYS
+
+    assert "command.error_deadband_ticks" not in DR_PARAM_KEYS
+    assert len(DR_PARAM_KEYS) == 17

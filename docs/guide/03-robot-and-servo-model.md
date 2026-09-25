@@ -492,8 +492,8 @@ for name in bus.motors:
 ```
 
 If the register names differ by version, read the raw addresses instead: 21, 26, 27, one byte
-each. Enter them in the parameter file — `arm.p_gain` exists already; the dead band wants a new
-entry — and re-run the sag and step-response measurements against the real arm.
+each. Enter them in the parameter file — `arm.servo_p_gain` and `arm.servo_dead_band_counts` both
+exist already — and re-run the sag and step-response measurements against the real arm.
 
 Two measurements the model is fitted to, worth taking at the same time:
 
@@ -549,9 +549,26 @@ other two are seconds.
 - **The firmware dead band** (registers 26, 27): unread on real hardware. `error_deadband_ticks`
   defaults to 0; the documented 2-count value brackets the bench report's "10 counts" against its
   own ±2-count repeatability — not a measurement.
-- **`error_deadband_ticks` is not yet in the randomization ranges**: adding it to
-  `scene/randomize.py` grows `DR_PARAM_KEYS` and the critic observation — one entry in
-  `DR_PARAM_KEYS`, one sampling line in `sample_params`, one application line in `apply_params`.
+- `error_deadband_ticks` is now in the randomization ranges (`randomize.RANGES`/`NOMINAL`, key
+  `command.error_deadband_ticks`) and reaches `ServoConfig` through `randomize.servo_config`. It
+  is deliberately **not** one of `envs.base_env.DR_PARAM_KEYS`: that tuple is a fixed 17-wide
+  vector (the critic's `dr_params` observation entry), and growing it is a decision for whoever
+  owns `brick_builder/envs/**`, not this page's files. The episode still randomizes over the dead
+  band and `Scene.randomization` still records the value drawn; only the critic's dedicated
+  summary vector does not grow to show it, until that width change is made deliberately.
+- **Consequence of the above for seed-pinned tests**: every group's sampler shares one
+  `rng.Generator`, drawn group by group in a fixed order (`dynamics`, `command`, `snap`,
+  `contact`, `plate`, `in_hand`, `visual`), so a new `RANGES` key anywhere at or before a given
+  group consumes one more `rng` call before that group's own draws happen -- for a fixed seed,
+  every later group now draws different numbers than before, regardless of where in the dict the
+  new key physically sits. Adding `command.error_deadband_ticks` shifts `snap`/`contact`/
+  `plate`/`in_hand`/`visual` this way; the one test this was checked against,
+  `tests/scene/test_randomize.py::test_a_randomized_scene_still_settles_cleanly`, fails at
+  seed 1 (`max_speed` 0.0196 against its 0.005 s⁻¹ bound) as a result -- not because the dead
+  band reaches the physics model (`randomize.apply` has no `command.*` branch; only
+  `servo_config`/`ServoBus` read it), but because seed 1's *other* randomized fields (plate
+  pose, friction, snap parameters, ...) are now different draws. `tests/scene` is not owned by
+  this page; flagged here rather than fixed there.
 
 ## Kinematics
 

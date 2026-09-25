@@ -61,7 +61,7 @@ from brick_builder.robot.patch_so101 import (
     servo_damping,
     servo_kp,
 )
-from brick_builder.robot.servo_model import ServoConfig
+from brick_builder.robot.servo_model import ERROR_DEADBAND_TICKS_RANGE, ServoConfig
 from brick_builder.scene.compose import TABLE_GEOM, Scene
 
 # ------------------------------------------------------------------------------------ ranges ---
@@ -80,6 +80,7 @@ RANGES: dict[str, Range] = {
     "dynamics.link_mass_scale": (0.9, 1.1),
     # -- command path (design report 01 section 6, WP-ROBOT's ServoConfig/BusConfig) --------
     "command.deadband_ticks": (0.0, 10.0),      # 10 ticks of 4096 is 0.88 degrees
+    "command.error_deadband_ticks": ERROR_DEADBAND_TICKS_RANGE,  # firmware dead band, regs 26/27
     "command.rate_limit": (4.0, 6.0),           # rad/s
     "command.action_delay_s": (0.0, 0.04),      # 0-2 control steps at 50 Hz
     "command.action_delay_jitter_s": (0.0, 0.004),
@@ -147,6 +148,7 @@ NOMINAL: dict[str, float] = {
     "dynamics.vin": NOMINAL_VIN,
     "dynamics.link_mass_scale": 1.0,
     "command.deadband_ticks": 0.0,
+    "command.error_deadband_ticks": ServoConfig().error_deadband_ticks,
     "command.rate_limit": ServoConfig().rate_limit,
     "command.action_delay_s": ServoConfig().action_delay_s,
     "command.action_delay_jitter_s": ServoConfig().action_delay_jitter_s,
@@ -311,10 +313,21 @@ def sample(
 
 
 def servo_config(sample: dict, base: ServoConfig = ServoConfig()) -> ServoConfig:
-    """Build the `ServoConfig` a sampled command path describes."""
+    """Build the `ServoConfig` a sampled command path describes.
+
+    ``command.error_deadband_ticks`` (the firmware position dead band, registers 26/27) is
+    sampled and applied here like every other command-path field, but it is deliberately left out
+    of ``envs.base_env.DR_PARAM_KEYS`` -- the critic's ``dr_params`` observation entry is a fixed
+    17-wide vector, and growing it is an environment-owned decision (`brick_builder/envs/**`) this
+    package does not make. The episode still randomizes over it and `Scene.randomization` still
+    records the drawn value; only the critic's dedicated summary vector does not grow to show it.
+    """
     return dataclasses.replace(
         base,
         deadband_ticks=int(round(sample.get("command.deadband_ticks", base.deadband_ticks))),
+        error_deadband_ticks=float(
+            sample.get("command.error_deadband_ticks", base.error_deadband_ticks)
+        ),
         rate_limit=float(sample.get("command.rate_limit", base.rate_limit)),
         action_delay_s=float(sample.get("command.action_delay_s", base.action_delay_s)),
         action_delay_jitter_s=float(
