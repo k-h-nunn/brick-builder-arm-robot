@@ -220,6 +220,20 @@ def test_windows_pair_slots_by_id_and_align_contexts():
     assert w.fingerprint() == Windows.from_logs([_tiny_log()], horizon=2).fingerprint()
 
 
+def test_five_step_windows_train_open_loop():
+    logs, toy = synthetic_logs(400, seed=6)
+    w5 = Windows.from_logs(logs, horizon=5)
+    w3 = Windows.from_logs(logs, horizon=3)
+    assert w5.rows.shape[1] == 6 and w5.ctx.shape[1] == 5 and len(w5) == len(w3) - 2 * len(logs)
+    assert np.array_equal(w5.rows[:, :4], w3.subset(np.nonzero(w3.start < 46)[0]).rows)
+    res = train(w5, TrainConfig(epochs=2, batch=64, teacher_frac=0.5), layout=toy.layout,
+                log=None, meta=META)
+    assert [h["teacher"] for h in res.history] == [True, False]
+    assert all(np.isfinite(h["loss"]) for h in res.history)
+    rep = prediction_report(res.model, w5)
+    assert len(rep["centre_rmse_mm"]) == 5
+
+
 def test_every_seventh_episode_is_held_out():
     logs, _ = synthetic_logs(15 * TOY.episode_ticks, seed=1)
     assert len(logs) == 15
