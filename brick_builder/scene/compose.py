@@ -361,22 +361,15 @@ class SceneConfig:
     weld_slip_force: float | None = None
     """Weld slip ceiling [N].
 
-    Load above which :func:`_release_overloaded_weld` deactivates the soft weld (``eq_active`` ->
-    0) the next time it runs, the one failure mode a MuJoCo weld equality does not have on its
-    own: held hard enough, it simply keeps transmitting whatever force it takes, which is not what
-    the stock jaws' friction grip does.
+    Above this load, :func:`_release_overloaded_weld` deactivates the soft weld (``eq_active`` ->
+    0) the next time it runs -- the one failure mode a MuJoCo weld equality lacks on its own: held
+    hard enough, it keeps transmitting whatever force it takes.  ``None`` (the default) keeps the
+    hold unlimited.  :func:`weld_slip_ceiling` gives a value grounded in the stock jaws' grip and
+    friction.
 
-    It only takes effect where something calls :meth:`Scene.step` or :func:`push_held_brick`,
-    which are the only two callers of :func:`_release_overloaded_weld`.  A control loop that steps
-    the model with its own ``mujoco.mj_step`` instead of one of those never checks this ceiling,
-    so setting it has no effect there: as of this module's last check, that is every default
-    weld-mode loop in the project -- ``envs/base_env.py`` (and so ``envs/press_env.py``, which
-    hard-codes ``grasp_mode="weld"``), ``control/skill_fsm.py``, ``control/pick_place.py``,
-    ``hardware/twin_sync.py`` and ``hardware/virtual_bus.py``.  ``None`` (the default) keeps the
-    unlimited hold every one of those loops already measures against; turning a ceiling on by
-    default would silently change what they report, and none of them has been re-specified yet
-    for a grip that can slip.  :func:`weld_slip_ceiling` gives the physically grounded value to
-    pass once a caller applies it."""
+    Takes effect only where :meth:`Scene.step` or :func:`push_held_brick` runs the scene; see
+    :func:`_release_overloaded_weld` for the loops that bypass both and so never see this
+    ceiling."""
 
     brick_friction: float = 0.35
     """Sliding friction between bricks and between a brick and the plate.
@@ -1142,7 +1135,7 @@ def weld_slip_ceiling(cfg: SceneConfig) -> float:
     friction``, about 11.9 N at the defaults (17 N x 0.35 x 2).  `cfg.brick_friction`'s default of
     0.35 is the ABS-on-ABS coefficient docs/guide/02c records as having no source (0.2 to 0.5 is
     the randomization range given instead), so this ceiling is only as grounded as that number:
-    2.4 to 6.0 N at the range's ends.
+    6.8 to 17.0 N at the range's ends.
     """
 
     return 2.0 * ARM_GRIP_FORCE_N * cfg.brick_friction
@@ -1152,14 +1145,16 @@ def _release_overloaded_weld(scene: Scene) -> bool:
     """Deactivate the soft weld once its transmitted load passes `cfg.weld_slip_force`.
 
     A no-op whenever that ceiling is `None` (the default), the weld is absent, or it is already
-    inactive (``friction`` grasp mode).  Mimics the stock jaws' friction grip slipping -- the one
-    failure mode a MuJoCo weld equality does not have on its own.  Called from `Scene.step` and
-    `push_held_brick` only; see `SceneConfig.weld_slip_force` for the loops that step a scene
-    without going through either and so never reach this check.  Compares the full 3-D
-    translational weld force against the ceiling, which is an approximation of jaw-face friction,
-    not a model of it: a real friction limit only bounds load along the jaw faces (load along the
-    squeeze axis is carried by jaw normal force instead), and this check does not limit the
-    torque rows at all.  Returns whether it just released, so a caller can report it.
+    inactive (``friction`` grasp mode).  Called from `Scene.step` and `push_held_brick` only.
+    Every other loop that steps a scene built with ``grasp_mode="weld"`` (the default) calls
+    ``mujoco.mj_step`` directly and so never reaches this check, no matter what
+    `SceneConfig.weld_slip_force` is set to: ``envs/base_env.py`` (and so ``envs/press_env.py``,
+    which hard-codes ``grasp_mode="weld"``), ``control/skill_fsm.py``, ``control/pick_place.py``,
+    ``hardware/twin_sync.py``, ``hardware/virtual_bus.py``.  Compares the full 3-D translational
+    weld force against the ceiling, which is an approximation of jaw-face friction, not a model of
+    it: a real friction limit only bounds load along the jaw faces (load along the squeeze axis is
+    carried by jaw normal force instead), and this check does not limit the torque rows at all.
+    Returns whether it just released, so a caller can report it.
     """
 
     limit = scene.cfg.weld_slip_force
@@ -1190,7 +1185,16 @@ def brick_bodies(scene: Scene, name: str) -> list[str]:
 
 
 def set_brick_pose(scene: Scene, name: str, pos, quat) -> None:
-    """Write one brick's free-joint pose, pieces included, and zero its velocity."""
+    """Write one brick's free-joint pose, pieces included, and zero its velocity.
+
+    Only ``qpos`` changes here; forward kinematics is not recomputed, so ``data.xpos`` and
+    ``data.site_xpos`` stay at the old pose until something calls `mujoco.mj_forward`.  Stepping
+    or updating the snap model before that call reads the stale site position -- for a brick that
+    was already captured, this reads as its stud pulling out of the old socket and can yank the
+    brick back towards it (see the resting-rider test in `tests/scene/test_compose.py` for a
+    measured example).  Call `mujoco.mj_forward(scene.model, scene.data)` right after this before
+    doing either.
+    """
 
     data = scene.data
     for body in brick_bodies(scene, name):
@@ -1307,41 +1311,70 @@ class SettleReport:
     connected_placed: int
 
 
-def _owning_brick(body: str) -> str:
-    """The brick (or plate) body a connection endpoint stands for.
+def _owning_brick(body: str, released_pieces: frozenset[str] = frozenset()) -> str | None:
+    """The brick (or plate) body a connection endpoint stands for, or `None` if it no longer
+    stands for one.
 
     Every connection endpoint is already a whole brick's own body, with one exception: in a
     breakable scene (`SceneConfig.breakable`) a socket connects to a stud's own piece body,
     ``'<brick>_piece_stud_<i>_<j>'``, not the brick's roof (`bricks.breakable.add_breakable_brick`
-    gives each stud its own free joint precisely so it can break off on its own). ``'_piece_'``
+    gives each stud its own free joint precisely so it can break off on its own).  ``'_piece_'``
     appears in no whole-brick or plate name, so splitting on its first occurrence recovers the
-    owning brick in that case and is a no-op in every other.
+    owning brick -- while that piece's weld still holds.  Once the weld has let go
+    (`BreakableBricks.released`, named here in ``released_pieces``), the piece is no longer part
+    of the brick structurally: `add_breakable_brick` puts the stud site on the piece precisely so
+    that "once the weld lets go the connection travels with the piece that came away" (its own
+    comment), even though the snap model may still report it resting near its old socket.  This
+    returns `None` in that case instead of the brick name, so `_connected_from_baseplate` drops
+    the connection rather than crediting the brick with it.
     """
 
     root, sep, _ = body.partition("_piece_")
-    return root if sep else body
+    if not sep:
+        return body
+    return None if body in released_pieces else root
 
 
-def _connected_from_baseplate(plate_name: str, conns: list[Connection]) -> set[str]:
+def _connected_from_baseplate(
+    plate_name: str, conns: list[Connection], released_pieces: frozenset[str] = frozenset(),
+) -> set[str]:
     """Brick names reachable from the baseplate by walking snap connections, layer by layer.
 
     A stack is a graph with an edge from every `Connection.lower` to its `Connection.upper` (the
     body a stud belongs to, to the body whose socket it is in), both passed through
-    `_owning_brick` first so a breakable scene's stud-piece connections still walk brick to brick.
-    A breadth-first walk from the plate reaches a brick through any number of intermediate bricks,
+    `_owning_brick` first so a breakable scene's stud-piece connections still walk brick to brick,
+    and dropped rather than walked if either end is a piece whose weld has released.  A
+    breadth-first walk from the plate reaches a brick through any number of intermediate bricks,
     which is what "connected" means in this module: not only the bricks that touch the plate
-    directly.
+    directly.  Each layer is deduplicated into a set before the next is built, so a breakable
+    stack's several stud connections per brick pair do not multiply the frontier's size layer over
+    layer (an 8x-per-layer blow-up with the list this used to carry).
     """
 
     by_lower: dict[str, list[str]] = {}
     for c in conns:
-        by_lower.setdefault(_owning_brick(c.lower), []).append(_owning_brick(c.upper))
+        lower = _owning_brick(c.lower, released_pieces)
+        upper = _owning_brick(c.upper, released_pieces)
+        if lower is None or upper is None:
+            continue
+        by_lower.setdefault(lower, []).append(upper)
     reached = {plate_name}
-    frontier = [plate_name]
+    frontier = {plate_name}
     while frontier:
-        frontier = [u for lower in frontier for u in by_lower.get(lower, ()) if u not in reached]
+        frontier = {u for lower in frontier for u in by_lower.get(lower, ()) if u not in reached}
         reached.update(frontier)
     return reached
+
+
+def _released_piece_names(scene: Scene) -> frozenset[str]:
+    """Names of the pieces whose weld has let go, or an empty set outside a breakable scene."""
+
+    if scene.breakable is None:
+        return frozenset()
+    return frozenset(
+        piece.name for piece, released in zip(scene.breakable.pieces, scene.breakable.released)
+        if released
+    )
 
 
 def settle(scene: Scene, seconds: float = 2.0) -> SettleReport:
@@ -1362,7 +1395,7 @@ def settle(scene: Scene, seconds: float = 2.0) -> SettleReport:
         dof = int(model.jnt_dofadr[jid])
         speeds.append(float(np.linalg.norm(data.qvel[dof:dof + 3])))
     conns = scene.snap.connections()
-    reached = _connected_from_baseplate(scene.plate.name, conns)
+    reached = _connected_from_baseplate(scene.plate.name, conns, _released_piece_names(scene))
     return SettleReport(
         seconds=seconds,
         warnings=scene.warnings(),
