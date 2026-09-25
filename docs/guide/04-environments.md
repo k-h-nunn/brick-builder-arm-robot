@@ -193,8 +193,8 @@ bricks, no vision; grip and compliance frozen. The residual clips to a box aroun
   pure-proportional residual (gain 0.3, no derivative term) reading position error every 20 ms
   tick and commanding a rate is exactly the kind of loop that rings instead of settling; gravity
   feedforward and IK remove the static components of tracking error, not this dynamic one. This is
-  the honest floor a zero-residual policy starts from, and it is what a policy with a derivative
-  term or learned dithering — the PPO result below — can close.
+  the floor a zero-residual policy starts from, and it is what a policy with a derivative term or
+  learned dithering — the PPO result below — can close.
 - PPO (`brick_builder.rl.ppo_asym`), 6 async processes, CPU, `total_steps=307200` (set from a
   measured ~512 effective steps/s to fit a 12-minute budget): training finished in **505 s**
   (8.4 min), mean return rising from -20.6 (update 0) to a plateau near +8.4 (update ~150 of 200;
@@ -277,15 +277,21 @@ overlapping in reverse. An 8 mm tug beats the stiction but pulls a seated 2×4 b
 The settled tool height after the press releases (`SkillFSM.seated_by_height`) works better, not
 perfectly: a seated 2×4 leaves the tool 2.0-2.3 mm above the seated height, one resting on the
 stud tops 4.6-6.5 mm, marginal cases between. Correct 37 out of 40 on held-out seeds (seed 7;
-Wilson [0.801, 0.974]) — short of the spec's 95 % bar, from a traced failure mode near the
-capture gate's own edge (a case can look seated by height while a stud is still shallow, or miss
-the cell entirely with the empty tool settling inside tolerance by coincidence; see the module
-docstring). Most of the 2 mm baseline is weld stretch, so the threshold needs recalibration for
-the friction grasp, and again on hardware. Both verdicts are reported; `SkillFSM.verified` still
-reports the spec's load-rise result. A third, independent cross-check (`seated_by_occupancy`) is
-available whenever a caller binds `occupancy_check` to a scene model or, for a sim-only caller,
-`ground_truth_occupancy` — never overriding the height verdict, since it answers a coarser
-question ("is anything there") that a truly seated and a merely resting brick can both satisfy.
+Wilson [0.801, 0.974]) — short of the spec's 95 % bar, from two traced failure modes. Two of the
+three misses are the snap model's own connection gate, not a height problem: every stud reads a
+fully seated 4.70-4.74 mm of raw insertion depth, but the brick sits 0.47-0.53 mm laterally off
+the stud axis — just outside `SnapParams.capture_lateral` (0.30 mm) — so the model reports zero
+depth and forms no connection, while the tool still settles at the height a centred seat would
+produce, indistinguishable by height alone. The third is an ordinary shallow press, a stud
+0.15 mm short of the seated-depth threshold. Most of the 2 mm baseline is weld stretch, so the
+threshold needs recalibration for the friction grasp, and again on hardware. Both verdicts are
+reported; `SkillFSM.verified` still reports the spec's load-rise result. A third, independent
+cross-check (`seated_by_occupancy`) is available whenever a caller binds `occupancy_check` to a
+scene model or, for a sim-only caller, `ground_truth_occupancy` — never overriding the height
+verdict, since it deliberately reads raw (ungated) insertion depth and so answers a coarser
+question ("is anything there") than either the height verdict or the snap model's own connection
+state: a brick resting on the stud tops, and a brick pressed to depth but rejected by the
+connection gate, both read occupied.
 
 ## `BrickBuilder/PressFromHeld-v0`
 
@@ -449,36 +455,32 @@ cancels it; not a policy, but a check for whether a learner has anything to gain
 
 n=10 per cell, so every count above carries a wide 95 % Wilson interval (roughly ±0.2-0.3 on the
 rate); read this as an order-of-magnitude re-measurement, not four-significant-figure numbers.
-**This is not the pre-correction table either, and not in the direction the servo fix generally
-helps in: level 0 was 9/10 scripted / 10/10 oracle before the correction, and is now 3/10 / 7/10;
-level 2 was 1/10 / 9/10 and is now 1/10 / 2/10. Level 3 is close to unchanged (1/10 / 2/10 then,
-0/10 / 1/10 now).** An earlier revision of this page reported 10/10 scripted and oracle at every
-level; that table was a measurement bug, not a real result: `press_env.evaluate_point()` always
-passes an exact `(lateral, yaw)` pair, so building the table with `lateral=0, yaw=0` silently ran
-every level at zero misalignment instead of the level's own box. The table above is measured with
-`misalign=None` instead, which is what draws from the box. The real result is worse than
-pre-correction at levels 0 and 2, not better: the
-old backlash creep this section used to credit for helping the search connect no longer happens
-(the tool now arrives within about half a millimetre of its commanded pose, not several), so
-whatever yaw the level's own box draws is delivered as commanded, with no lucky sideways drift to
-compensate it. That is consistent with what this page already documents about yaw elsewhere in
-this section — a 2-3° yaw alone already produces a `partial_seat` the search cannot fix — and
-level 0's own box already draws yaw up to 2°, on the same draw as a lateral and tilt error, in a
-random direction. This page does not isolate the yaw contribution specifically for this table
-(that needs a per-axis sweep, not run here); "consistent with" is as far as this measurement
-supports. Level 4/5 (two-brick) episodes and the old "pure yaw, no lateral error" sub-measurement
-are not re-run here.
+This table is measured with `misalign=None`, which draws from each level's own box;
+`press_env.evaluate_point()` instead always passes an exact `(lateral, yaw)` pair, so a version of
+this table once built by calling it with `lateral=0, yaw=0` silently ran every level at zero
+misalignment instead of the level's own box and reported 10/10 scripted and oracle at every
+level — a measurement bug, not a real result, and not reproduced here. Against the pre-correction
+(pre-servo-encoder) numbers — 9/10 scripted / 10/10 oracle, 3/10 / 8/10, 1/10 / 9/10, 1/10 / 2/10
+at levels 0-3 — the result above is worse at levels 0 and 2, not better. One candidate
+contributor, consistent with (not established by) what this page already documents about yaw
+elsewhere in this section — a 2-3° yaw alone already produces a `partial_seat` the search cannot
+fix: the corrected arm now arrives within about half a millimetre of its commanded pose rather
+than several, so whatever yaw a level's own box draws (up to 2° at level 0, on the same draw as a
+lateral and tilt error, in a random direction) is delivered as commanded, with nothing to offset
+it. This page does not isolate the yaw contribution with a dedicated per-axis sweep, so "consistent
+with" is as far as this measurement supports. Level 4/5 (two-brick) episodes and the "pure yaw, no
+lateral error" sub-measurement above are not re-run here.
 
-**Scripted baseline curve** (target for the learned press) — **predates the servo-encoder
-correction and was not re-run here (2 200 episodes, ~36 minutes at one process); read it as
-history, not current behaviour.** The by-level table just above, re-measured after the correction
-at similar misalignment magnitudes (level 3 = ±6 mm / ±12°, mixed with yaw and tilt rather than
-this curve's one-axis-at-a-time sweep), does not say this curve reads too pessimistic — if
-anything the by-level numbers came back lower than pre-correction at the smaller levels, the
-opposite of what an earlier revision of this page claimed. The curve is kept as history because no
-replacement single-axis sweep has been measured, not because the by-level result vouches for it
-either way. 100 episodes per point, one misalignment axis at a time, exact magnitude in a random
-direction, level 0 dynamics, no randomization
+**Scripted baseline curve** (target for the learned press) — predates the servo-encoder correction
+and was not re-run here (2 200 episodes, ~36 minutes at one process); read it as history, not
+current behaviour. The by-level table just above, re-measured after the correction at similar
+misalignment magnitudes (level 3 = ±6 mm / ±12°, mixed with yaw and tilt rather than this curve's
+one-axis-at-a-time sweep), does not vouch for this curve either way: if anything the by-level
+numbers came back lower than pre-correction at the smaller levels, not higher, so a reader should
+not take the by-level result as confirming this curve still reads correctly. The curve is kept as
+history because no replacement single-axis sweep has been measured. 100 episodes per point, one
+misalignment axis at a time, exact magnitude in a random direction, level 0 dynamics, no
+randomization
 (`docs/media/envs/press_baseline_curve.png`; raw counts
 `runs/press_baseline/curve.json`; 1 451 s on six processes):
 
@@ -574,9 +576,12 @@ first reaches 10 ticks. There is no early termination condition (`terminated()` 
 - **Scripted-controller success against noise, age and producer** is a token-pipeline property,
   not this environment's, covered in [Perception](06-perception.md), "From tokens to a target:
   AlignFromTokens." Even at zero token noise the scripted controller does not reach 100 %: this
-  task only ever gets one vision reading per episode (see `align_env.py`'s module docstring), so a
-  loose brick that keeps settling physically after that one reading leaves the controller aimed at
-  a stale target on some seeds; success falls off further as noise grows, from a modest floor at
+  task only ever gets one vision reading per episode (see the comment above `SUCCESS_TOL_POS` in
+  `align_env.py`), and the tool's own approach then contacts and shoves the loose brick out from
+  under that one reading on about half of 20 measured seeds (a near approach, not a touchdown --
+  contact starts around 27-32 mm out, tick 44-47 of 150, on the bad-cluster seeds checked), so the
+  controller commits to a target the brick no longer occupies; success falls off further as noise
+  grows, from a modest floor at
   0-2 mm to zero at 8 mm.
 - **No policy has been trained to convergence.** `configs/train/align.yaml`'s budget is 600k steps
   (hours-long); only smoke-budget checkpoints exist, so there is no learned-vs-scripted comparison

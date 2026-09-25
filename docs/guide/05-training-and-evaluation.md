@@ -338,18 +338,22 @@ needs the same config against a persistent run directory:
 import json
 from pathlib import Path
 
+import numpy as np
+
 from tests.rl.test_sac_asym import make_pendulum
-from brick_builder.rl.sac_asym import SACConfig, train
+from brick_builder.rl.sac_asym import SACConfig, evaluate, train
 from brick_builder.rl.ppo_asym import plot_learning_curve
 
 cfg = SACConfig(n_envs=4, total_steps=8_000, seed=0, async_envs=False, warmup_steps=300,
                  batch_size=256, buffer_size=50_000, utd_ratio=1.0, lr_actor=1e-3,
                  lr_critic=1e-3, gamma=0.98, hidden_critic=(128, 128))
 run_dir = Path("runs/pendulum_sac_figure")
-train(make_pendulum, cfg, run_dir)
+ckpt_path = train(make_pendulum, cfg, run_dir)
 history = json.loads((run_dir / "returns.json").read_text())
 plot_learning_curve(history, Path("docs/media/rl/sac_pendulum_learning_curve.png"),
-                     title="SAC learning curve")
+                     title="Pendulum learning curve (SAC)")
+results = evaluate(ckpt_path, make_pendulum, episodes=10, seed=1000)
+mean_return = float(np.mean([r.ret for r in results]))  # the -167.7 quoted below
 ```
 
 ![SAC Pendulum learning curve](../media/rl/sac_pendulum_learning_curve.png)
@@ -365,11 +369,12 @@ below).
 > This run (and the plot above) already includes the fix to
 > `_flush_n_step`'s truncation handling (a time-limit truncation no longer stores `done=1` and
 > drops the bootstrap the way a true termination does; it now stores `done=0` and bootstraps
-> from the episode's real final observation). Two earlier measurements bracket it and are kept
-> for the history: pre-fix, **-168.3** over 69.2 s; a first post-fix check at the same seed and
-> config, **-168.0**, not carried forward to the plot at the time.
-> This run is that replacement. The number barely moved across all three (this toy task's return
-> is not sensitive to the fix); PPO's own number below did change materially.
+> from the episode's real final observation). Two earlier measurements are kept for the history,
+> both close to this run's **-167.7**, not bracketing it: pre-fix, **-168.3** over 69.2 s; a first
+> post-fix check at the same seed and config, **-168.0**, not carried forward to the plot at the
+> time. This run's -167.7 is marginally better than both. The number barely moved across all
+> three (this toy task's return is not sensitive to the fix); PPO's own number below did change
+> materially.
 
 `tests/rl/test_sac_asym.py::test_update_throughput_on_brick_builder_sized_networks` measures
 `sac_update`'s own cost directly (random tensors, no environment stepping) at the observation/action
@@ -409,15 +414,20 @@ back — see its comment):
 import json
 from pathlib import Path
 
+import numpy as np
+
 from tests.rl.test_ppo_asym import make_pendulum
-from brick_builder.rl.ppo_asym import PPOConfig, plot_learning_curve, train
+from brick_builder.rl.ppo_asym import PPOConfig, evaluate, plot_learning_curve, train
 
 cfg = PPOConfig(n_envs=8, n_steps=1024, epochs=10, minibatches=32, lr=1e-3, gamma=0.9,
                 total_steps=400_000, seed=0, async_envs=False, ent_coef=0.0)
 run_dir = Path("runs/pendulum_ppo_figure")
-train(make_pendulum, cfg, run_dir)
+ckpt_path = train(make_pendulum, cfg, run_dir)
 history = json.loads((run_dir / "returns.json").read_text())
-plot_learning_curve(history, Path("docs/media/rl/pendulum_learning_curve.png"))
+plot_learning_curve(history, Path("docs/media/rl/pendulum_learning_curve.png"),
+                     title="Pendulum learning curve (PPO)")
+results = evaluate(ckpt_path, make_pendulum, episodes=10, seed=1000)
+mean_return = float(np.mean([r.ret for r in results]))  # the -229.3 quoted below
 ```
 
 ![Pendulum learning curve](../media/rl/pendulum_learning_curve.png)
@@ -461,32 +471,34 @@ budget (`--sync-envs --n-envs 4 --total-steps 6144`, i.e. 6 PPO updates — a fe
 
 The scripted-baseline row is re-measured (2026-09-25, after the servo-encoder correction:
 `PressEnv(level=0, misalign=None, dr=True)`, `scripted_action`, seeds 10000-10019, matching
-`scripts/eval.py --actor scripted`'s own seeding). It moved from 16/20 to 4/20, not up — an
-earlier revision of this page reported 20/20 here and attributed the change to the same
-(incorrect) mechanism as the press-vs-oracle table in
-[Environments](04-environments.md#measured-numbers-press): that number came from a measurement
-bug (`evaluate_point()` forces an exact zero misalignment instead of drawing from level 0's own
-box), not from this row's own methodology, and did not survive a corrected re-measurement either.
-The real result: the corrected arm's precise tracking removes the lucky backlash-creep seating
-the old 16/20 depended on (see [Environments](04-environments.md#measured-numbers-press) for the
-fuller explanation, measured on the by-level table there), and nothing replaces it, so the
-scripted floor is now lower, not higher. **The 6-update smoke checkpoint row is not re-run**:
-reproducing it means training a PPO policy on `PressFromHeld-v0`, an arm environment, which is not
-done here. Read the two rows as no longer comparable — the checkpoint's 15/20 predates the
-correction, the baseline's 4/20 does not, and their overlapping-looking Wilson intervals are not
-evidence the checkpoint learned anything, since both rows are separately small-sample and now
-measure different arms. Six PPO updates moving the actor's weights off their random init is still
-all that row checks: the training path (`scripts/train.py` -> `PressFromHeld-v0` ->
-`scripts/eval.py`) runs end to end, not that the residual policy has learned anything. A real run
-needs `press.yaml`'s full budget (or several times it — see open issues) before the sweep
-comparison (`scripts/eval.py --sweep press-misalign`) means anything.
+`scripts/eval.py --actor scripted`'s own seeding). It moved from 16/20 to 4/20, not up. Part of
+that gap may not be the servo correction alone: a separate measurement bug was found and fixed in
+the press-vs-oracle table in [Environments](04-environments.md#measured-numbers-press)
+(`evaluate_point()` forces an exact `(lateral, yaw)` pair instead of drawing from the level's own
+box), and that table's own corrected numbers came back lower than pre-correction at levels 0 and
+2, not higher. One candidate contributor for this row too, consistent with (not established by)
+that table's own yaw finding: the corrected arm's tighter tracking now delivers whatever
+misalignment `dr=True` draws as commanded, with less of the old uncorrected tracking error
+available to accidentally cancel it -- not confirmed directly against this row's own methodology.
+**The 6-update smoke checkpoint row is not re-run**: reproducing it means training a PPO policy on
+`PressFromHeld-v0`, an arm environment, which is not done here. Read the two rows as no longer
+comparable — the checkpoint's 15/20 predates the correction, the baseline's 4/20 does not, and
+their Wilson intervals do not overlap ([0.081, 0.416] against [0.531, 0.888]); that gap is not
+evidence the checkpoint learned anything either, since both rows are separately small-sample and
+now measure different arms, not the same task at two skill levels. Six PPO updates moving the
+actor's weights off their random init is still all that row checks: the training path
+(`scripts/train.py` -> `PressFromHeld-v0` -> `scripts/eval.py`) runs end to end, not that the
+residual policy has learned anything. A real run needs `press.yaml`'s full budget (or several
+times it — see open issues) before the sweep comparison (`scripts/eval.py --sweep press-misalign`)
+means anything.
 
 ## AlignFromTokens: measured results
 
 Same story, `configs/train/align.yaml`, same tiny smoke budget (6 PPO updates): 0/20 successes at
 the default 3 mm / 5 deg tolerance, against the scripted (zero-residual) go-to-token controller's
 own 2/20 at the same seeds — both small-sample noise around a genuinely hard threshold (measured
-effect of token noise, age and producer: `brick_builder/envs/align_env.py`'s module docstring).
+effect of token noise, age and producer: the comment above `SUCCESS_TOL_POS` in
+`brick_builder/envs/align_env.py`).
 `align.yaml`'s real budget is 600,000 steps.
 
 ## Open issues
