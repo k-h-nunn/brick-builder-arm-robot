@@ -416,7 +416,9 @@ ground-truth target sequences:
 | Align | Held blue brick and the blue brick under it one blue region, not two | No Align measurement for 40 ticks; Transport ends at a scene-state error of 10.34 mm, the press step logs 14.42 mm, and the brick does not seat |
 
 `make_campaign_video.py` draws a dash in the Scene-state error [mm] and Prediction error [mm]
-readouts for a step that has returned no measurement, and a gap in each readout's trace over it.
+readouts for a step that has returned no measurement. Scene-state error is the strip's only
+plotted readout, so a gap opens in its trace over that step; Prediction error is a plain number
+cell with no trace of its own.
 Release, Retract and Verify are measured in relative mode (the placed brick against the
 baseplate and the bricks already placed) and returned none on the recorded run. Each cycle has
 two Press the brick down steps: the press with the brick in the jaws, then, after Release, a

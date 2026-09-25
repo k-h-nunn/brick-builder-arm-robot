@@ -298,7 +298,7 @@ As the placement video, with these changes:
 | Command | Title line under the panels |
 | Press force [N] | Live value; a dash when the arm is not pushing down on the brick |
 | Scene-state error [mm] | A dash in a step that has returned no measurement; a gap in the trace over that step |
-| Prediction error [mm] | A dash in a step that has returned no prediction; a gap in the trace over that step |
+| Prediction error [mm] | A dash in a step that has returned no prediction; a plain number cell, not plotted, so there is no trace to gap |
 
 ## Results
 
@@ -306,9 +306,10 @@ Recorded run: both bricks seated on target. First brick on the plate, lateral er
 depth error 0.00 mm. Second brick on the first (`lower_bodies` = the first brick), lateral error
 0.10 mm, depth error 0.00 mm, bottom face 0.44 mm below the nominal layer-1 height.
 
-Release, Retract and Verify returned no scene-state measurement on any tick of this run, and
-the Scene-state error [mm] and Prediction error [mm] readouts show a dash through them, with a
-gap in each trace over the same steps; see
+Release, Retract and Verify returned no scene-state measurement on any tick of this run. The
+Scene-state error [mm] readout -- the strip's only plotted trace -- shows a dash through them,
+with a gap in the trace over the same steps; the Prediction error [mm] readout, a plain number
+cell with no trace of its own, shows a dash there too; see
 [Closed-loop control, Two-brick recording](../guide/12-closed-loop-control.md#two-brick-recording).
 
 Task `stack_2` on seeds 0-9, both cycles pick-and-place, each in its own world, ground truth
