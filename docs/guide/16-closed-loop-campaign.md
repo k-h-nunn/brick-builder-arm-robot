@@ -43,9 +43,9 @@ The campaign deploys every round to its own directory unconditionally. A campaig
 only the rounds that already won would never collect the states a losing round visits, and those
 are the states the next round is relabelled on. Whether a round earned the checkpoints the
 repository *ships* is a separate question, and every round's table answers it in the **Would
-ship** column: that is what `action.learn.rounds.deploy_if_better` would have decided -- the
-learned inverse at least matching the analytic baseline on every task, not winning on one and
-losing on another.
+ship** column: the same rule `action.learn.rounds.deploy_if_better` uses -- the learned inverse
+at least matching the analytic baseline on every task, not winning on one and losing on another --
+applied to whichever tasks the round measured.
 
 ## The task set
 
@@ -71,8 +71,8 @@ blue 2x2. The compiler has no pronouns, so the second brick names the first by c
 The second brick goes to the left-hand neighbour (column 3, row 4; 154 mm from the base). The
 right-hand neighbour (column 7, row 4; 218 mm) lies outside the 100-200 mm band over which the
 gripper's downward force was characterised: on five seeds there, lateral placement landed within
-0.02-0.29 mm of the cell on every seed, and the press reached full insertion depth on one of the
-five; on the other four it stopped 0.43-4.50 mm short.
+0.02-0.29 mm of the cell on four of them (not separately measured on the fifth), and the press
+reached full insertion depth on one of the five; on the other four it stopped 0.43-4.50 mm short.
 
 The second cycle's world carries the first brick on the plate; so does the nominal plate its
 target sequence is recorded against (`record_ideal(..., placed=...)`) and so do the twins its
@@ -177,11 +177,12 @@ analytic baseline described in [The loop](#the-loop).
 | 0 | learned | shipped | 1/10 | 2-40 % | 9/20 | 0.07 | 3.67 | 0.55 | 185 | -- | meets |
 | 5 | learned | r5 | 2/10 | 6-51 % | 12/20 | 0.07 | 4.17 | 0.45 | 162 | 20444 | yes |
 
-`Would ship` is what `action.learn.rounds.deploy_if_better` would have decided about the pair the
-repository ships: `yes` when the round's learned inverse matched the fixed analytic baseline on
-every task it was measured on, `meets` when it matched on this task but not on all of them, `no`
-when it did not match here. The campaign deploys every round to its own weights directory
-whatever this says.
+`Would ship` applies the same rule `action.learn.rounds.deploy_if_better` uses --
+`yes` when the round's learned inverse matched the fixed analytic baseline on every task it was
+measured on, `meets` when it matched on this task but not on all of them, `no` when it did not
+match here -- to whichever tasks the round measured. `deploy_if_better` itself is not called by
+the campaign, and its own default task pair does not cover `build_2`, which this column does. The
+campaign deploys every round to its own weights directory whatever this says.
 
 ### Cost per round
 
@@ -198,28 +199,28 @@ whatever this says.
 
 | Round | Task | Seated on target cell | Failures |
 |---|---|---|---|
-| 0 | build 2 | 1/10 | partial seat=6; seated on the wrong cell=2; stalled with an error it can see=1 |
-| 0 | pick and place | 7/10 | partial seat=1; seated on the wrong cell=1; stalled with an error it can see=1 |
+| 0 | build 2 | 1/10 | partial seat=6;seated on the wrong cell=2;stalled with a tracked error=1 |
+| 0 | pick and place | 7/10 | partial seat=1;seated on the wrong cell=1;stalled with a tracked error=1 |
 | 0 | placement | 10/10 | none |
-| 1 | pick and place | 3/10 | partial seat=3; seated on the wrong cell=3; stalled with an error it can see=1 |
-| 1 | placement | 5/10 | stalled with an error it can see=5 |
-| 2 | pick and place | 5/10 | partial seat=2; seated on the wrong cell=2; stalled with an error it can see=1 |
-| 2 | placement | 9/10 | stalled with an error it can see=1 |
-| 3 | pick and place | 7/10 | partial seat=2; stalled with an error it can see=1 |
-| 3 | placement | 6/10 | stalled with an error it can see=4 |
+| 1 | pick and place | 3/10 | partial seat=3;seated on the wrong cell=3;stalled with a tracked error=1 |
+| 1 | placement | 5/10 | stalled with a tracked error=5 |
+| 2 | pick and place | 5/10 | partial seat=2;seated on the wrong cell=2;stalled with a tracked error=1 |
+| 2 | placement | 9/10 | stalled with a tracked error=1 |
+| 3 | pick and place | 7/10 | partial seat=2;stalled with a tracked error=1 |
+| 3 | placement | 6/10 | stalled with a tracked error=4 |
 | 4 | pick and place | 7/10 | seated on the wrong cell=3 |
 | 4 | placement | 9/10 | partial seat=1 |
-| 5 | build 2 | 2/10 | partial seat=5; seated on the wrong cell=2; stalled with an error it can see=1 |
-| 5 | pick and place | 9/10 | stalled with an error it can see=1 |
+| 5 | build 2 | 2/10 | partial seat=5;seated on the wrong cell=2;stalled with a tracked error=1 |
+| 5 | pick and place | 9/10 | stalled with a tracked error=1 |
 | 5 | placement | 10/10 | none |
 
 ![Closed-loop success against training round [%]](../media/campaign/campaign_success.png)
 
 ![One-step prediction error against training round [mm]](../media/campaign/campaign_prediction_error.png)
 
-![Learned inverse against the analytic one, held-out ticks](../media/campaign/campaign_action_error.png)
+![Action error against the analytic inverse [mm/tick, deg/tick]](../media/campaign/campaign_action_error.png)
 
-![Log accumulated by round](../media/campaign/campaign_data.png)
+![Training data by round [ticks, episodes]](../media/campaign/campaign_data.png)
 
 Both tasks dip in round 1 and recover by round 5. Pick-and-place goes 7/10 (round 0) to 3/10
 (round 1, the campaign's low point, Wilson 11-60 %), then 5/10, 7/10, 7/10, and 9/10 at round 5,
@@ -228,12 +229,14 @@ matching the fixed analytic baseline (9/10, 60-98 %). Placement goes 10/10 to 5/
 and round 5, goes from 1/10 (2-40 %) to 2/10 (6-51 %) seated, bricks on target 9/20 to 12/20.
 
 Two-sided Fisher exact tests against the fixed analytic baseline (10/10 on `placement`, 9/10 on
-`pick_and_place`) find round 1 the only round that differs from it at the 5 % level on either
-task: `placement` 5/10 against 10/10, p = 0.033; `pick_and_place` 3/10 against 9/10, p = 0.020. No
-other round reaches p < 0.05 on either task; `placement` round 3 (6/10 against 10/10) comes
-closest, at p = 0.087. Overlapping Wilson intervals at n = 10 do not by themselves rule out a
-significant difference and are not evidence of one; the Fisher tests above are what this page's
-significance claims rest on.
+`pick_and_place`) find round 1 the only round that differs from it at the uncorrected 5 % level on
+either task: `placement` 5/10 against 10/10, p = 0.033; `pick_and_place` 3/10 against 9/10,
+p = 0.020. No other round reaches p < 0.05 on either task; `placement` round 3 (6/10 against
+10/10) comes closest, at p = 0.087. These are twelve round-versus-baseline tests (rounds 0-5 on
+both tasks), none corrected for running more than one: at a Bonferroni threshold of
+0.05 / 12 = 0.0042, neither round-1 result clears it, so nothing on this page is significant once
+that correction is applied. Overlapping Wilson intervals at n = 10 do not by themselves rule out a
+significant difference and are not evidence of one.
 
 Median one-step prediction error does not move the same way on the two tasks. On `placement` it
 is lowest at round 0 (0.17 mm, F shipped) and round 3 (0.19 mm), and highest at round 1
@@ -242,19 +245,23 @@ is lowest at round 0 (0.17 mm, F shipped) and round 3 (0.19 mm), and highest at 
 Neither task's prediction error falls monotonically with more data.
 
 The learned inverse's disagreement with the analytic teacher (`campaign_action_error.png`) is
-measured on each round's own held-out ticks: the 15 % of episodes that round's own training run
+measured on each round's own held-out ticks: a 15 % split by episode that round's own training run
 did not use. That sample is smaller and different at every round -- 449 ticks at round 1, up to
-2642 (the whole log) at round 5 -- so the analytic answer's own size on it also varies (0.54 to
-0.89 mm/tick in x across rounds 1-4) and the raw RMS millimetre numbers are not directly
-comparable round to round. Scaled by that round's own baseline, the learned inverse's error falls
-from round 1 to round 5 on all three axes -- x 36 % to 21 % of the baseline, y 31 % to 16 %, spin
-47 % to 23 % -- with a small, non-monotonic rise at one or two intermediate rounds rather than a
-smooth curve.
+2642 at round 5, about 13 % of that round's 20444-tick log -- so the analytic answer's own size on
+it also varies (0.54 to 0.89 mm/tick in x across rounds 1-4) and the raw RMS millimetre numbers
+are not directly comparable round to round. Scaled by that round's own baseline, the learned
+inverse's error on `y` falls in every round, 31 % to 16 % of the baseline. On `x` and `spin` the
+lowest round is round 4, not round 5: `spin` falls from 47.0 % (round 1) to 20.4 % (round 4) and
+rises to 23.2 % at round 5; `x` falls to 21.0 % at round 4 (after a small round 2-to-3 rise,
+24.2 % to 24.7 %) and rises again to 21.2 % at round 5 -- the same last-round direction as `spin`,
+not a smooth curve on either axis.
 
 Whether a round would ship, by the rule in [The loop](#the-loop) -- the learned inverse's seated
 fraction at least matching the fixed analytic baseline on every task the round measured -- only
-round 5 does, and the `Would ship` column above is `action.learn.rounds.deploy_if_better`'s own
-answer. Round 0 (the shipped pair) fails only on `pick_and_place` (7/10 against 9/10); `placement`
+round 5 does. The `Would ship` column above applies the same rule
+`action.learn.rounds.deploy_if_better` uses; `deploy_if_better` itself is not called here, and its
+own default task pair does not cover `build_2`, which this column does. Round 0 (the shipped
+pair) fails only on `pick_and_place` (7/10 against 9/10); `placement`
 (10/10) and `build_2` (1/10 against 1/10) both meet. Rounds 1-4 fail on both `placement` and
 `pick_and_place` in every round measured: `placement` 5/10, 9/10, 6/10, 9/10 and `pick_and_place`
 3/10, 5/10, 7/10, 7/10, all below the baseline's 10/10 and 9/10. Round 5 is the only round that
