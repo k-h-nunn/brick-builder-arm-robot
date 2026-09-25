@@ -553,7 +553,9 @@ class Campaign:
         rows = []
         for index in sorted(int(k) for k in self.state["rounds"]):
             record = self._round(index)
-            ship = record.would_ship or {}
+            # Recomputed from the stored scores, so a round scored before a gate fix reads right.
+            ship = self.would_ship(index, record.scores, version=record.version)
+            self.state["rounds"][str(index)]["would_ship"] = ship
             for name, row in sorted(record.scores.items()):
                 would = ""
                 if row["inverse"] == "learned":
@@ -682,11 +684,14 @@ def _read_csv(path: Path) -> list[EpisodeRecord]:
                 vision_ticks=int(row["vision_ticks"] or 0), wall_s=_f(row["wall_s"]),
                 replanned=row["replanned"] in ("True", "true", "1"))
             for i in range(int(row["n_bricks"] or 0)):
+                # Two numbers on the plate, three when the cell names a layer.
                 cell = row[f"brick{i}_cell"].split(",")
                 record.bricks.append(BrickRecord(
-                    index=i, cell=(int(cell[0]), int(cell[1])),
+                    index=i, cell=tuple(int(v) for v in cell),
                     seated=row[f"brick{i}_seated"] == "True",
                     at_target_cell=row[f"brick{i}_at_cell"] == "True", connected=False,
+                    # A file written before the column existed scored no layer: read as true.
+                    at_target_layer=row.get(f"brick{i}_at_layer", "") in ("", "True"),
                     lateral_mm=_f(row[f"brick{i}_lateral_mm"]),
                     depth_error_mm=_f(row[f"brick{i}_depth_error_mm"]), tilt_deg=float("nan"),
                     replanned=row[f"brick{i}_replanned"] == "True"))

@@ -162,6 +162,25 @@ class PlaceConfig:
 
     hover: float = 0.020
     low: float = 0.006
+
+    neighbour_clear: float = 0.002
+    """Align hover clearance over a flush neighbour's stud tops [m].
+
+    The default hover is 20 mm over the seat; a flush neighbour's stud tops are 23.7 mm over it,
+    which puts the align pose 3.7 mm below them. On `build_2`'s second cycle, without this
+    clearance, the held brick's wall touched the neighbour during `Transport`, 0.4 mm under its
+    roof, and stayed in contact through the 4 s align dwell. With a flush neighbour the hover is
+    the neighbour's stud tops plus this clearance, and the descent onto the cell is vertical.
+    """
+
+    neighbour_bias: float = 0.0003
+    """Aim offset away from a flush neighbour [m].
+
+    Two bricks on adjacent cells are 32 mm apart and 31.8 mm across: 0.1 mm of air a side, below
+    the loop's lateral floor. With the aim 0.3 mm off the cell, away from the neighbour, the
+    studs' 0.5 mm chamfer guides the brick instead of the neighbour's wall, and the studs centre
+    it on the cell as it seats.
+    """
     align_hold: float = 4.0
     """Seconds the script stands still at the align pose. In the nominal world nothing happens;
     in the real one this is where the feedback does its work."""
@@ -430,7 +449,7 @@ class Script:
         else:
             yield from self._hold("Transport", 0.2, grip=g.grip_closed)
 
-        yield from self._move("Transport", g.place_tcp(cfg.hover), speed=cfg.travel_speed,
+        yield from self._move("Transport", g.place_tcp(g.hover), speed=cfg.travel_speed,
                               grip=g.grip_closed, spin=0.0)
         yield from self._hold("Align", cfg.align_hold)
         yield from self._move("Press the brick down", g.place_tcp(cfg.low),
@@ -460,6 +479,43 @@ class Script:
         yield from self._hold("Verify", 1.0)
 
 
+def flush_away(target, nx: int, ny: int, placed) -> np.ndarray:
+    """Unit vector pointing away from the bricks standing flush against the target cell.
+
+    Read off the goal -- which bricks the plate is supposed to carry -- and not off the world:
+    this is nominal task knowledge like the cell itself. Only the target's own layer counts,
+    because a brick a layer down is what the new one seats on rather than something it can be
+    pressed against. Zero when nothing stands flush.
+    """
+    layer = int(target[2]) if len(target) > 2 else 0
+    x0, y0 = int(target[0]), int(target[1])
+    x1, y1 = x0 + int(nx) - 1, y0 + int(ny) - 1
+    away = np.zeros(2)
+    for p in placed:
+        if int(p.z) != layer:
+            continue
+        px1, py1 = p.x + p.w - 1, p.y + p.h - 1
+        side_by_side = not (p.y > y1 or py1 < y0)
+        end_to_end = not (p.x > x1 or px1 < x0)
+        if side_by_side and p.x == x1 + 1:
+            away[0] -= 1.0
+        if side_by_side and px1 == x0 - 1:
+            away[0] += 1.0
+        if end_to_end and p.y == y1 + 1:
+            away[1] -= 1.0
+        if end_to_end and py1 == y0 - 1:
+            away[1] += 1.0
+    norm = float(np.linalg.norm(away))
+    return away / norm if norm else away
+
+
+def align_hover(cfg: PlaceConfig, spec, has_neighbour: bool) -> float:
+    """Align dwell height over the seat [m]: `cfg.hover`, or above a flush neighbour's studs."""
+    if not has_neighbour:
+        return float(cfg.hover)
+    return float(max(cfg.hover, spec.height + spec.stud_h + cfg.neighbour_clear))
+
+
 @dataclass
 class Geometry:
     """Nominal task knowledge: where things are supposed to be and how big the tool is.
@@ -469,22 +525,48 @@ class Geometry:
     """
 
     twin_scene: Scene
-    target: tuple[int, int]
+    target: tuple[int, int] | tuple[int, int, int]
+    """The target cell: the footprint's minimum corner in studs, and the stacking layer.
+
+    A two-element target is layer 0, which is what every single-brick task asks for.
+    """
+
     held: HeldBrick
     cfg: PlaceConfig
 
     def __post_init__(self) -> None:
         spec = self.twin_scene.cfg.spec
         self.spec = spec
+        self.layer = int(self.target[2]) if len(self.target) > 2 else 0
         self.grasp = (self.twin_scene.grasp if self.twin_scene.grasp is not None
                       else grasp_pose(self.held.nx, self.held.ny, spec))
         cx = self.target[0] + (self.held.nx - 1) / 2.0
         cy = self.target[1] + (self.held.ny - 1) / 2.0
         self.cell_nominal = cell_world(self.twin_scene, cx, cy)
-        self.seat_bottom = float(self.cell_nominal[2])
-        self.carry_z = self.seat_bottom + 0.045 + float(self.grasp.pos_in_tcp[2])
+        self.plate_top = float(self.cell_nominal[2])
+        # Where the held brick's bottom face ends up. On the baseplate that is the plate's own
+        # top face; one layer up it is a brick height above it, because the brick underneath is
+        # what it seats on. Every height the script derives -- the hover, the low dwell, the
+        # press, the clearance and the push on the roof -- is measured from here, so a target
+        # that names a layer moves the whole descent with it instead of aiming at the plate.
+        self.seat_bottom = self.plate_top + self.layer * spec.height
+        # Which way to lean off the cell, and how high to dwell, when a brick already stands
+        # flush against it. Both are zero-effect on a cell with nothing beside it.
+        self.away = flush_away(self.target, self.held.nx, self.held.ny,
+                               self.twin_scene.cfg.placed)
+        self.has_neighbour = bool(np.any(self.away))
+        self.bias = self.away * self.cfg.neighbour_bias
+        self.hover = align_hover(self.cfg, spec, self.has_neighbour)
+        # The carry has two jobs: clear whatever is standing on the plate, and be no lower than
+        # the hover it descends from. At layer 0 the first is what binds and this is the height
+        # it has always been.
+        self.carry_z = (max(self.plate_top + 0.045, self.seat_bottom + self.hover)
+                        + float(self.grasp.pos_in_tcp[2]))
+        # Over the plate's centre, looking at the whole build, so it is the plate's own top face
+        # this stands off -- not the cell's seat, which on an upper layer would put the empty
+        # jaws out past the arm's reach for no gain.
         self.view_tcp = np.array([NOMINAL_PLATE_XY[0], NOMINAL_PLATE_XY[1],
-                                  self.seat_bottom + 0.058])
+                                  self.plate_top + 0.058])
         self.grip_closed = (gripper_command(self.twin_scene)
                             if self.twin_scene.grasp is not None
                             else jaw_angle_for_clearance(self.grasp.contact_point,
@@ -497,7 +579,8 @@ class Geometry:
 
     def place_tcp(self, height: float) -> np.ndarray:
         return tcp_for_brick(
-            [self.cell_nominal[0], self.cell_nominal[1], self.seat_bottom + height],
+            [self.cell_nominal[0] + self.bias[0], self.cell_nominal[1] + self.bias[1],
+             self.seat_bottom + height],
             0.0, self.grasp,
         )
 
@@ -530,6 +613,10 @@ def record_ideal(cfg: PlaceConfig, *, seed: int = 0, target=TARGET_CELL,
     reference bricks the single-brick tasks use. A build whose second brick goes down beside
     the first has to record against a plate that already carries it, or the run's own view of
     the brick it just placed matches nothing in the recording.
+
+    `target` is `(x, y)` on the baseplate, or `(x, y, layer)` for a brick that goes on top of
+    one already there. The layer is what the script's heights are measured from, so a stacked
+    placement has to carry it here as well as in `placed`.
     """
     from .worlds import build_nominal_world
 
@@ -541,7 +628,7 @@ def record_ideal(cfg: PlaceConfig, *, seed: int = 0, target=TARGET_CELL,
     # and the observed one, where it cancels instead of steering.
     world = WorldAdapter(scene, rng=np.random.default_rng(seed), build_decode=build_decode,
                          source=source)
-    geometry = Geometry(scene, (int(target[0]), int(target[1])), held, cfg)
+    geometry = Geometry(scene, tuple(int(v) for v in target), held, cfg)
     if cfg.pick:
         geometry.supply_nominal = supply_nominal_xy(scene)
 

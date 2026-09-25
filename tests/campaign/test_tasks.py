@@ -8,8 +8,8 @@ from __future__ import annotations
 import pytest
 
 from brick_builder.campaign.tasks import (
-    BASE_PLACED, BUILD_COMMAND, CSV_FIELDS, EVAL_SEEDS, FIRST_PERFORM_SEED, TASKS, BrickRecord,
-    EpisodeRecord, build_goal, failure_class, perform_seeds,
+    BASE_PLACED, BUILD_COMMAND, CSV_FIELDS, EVAL_SEEDS, FIRST_PERFORM_SEED, STACK_COMMAND, TASKS,
+    BrickRecord, EpisodeRecord, build_goal, failure_class, ideal_key, perform_seeds,
 )
 
 
@@ -30,12 +30,10 @@ def _record(**kw) -> EpisodeRecord:
 
 
 def test_the_build_command_compiles_to_two_bricks_on_the_bottom_layer() -> None:
-    """One English command, two placements, and both reachable by the existing geometry.
+    """One English command, two placements side by side on the bottom layer.
 
-    The action layer places on the plate's own top face, so a stacked second brick would need a
-    seat height it has no way to express; the campaign's build is two bricks side by side. Both
-    cells are inside the 100-200 mm band the gripper's downward force was characterised over,
-    which the right-hand neighbour at 218 mm is not.
+    Both cells are inside the 100-200 mm band the gripper's downward force was characterised
+    over, which the right-hand neighbour at 218 mm is not.
     """
     goal = build_goal(BUILD_COMMAND)
     placements = goal.placements
@@ -43,6 +41,18 @@ def test_the_build_command_compiles_to_two_bricks_on_the_bottom_layer() -> None:
     assert [(p.x, p.y, p.z) for p in placements] == [(4, 3, 0), (2, 3, 0)]
     assert {p.colour for p in placements} == {"blue"}
     assert {(p.h, p.w) for p in placements} == {(2, 2)}
+
+
+def test_the_stack_command_compiles_to_one_brick_on_top_of_the_other() -> None:
+    """Same first placement as the build, the second on the same cell one layer up."""
+    placements = build_goal(STACK_COMMAND).placements
+    assert [(p.x, p.y, p.z) for p in placements] == [(4, 3, 0), (4, 3, 1)]
+    assert {p.colour for p in placements} == {"blue"}
+    assert {(p.h, p.w) for p in placements} == {(2, 2)}
+    spec = TASKS["stack_2"]
+    assert spec.cells == ((4, 3, 0), (4, 3, 1))
+    assert [spec.layer(c) for c in range(spec.cycles)] == [0, 1]
+    assert spec.placed_before(1)[-1] == placements[0]
 
 
 def test_the_build_command_is_refused_when_it_does_not_compile() -> None:
@@ -59,12 +69,15 @@ def test_remaining_steps_drives_the_re_plan() -> None:
     assert goal.remaining_steps([first])[0].placement == goal.steps[1].placement
 
 
-def test_the_task_set_is_three_tasks() -> None:
-    assert list(TASKS) == ["placement", "pick_and_place", "build_2"]
+def test_the_task_set_is_four_tasks() -> None:
+    """`stack_2` last, so the three older tasks keep their performing-seed offsets."""
+    assert list(TASKS) == ["placement", "pick_and_place", "build_2", "stack_2"]
     assert TASKS["placement"].cycles == 1 and not TASKS["placement"].pick
     assert TASKS["pick_and_place"].cycles == 1 and TASKS["pick_and_place"].pick
     assert TASKS["build_2"].cycles == 2 and TASKS["build_2"].pick
     assert TASKS["build_2"].command == BUILD_COMMAND
+    assert TASKS["stack_2"].cycles == 2 and TASKS["stack_2"].pick
+    assert TASKS["stack_2"].command == STACK_COMMAND
     assert BASE_PLACED and all(p.z == 0 for p in BASE_PLACED)
 
 
@@ -89,6 +102,16 @@ def test_performing_seeds_are_deterministic() -> None:
 
 
 # ------------------------------------------------------------------------------------ the record ---
+
+
+def test_the_recording_cache_key_names_the_cell_the_layer_and_the_hover() -> None:
+    """A cached target sequence is replayed only for the cell and the hover it was made for."""
+    build, stack = TASKS["build_2"], TASKS["stack_2"]
+    assert ideal_key(build, 0, 3, "ideal") == "build_2_c0_s3_ideal_x4y3z0_h20.0"
+    # Two flush neighbours beside the second cell: the dwell stands over their studs.
+    assert ideal_key(build, 1, 3, "ideal") == "build_2_c1_s3_ideal_x2y3z0_h25.7"
+    # One layer up, the brick below is what it seats on, not a neighbour.
+    assert ideal_key(stack, 1, 3, "cnn") == "stack_2_c1_s3_cnn_x4y3z1_h20.0"
 
 
 def test_an_episode_succeeds_only_when_every_brick_is_on_its_cell() -> None:

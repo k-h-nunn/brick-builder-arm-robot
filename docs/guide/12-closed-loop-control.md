@@ -285,6 +285,148 @@ moving under the measurement, not the inverse. The residual form reaches the sam
 on different seeds (1, 2 and 6 against the analytic's 3, 4 and 9), so on this task adding a
 learned term to the analytic one neither helps nor hurts.
 
+### Stacked placements
+
+A target cell is `(x, y)` on the baseplate or `(x, y, layer)`; a two-element target is layer 0.
+`Geometry` measures every height of the descent from the seat, the held brick's bottom face at
+full insertion:
+
+```
+seat = plate top + layer * 19.2 mm
+```
+
+TCP heights above the table [mm], baseplate 3.0 mm thick, DUPLO 2x2 19.2 mm tall with 4.5 mm
+studs:
+
+| Height | Layer 0 | Layer 1 |
+|---|---|---|
+| Seat, the held brick's bottom face | 3.0 | 22.2 |
+| Align hover, 20 mm up | 39.0 | 58.2 |
+| Low dwell, 6 mm up | 25.0 | 44.2 |
+| Press target | 19.0 | 38.2 |
+| Release clearance | 53.4 | 72.6 |
+| Foot on the roof, for the push | 34.7 | 53.9 |
+| Carry | 64.0 | 64.0 |
+| Verify pose | 61.0 | 61.0 |
+
+The carry is the higher of 45 mm above the plate and the align hover; the verify pose is fixed
+above the plate's top face. Layer 0 heights are unchanged. Layers 0 and 1 are the ones run and
+tested; the formula gives heights for layer 2 and up, but the fixed verify pose (61.0 mm) is
+below the stud tops of a three-high stack (65.1 mm). Without the layer term, a layer-1
+target put the held brick's bottom face 3.7 mm below the lower brick's stud tops at the align
+hover and the press target 19.2 mm inside the lower brick.
+
+`verify_placement` scores the layer: `at_target_layer` holds when the brick's bottom face is
+within half a brick height (9.6 mm) of the height the layer names, and `lower_bodies` lists the
+bodies whose studs the brick is on. The check runs on every layer, layer 0 included. A brick sent
+to layer 1 that lands on the plate beside the lower brick passes the lateral and depth checks
+and fails this one, and so does a brick sent to the plate that ends on top of another brick;
+the failure class is `seated on the wrong layer`. The campaign's CSV writes a layer-1 cell as
+`x,y,1` and the layer score as `brick{i}_at_layer`; a file written before that column existed
+reads back as on the layer.
+
+### Flush neighbour
+
+Two 2x2 bricks on adjacent cells are 32.0 mm apart and 31.8 mm wide, 0.1 mm of air a side. When
+the goal has a brick on the target's layer flush against the target cell (read from
+`scene.cfg.placed`, not from the world), `Geometry` changes two heights and the aim:
+
+| Parameter | Value | Effect |
+|---|---|---|
+| `PlaceConfig.neighbour_clear` | 2.0 mm | Align hover raised from 20.0 to 25.7 mm above the seat, above the neighbour's stud tops (23.7 mm) |
+| `PlaceConfig.neighbour_bias` | 0.3 mm | Aim offset away from the neighbour; the stud chamfer, not the neighbour's wall, guides the brick |
+
+A brick one layer down is not a neighbour. `build_2`'s second cell, (2, 3), has two: the first
+brick at +x and the yellow 2x4 at +y.
+
+The campaign's cache of recorded target sequences is keyed by task, cycle, seed, source, cell,
+layer and align hover, e.g. `build_2_c1_s0_ideal_x2y3z0_h25.7`. A recording made for another
+cell, or before the raised hover, is not replayed; it is recorded again under the new name.
+
+### Two-brick builds, seeds 0-9
+
+Ground-truth scene model, analytic inverse, one target sequence per seed and cycle. In both
+tasks both cycles are pick-and-place. As in the campaign, each cycle runs in its own world, built
+with the earlier cycle's brick placed nominally on its cell, so "whole build" is the conjunction
+of two separately scored cycles, not one continuous build: on seed 4 the first cycle is 0.42 mm
+short and the second cycle still seats, on a nominally placed first brick. The re-plan was off:
+with the ground-truth scene model a re-run rebuilds the same world from the same seed, and none
+of the 99 bricks the campaign re-planned in rounds 0-5 (92 episodes,
+`results/campaign/closed_loop/episodes.csv`) ended on target.
+
+| Task | Command | Cycle 1 seated on target | Cycle 2 seated on target | Whole build | Wilson 95 %, whole build |
+|---|---|---|---|---|---|
+| `stack_2` | `put a blue 2x2 at column 5 row 4 then put a blue 2x2 on top of the blue brick` | 9/10 | 10/10 | 9/10 | 60-98 % |
+| `build_2` | `put a blue 2x2 at column 5 row 4 then put a blue 2x2 left of the blue brick` | 9/10 | 1/10 | 1/10 | 2-40 % |
+
+Wilson 95 % per cycle: 9/10 is 60-98 %, 10/10 is 72-100 %, 1/10 is 2-40 %.
+
+Cycle 1 has the same target, (4, 3, 0), in both tasks and reproduces per seed to 0.01 mm.
+Seed 4 misses in both: 0.42 mm short of full depth against the 0.3 mm tolerance.
+
+`stack_2`, cycle 2, (4, 3, 1): seated on all ten; lateral error 0.11-0.34 mm, tilt
+0.95-2.76 deg, bottom face 0.27-0.70 mm below the nominal layer-1 height.
+
+`build_2`, cycle 2, (2, 3, 0): seated on seed 8 only. Eight of the nine misses are on the cell
+(lateral 0.04-2.00 mm) and 0.53-4.50 mm short of full depth at 0.73-3.58 deg tilt; seed 1 is on
+the neighbouring cell (16.33 mm, 4.29 deg). The brick is pressed between two flush neighbours
+and stops tilted. The campaign's round-0 evaluation, on the tree before the flush-neighbour hover
+and aim, had the same count for the second brick, 1/10, on seed 1.
+
+Reproduction, 20 episodes in one process, 44.7 min at nice 19 and two threads:
+
+```bash
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=2 \
+  python -m brick_builder.campaign.runner --tasks stack_2 build_2 --seeds 0-9 --no-replan \
+    --out results/campaign/stacked_builds_rerun/evaluate.jsonl
+```
+
+One `evaluate` job per task and seed, ground-truth scene model, analytic inverse and prediction
+rule, target sequences cached in `ideals/` beside `--out`; one JSON line per episode is appended
+to `--out`, so the command writes to a fresh directory rather than to the published
+`results/campaign/stacked_builds/evaluate.jsonl`. The measured run used a job file with the
+same 20 jobs.
+
+### Two-brick recording
+
+The recording [Two-brick stack video](../demos/videos.md#two-brick-stack-video) (seed 0, the
+`stack_2` command) is not the measured `stack_2` task. Both of its cycles run in one world:
+cycle 1 starts with the first brick in the jaws and is a placement, as in the placement task;
+cycle 2 is a pick-and-place of the second brick onto the first. The control input is the
+ground-truth scene model; the panels show the convolutional scene model's output beside ground
+truth.
+
+The convolutional scene model as the control input was run headless in the recording's world
+only (`scripts/make_campaign_video.py --task stack_2 --seed S --cnn-drives [--targets truth]
+--probe`, one run per seed); `stack_2` with `--source cnn` on seeds 0-9 was not evaluated.
+
+| Target sequences recorded with | Seeds | Result |
+|---|---|---|
+| ground-truth scene model | 0, 1 | first brick seated; second brick not seated, 61.2 mm (seed 0) and 94.6 mm (seed 1) off its cell |
+| convolutional scene model | 1, 5 | first brick not seated |
+| convolutional scene model | 0, 2, 3 | run stopped at cycle 2's Lift: the twin showed 0 reference blobs to line up on |
+
+The same arrangement with the `build_2` command, seed 8, ground-truth target sequences: neither
+brick seated. Two perception failures, read off the panels in cycle 2 on seed 0 with
+ground-truth target sequences:
+
+| Step | Scene model output | Effect |
+|---|---|---|
+| Lift | White 2x4 on the table not segmented | No reference blob: no estimate of the brick in the jaws; with target sequences recorded through the model, the twin has nothing to line up on and the run stops |
+| Align | Held blue brick and the blue brick under it one blue region, not two | No Align measurement for 40 ticks; the press starts from a scene-state error of 14.6 mm and the brick does not seat |
+
+In the recording, the Scene-state error [mm] and Prediction error [mm] readouts show a dash in a
+step that has returned no measurement, and the Scene-state error trace has a gap over it.
+Release, Retract and Verify are measured in relative mode (the placed brick against the
+baseplate and the bricks already placed) and returned none on the recorded run. Each cycle has
+two Press the brick down steps: the press with the brick in the jaws, then, after Release, a
+press on the brick's top with the jaws closed, measured against the recorded frame. The last
+values of the second, 2.03 mm (cycle 1) and 2.30 mm (cycle 2), are the tracking error of that
+press, not the placed brick's offset from its cell, which `verify_placement` puts at 0.07 mm
+(first brick) and 0.10 mm (second brick) lateral with 0.00 mm depth error. The file on disk
+predates the Prediction error dash and the trace gap; see
+[Two-brick stack video](../demos/videos.md#two-brick-stack-video).
+
 ### Remedies
 
 Each tried once, on the placement task, against the same recordings.

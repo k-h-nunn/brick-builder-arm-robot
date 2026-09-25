@@ -6,6 +6,7 @@ CSV round trip, the columns each round asks for and that a finished phase is not
 
 from __future__ import annotations
 
+import csv
 import json
 
 from brick_builder.campaign.campaign import (
@@ -100,6 +101,42 @@ def test_the_episode_csv_round_trips(tmp_path) -> None:
             == summarize_records(records)["build_2 | learned | F analytic"]["seated_on_target"])
 
 
+def test_a_brick_on_the_wrong_layer_stays_a_miss_through_the_csv(tmp_path) -> None:
+    record = EpisodeRecord(task="stack_2", seed=0, phase="evaluate", round_index=0,
+                           inverse="analytic", predictor="analytic", inverse_version="",
+                           predictor_version="", source="ideal")
+    lower = BrickRecord(index=0, cell=(4, 3, 0), seated=True, at_target_cell=True,
+                        connected=True, lateral_mm=0.1, depth_error_mm=0.0, tilt_deg=0.0)
+    upper = BrickRecord(index=1, cell=(4, 3, 1), seated=True, at_target_cell=True,
+                        connected=True, lateral_mm=0.1, depth_error_mm=0.0, tilt_deg=0.0,
+                        at_target_layer=False)
+    record.bricks = [lower, upper]
+    assert not record.success
+
+    back = _read_csv(_write_csv(tmp_path / "evaluate.csv", [record]))[0]
+    # Layer 0 is written as the two plate numbers, a higher layer as three.
+    assert [b.cell for b in back.bricks] == [(4, 3), (4, 3, 1)]
+    assert [b.at_target_layer for b in back.bricks] == [True, False]
+    assert [b.on_target for b in back.bricks] == [True, False]
+    assert not back.success
+
+
+def test_a_csv_without_the_layer_column_reads_as_on_the_layer(tmp_path) -> None:
+    records = _records("placement", "analytic", 1, n=1)
+    path = _write_csv(tmp_path / "old.csv", records)
+    with path.open(newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    fields = [k for k in rows[0] if k not in ("brick0_at_layer", "brick1_at_layer")]
+    with path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    assert "at_layer" not in path.read_text()
+    back = _read_csv(path)[0]
+    assert back.bricks[0].at_target_layer
+    assert back.success
+
+
 def test_a_finished_phase_is_not_run_again(tmp_path) -> None:
     campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
     assert campaign._done("r1.perform") is None
@@ -158,7 +195,62 @@ def test_the_prediction_rules_are_paired_on_one_task(tmp_path) -> None:
     assert [c["tasks"] for c in paired if c["predictor"] == "analytic"] == [("placement",)]
 
 
+def test_an_evaluation_outside_a_campaign_builds_its_own_job_list(tmp_path) -> None:
+    from brick_builder.campaign.runner import _parse, evaluation_jobs
+
+    args = _parse(["--tasks", "stack_2", "build_2", "--seeds", "0-9", "--no-replan",
+                   "--out", str(tmp_path / "evaluate.jsonl")])
+    jobs = evaluation_jobs(args.tasks, range(10), cache=tmp_path / "ideals", replan=args.replan)
+    assert len(jobs) == 20
+    assert {(j["task"], j["seed"]) for j in jobs} == {
+        (t, s) for t in ("stack_2", "build_2") for s in range(10)}
+    assert all(j["phase"] == "evaluate" and j["inverse"] == "analytic" and not j["replan"]
+               and j["source_name"] == "ideal" for j in jobs)
+
+
 # -------------------------------------------------------------------------------- would it ship ---
+
+
+def _baseline_round(campaign: Campaign) -> None:
+    """Round 0: analytic 10/10 on placement and 9/10 on pick and place."""
+    campaign.score_round(0, "shipped",
+                         _records("placement", "analytic", 10)
+                         + _records("pick_and_place", "analytic", 9))
+
+
+def test_a_round_below_the_analytic_baseline_on_one_task_would_not_ship(tmp_path) -> None:
+    """Gate over every task: one task short of the baseline, no ship."""
+    campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
+    _baseline_round(campaign)
+    record = campaign.score_round(
+        1, "r1", _records("placement", "learned", 10, predictor="learned", round_index=1)
+        + _records("pick_and_place", "learned", 7, predictor="learned", round_index=1))
+    ship = record.would_ship
+    assert ship["tasks"]["placement"] == {"learned": "10/10", "analytic": "10/10",
+                                          "meets": True}
+    assert ship["tasks"]["pick_and_place"] == {"learned": "7/10", "analytic": "9/10",
+                                               "meets": False}
+    assert ship["ship"] is False
+    assert ship["version"] == "r1"
+
+
+def test_the_summary_recomputes_a_stored_would_ship_verdict(tmp_path) -> None:
+    """Summary CSV verdict from the stored scores, not the stored verdict."""
+    campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
+    _baseline_round(campaign)
+    campaign.score_round(
+        1, "r1", _records("placement", "learned", 10, predictor="learned", round_index=1)
+        + _records("pick_and_place", "learned", 7, predictor="learned", round_index=1))
+    stale = {"ship": True, "version": "r1",
+             "tasks": {t: {"learned": "", "analytic": "", "meets": True}
+                       for t in ("placement", "pick_and_place")}}
+    campaign.state["rounds"]["1"]["would_ship"] = stale
+    with campaign.summarize().open() as fh:
+        rows = [r for r in csv.DictReader(fh) if r["round"] == "1"]
+    assert {r["task"]: r["would_ship"] for r in rows} == {"placement": "meets",
+                                                          "pick_and_place": "no"}
+    assert campaign.state["rounds"]["1"]["would_ship"]["version"] == "r1"
+
 
 
 def test_would_ship_reads_the_seated_key_the_scores_actually_carry(tmp_path) -> None:

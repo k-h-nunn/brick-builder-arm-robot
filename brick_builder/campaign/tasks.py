@@ -1,6 +1,6 @@
 """The tasks the campaign performs, and one episode of each, scored.
 
-Three tasks, all closed loop and all scored by `control.pick_place.verify_placement` reading the
+Four tasks, all closed loop and all scored by `control.pick_place.verify_placement` reading the
 simulator after the arm has left:
 
 | Task | Starts | Unknown to the controller |
@@ -8,11 +8,13 @@ simulator after the arm has left:
 | `placement` | brick already held | baseplate 4-8 mm, 2-3 deg |
 | `pick_and_place` | brick loose on the table | the above, and the brick 8-15 mm, 10-20 deg |
 | `build_2` | as above, twice | the above, per cycle |
+| `stack_2` | as above, twice, the second brick on the first | the above, per cycle |
 
-`build_2` is one English command compiled by `brick_builder.language` into two placements and
-executed as consecutive pick-and-place cycles. The goal's expected grid is checked after each
-cycle and `Goal.remaining_steps` decides what is left to do, which is what lets a failed
-placement be re-planned once.
+`build_2` and `stack_2` are each one English command compiled by `brick_builder.language` into
+two placements and executed as consecutive pick-and-place cycles. The goal's expected grid is
+checked after each cycle and `Goal.remaining_steps` decides what is left to do, which is what
+lets a failed placement be re-planned once. `stack_2` is not in a campaign's default task list;
+it is evaluated on its own (`--tasks stack_2`).
 
 Seeds 0-9 are the held-out evaluation set for every task and are never performed on; the
 performing rounds draw from a stream that starts far above them (`FIRST_PERFORM_SEED`).
@@ -57,6 +59,14 @@ placement landed within 0.02-0.29 mm of the cell on four of them (not separately
 fifth), and insertion depth reached full depth on one of the five and fell 0.43-4.50 mm short on
 the other four."""
 
+STACK_COMMAND = ("put a blue 2x2 at column 5 row 4 "
+                 "then put a blue 2x2 on top of the blue brick")
+"""The whole of `stack_2`, in English: `build_2`'s first placement and a second one a layer up.
+
+It compiles to `2x2 (4,3,0) blue` and `2x2 (4,3,1) blue`: the same cell one brick height higher,
+so the second cycle seats on the first brick's studs rather than on the plate.
+"""
+
 BASE_PLACED = (REF_YELLOW, REF_RED)
 """What is on the plate before the campaign starts: the two bricks the loop lines itself up on."""
 
@@ -73,8 +83,12 @@ class TaskSpec:
 
     name: str
     pick: bool
-    cells: tuple[tuple[int, int], ...]
-    """Target cells, minimum corner in integer studs, one per cycle."""
+    cells: tuple[tuple[int, ...], ...]
+    """Target cells, minimum corner in integer studs, one per cycle.
+
+    `(x, y)` or `(x, y, layer)`; a cell with no layer is on the baseplate. The layer is what
+    decides the height the script seats at, so a stacked build has to carry it here.
+    """
 
     command: str | None = None
     """The English command the cells came from, for the tasks that have one."""
@@ -82,6 +96,24 @@ class TaskSpec:
     @property
     def cycles(self) -> int:
         return len(self.cells)
+
+    def layer(self, cycle: int) -> int:
+        return cell_layer(self.cells[cycle])
+
+    def placement(self, cycle: int) -> Placement:
+        """The brick one cycle is sent to place, as the goal describes it."""
+        cell = self.cells[cycle]
+        return Placement(h=2, w=2, x=int(cell[0]), y=int(cell[1]), z=cell_layer(cell),
+                         colour="blue")
+
+    def placed_before(self, cycle: int) -> list[Placement]:
+        """The plate one cycle starts from: what was there plus the earlier cycles' bricks."""
+        return list(BASE_PLACED) + [self.placement(c) for c in range(cycle)]
+
+
+def cell_layer(cell) -> int:
+    """The stacking layer a target cell names; 0 when it names none."""
+    return int(cell[2]) if len(cell) > 2 else 0
 
 
 def build_goal(command: str = BUILD_COMMAND):
@@ -98,15 +130,22 @@ def build_goal(command: str = BUILD_COMMAND):
     return result.goal
 
 
-def _build_cells() -> tuple[tuple[int, int], ...]:
-    return tuple((p.x, p.y) for p in build_goal().placements)
+def _cells_for(command: str) -> tuple[tuple[int, int, int], ...]:
+    return tuple((p.x, p.y, p.z) for p in build_goal(command).placements)
 
 
 TASKS: dict[str, TaskSpec] = {
     "placement": TaskSpec("placement", pick=False, cells=(TARGET_CELL,)),
     "pick_and_place": TaskSpec("pick_and_place", pick=True, cells=(TARGET_CELL,)),
-    "build_2": TaskSpec("build_2", pick=True, cells=_build_cells(), command=BUILD_COMMAND),
+    "build_2": TaskSpec("build_2", pick=True, cells=_cells_for(BUILD_COMMAND),
+                        command=BUILD_COMMAND),
+    # Last, so the performing-seed streams of the three tasks above keep their offsets.
+    "stack_2": TaskSpec("stack_2", pick=True, cells=_cells_for(STACK_COMMAND),
+                        command=STACK_COMMAND),
 }
+
+STACK_TASK = TASKS["stack_2"]
+"""The two-brick tower."""
 
 
 def perform_seeds(task: str, round_index: int, n: int) -> list[int]:
@@ -123,7 +162,7 @@ class BrickRecord:
     """One brick of one episode, as the simulator reports it after the arm has left."""
 
     index: int
-    cell: tuple[int, int]
+    cell: tuple[int, ...]
     seated: bool
     at_target_cell: bool
     connected: bool
@@ -133,10 +172,16 @@ class BrickRecord:
     replanned: bool = False
     """True when this brick's cycle was run a second time after `remaining_steps` still listed it."""
 
+    at_target_layer: bool = True
+    """Target layer check: bottom face within half a brick height of the layer's height."""
+
+    height_error_mm: float = 0.0
+    """Bottom face, minus the height the target layer puts it at [mm]."""
+
     @property
     def on_target(self) -> bool:
-        """Seated on the cell it was sent to: the campaign's unit of success."""
-        return bool(self.seated and self.at_target_cell)
+        """Seated on the cell and the layer it was sent to: the campaign's unit of success."""
+        return bool(self.seated and self.at_target_cell and self.at_target_layer)
 
 
 @dataclass
@@ -181,10 +226,15 @@ class EpisodeRecord:
         row["n_bricks"] = len(self.bricks)
         for i in range(2):
             b = self.bricks[i] if i < len(self.bricks) else None
-            row[f"brick{i}_cell"] = "" if b is None else f"{b.cell[0]},{b.cell[1]}"
+            # The layer only appears when there is one, so a build on the plate writes the same
+            # two numbers it always has.
+            row[f"brick{i}_cell"] = (
+                "" if b is None else
+                f"{b.cell[0]},{b.cell[1]}" + (f",{b.cell[2]}" if cell_layer(b.cell) else ""))
             row[f"brick{i}_on_target"] = "" if b is None else b.on_target
             row[f"brick{i}_seated"] = "" if b is None else b.seated
             row[f"brick{i}_at_cell"] = "" if b is None else b.at_target_cell
+            row[f"brick{i}_at_layer"] = "" if b is None else b.at_target_layer
             row[f"brick{i}_lateral_mm"] = "" if b is None else round(b.lateral_mm, 4)
             row[f"brick{i}_depth_error_mm"] = "" if b is None else round(b.depth_error_mm, 4)
             row[f"brick{i}_replanned"] = "" if b is None else b.replanned
@@ -221,6 +271,8 @@ def failure_class(episode_failure: str, bricks: list[BrickRecord]) -> str:
     for b in bricks:
         if not b.at_target_cell:
             return "seated on the wrong cell"
+        if not b.at_target_layer:
+            return "seated on the wrong layer"
         if not b.seated:
             return "partial seat"
     return ""
@@ -271,7 +323,21 @@ def held_world(seed: int, placed):
 
 
 def ideal_key(spec: TaskSpec, cycle: int, seed: int, source: str) -> str:
-    return f"{spec.name}_c{cycle}_s{seed}_{source}"
+    """Cache name of one cycle's recorded target sequence.
+
+    Task, cycle, seed and source, plus what the recording is made for: the cell (x, y, layer)
+    and the align hover [mm]. A command that sends the cycle to another cell, or a geometry that
+    dwells at another height beside a flush neighbour, then records afresh instead of replaying
+    a sequence made for something else.
+    """
+    from ..action.place import PlaceConfig, align_hover, flush_away
+    from ..bricks.spec import DUPLO
+
+    cell = spec.cells[cycle]
+    x, y, layer = int(cell[0]), int(cell[1]), cell_layer(cell)
+    away = flush_away((x, y, layer), 2, 2, spec.placed_before(cycle))
+    hover = align_hover(PlaceConfig(pick=spec.pick), DUPLO, bool(np.any(away)))
+    return f"{spec.name}_c{cycle}_s{seed}_{source}_x{x}y{y}z{layer}_h{1e3 * hover:.1f}"
 
 
 def record_for(spec: TaskSpec, cycle: int, seed: int, *, source=None, cache: Path | None = None):
@@ -294,8 +360,7 @@ def record_for(spec: TaskSpec, cycle: int, seed: int, *, source=None, cache: Pat
             return pickle.load(fh)
 
     cfg = PlaceConfig(pick=spec.pick)
-    placed = list(BASE_PLACED) + [Placement(h=2, w=2, x=c[0], y=c[1], z=0, colour="blue")
-                                  for c in spec.cells[:cycle]]
+    placed = spec.placed_before(cycle)
     ideal, world = record_ideal(cfg, seed=seed, target=spec.cells[cycle], source=source,
                                 placed=placed)
     world.close()
@@ -368,7 +433,7 @@ def run_cycle(spec: TaskSpec, seed: int, cycle: int, placed, *, inverse: str = "
     try:
         for _ in episode.run():
             pass
-        centre = (cell[0] + 0.5, cell[1] + 0.5, 0)
+        centre = (cell[0] + 0.5, cell[1] + 0.5, cell_layer(cell))
         check = verify_placement(scene, brick, centre)
         monitor = getattr(scene, "monitor", None)
         damage = "" if monitor is None else str(monitor.worst_state_seen)
@@ -422,8 +487,7 @@ def run_episode(spec: TaskSpec, seed: int, *, phase: str = "evaluate", round_ind
     from ..language.goal import Goal
 
     goal = (build_goal(spec.command) if spec.command
-            else Goal.from_placements([Placement(h=2, w=2, x=c[0], y=c[1], z=0, colour="blue")
-                                       for c in spec.cells]))
+            else Goal.from_placements([spec.placement(c) for c in range(spec.cycles)]))
     record = EpisodeRecord(
         task=spec.name, seed=seed, phase=phase, round_index=round_index, inverse=inverse,
         predictor=predictor, inverse_version=inverse_version,
@@ -442,8 +506,7 @@ def run_episode(spec: TaskSpec, seed: int, *, phase: str = "evaluate", round_ind
         # and the physics does not: the recording, the twins the Jacobians are measured in and
         # the world all describe the same plate, which is what makes the second cycle's result
         # a measurement of the second cycle rather than of the first one's luck.
-        placed = list(BASE_PLACED) + [
-            Placement(h=2, w=2, x=c[0], y=c[1], z=0, colour="blue") for c in spec.cells[:cycle]]
+        placed = spec.placed_before(cycle)
         attempts = 0
         result = None
         while attempts < (2 if replan else 1):
@@ -459,8 +522,8 @@ def run_episode(spec: TaskSpec, seed: int, *, phase: str = "evaluate", round_ind
             attempts += 1
             check = result["check"]
             cell = spec.cells[cycle]
-            landed = Placement(h=2, w=2, x=cell[0], y=cell[1], z=0, colour="blue")
-            done = bool(check.seated and check.at_target_cell)
+            landed = spec.placement(cycle)
+            done = bool(check.seated and check.at_target_cell and check.at_target_layer)
             if done or not replan:
                 break
             # `remaining_steps` reads the plate, not the run: a brick that is not where the goal
@@ -469,16 +532,19 @@ def run_episode(spec: TaskSpec, seed: int, *, phase: str = "evaluate", round_ind
             if log is not None and attempts < 2:
                 log(f"    {spec.name} seed {seed} cycle {cycle}: "
                     f"{len(left)} step(s) outstanding, re-planning")
-            if not any(s.placement.x == cell[0] and s.placement.y == cell[1] for s in left):
+            if not any((s.placement.x, s.placement.y, s.placement.z)
+                       == (cell[0], cell[1], cell_layer(cell)) for s in left):
                 break
 
         check = result["check"]
-        on_target = bool(check.seated and check.at_target_cell)
+        on_target = bool(check.seated and check.at_target_cell and check.at_target_layer)
         record.bricks.append(BrickRecord(
             index=cycle, cell=spec.cells[cycle], seated=bool(check.seated),
             at_target_cell=bool(check.at_target_cell), connected=bool(check.connected),
             lateral_mm=float(check.lateral_mm), depth_error_mm=float(check.depth_error_mm),
-            tilt_deg=float(check.tilt_deg), replanned=attempts > 1))
+            tilt_deg=float(check.tilt_deg), replanned=attempts > 1,
+            at_target_layer=bool(check.at_target_layer),
+            height_error_mm=float(check.height_error_mm)))
         record.replanned |= attempts > 1
         for name, n in result["ticks_per_step"].items():
             record.ticks_per_step[name] = record.ticks_per_step.get(name, 0) + n
@@ -500,8 +566,7 @@ def run_episode(spec: TaskSpec, seed: int, *, phase: str = "evaluate", round_ind
                 else max(record.peak_wall_stress_MPa, stress))
 
         if on_target:
-            cell = spec.cells[cycle]
-            observed.append(Placement(h=2, w=2, x=cell[0], y=cell[1], z=0, colour="blue"))
+            observed.append(spec.placement(cycle))
 
     record.median_tracking_mm = (float(statistics.median(tracking)) if tracking
                                  else float("nan"))
