@@ -386,14 +386,17 @@ camera:
 
 **Read the report:** the camera section of the parameter table shows the vertical `fovy` MuJoCo
 will actually compile the camera with, computed for your resolution. None of the six experiments
-(`press-bench`, `seating-feasibility`, `force-map`, `grasp-hold`, `pick-and-place`) render an
-image or read the camera fields at all, so a `diagonal_fov_deg`-only entry from the quick version
-above has no feedback loop besides "does the number in the report look like what your lens
-actually does." `scripts/calibrate_camera.py`'s own printout (reprojection RMS, focal-length
-percent) is the real feedback loop for the proper version's `fx_px`/etc., and its `--simulate`
-mode's recovery-error table (guides 03 and 08) is how that pipeline's own accuracy was checked
-before trusting it on real photographs. If a vision-based task reads the camera model at runtime,
-this is where it comes from.
+render an image from the wrist camera; `seating-feasibility` and `force-map` (through
+`to_arm_config`) and `grasp-hold` and `pick-and-place` (through `to_scene_config`, which calls
+`to_arm_config`) do compile the `camera.*` fields into the scene's wrist camera even though they
+never render from it, so a wrong `fx_px`/etc. entry would still change what those experiments
+build, just not anything they check; `press-bench` reads no camera field. A `diagonal_fov_deg`-only
+entry from the quick version above therefore has no feedback loop besides "does the number in the
+report look like what your lens actually does." `scripts/calibrate_camera.py`'s own printout
+(reprojection RMS, focal-length percent) is the real feedback loop for the proper version's
+`fx_px`/etc., and its `--simulate` mode's recovery-error table (guides 03 and 08) is how that
+pipeline's own accuracy was checked before trusting it on real photographs. If a vision-based task
+reads the camera model at runtime, this is where it comes from.
 
 ---
 

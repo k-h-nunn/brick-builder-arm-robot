@@ -224,17 +224,21 @@ in pixels), lens distortion (`k1`/`k2`), and pose in the gripper frame are all f
 Every default reproduces the module constants above exactly (`WRIST_CAM_FOVY_DEG`,
 `WRIST_CAM_POS_IN_GRIPPER`, `WRIST_CAM_QUAT_IN_GRIPPER`) — building an `ArmConfig()` without
 touching `camera` compiles the identical wrist camera this module has always built; pinned by
-`tests/calib/test_camera_config.py`, which renders the default config against a hand-reconstructed
-copy of the pre-`CameraConfig` code path and checks the images match pixel for pixel (up to the GL
-rasterizer's own antialiasing noise, measured at ±1 on a handful of edge pixels even rendering the
-same compiled model twice) and, more strictly, that the two compiled models' `cam_*` fields are
-bit-for-bit equal. Setting any of `fx_px`/`fy_px`/`cx_px`/`cy_px` switches the compiled camera from
-MuJoCo's `fovy` model to its pixel-intrinsics model (`focal_pixel`/`principal_pixel`/`resolution`)
-instead — what a measured calibration produces. The pixel-intrinsics model's principal point is
-defined against MuJoCo's own camera-frame convention, mirrored left-right relative to this
-codebase's OpenCV-style `cx`/`cy`; a real bug caught while building this passed the offset straight
-through and rendered every off-centre `cx`/`cy` at `(width - 1) - cx`/`(height - 1) - cy`, the
-mirror image of what was asked for (`test_off_centre_principal_point_lands_on_the_requested_side`).
+`tests/calib/test_camera_config.py` two ways against `_legacy_build_arm_spec` (a hand-reconstructed
+copy of the pre-`CameraConfig` code path, kept only in the test file): rendered images match pixel
+for pixel (up to the GL rasterizer's own antialiasing noise, measured at ±1 on a handful of edge
+pixels even rendering the same compiled model twice), and, more strictly, the default config's
+`build_arm_spec` output and `_legacy_build_arm_spec`'s, both serialized with `mujoco.mj_saveModel`,
+compare byte-for-byte equal — the whole compiled model, not only the `cam_*` fields, with none of
+the pixel test's GL-noise tolerance. Setting any of `fx_px`/`fy_px`/`cx_px`/`cy_px` switches the
+compiled camera from MuJoCo's `fovy` model to its pixel-intrinsics model
+(`focal_pixel`/`principal_pixel`/`resolution`) instead — what a measured calibration produces.
+MuJoCo's `principal_pixel` offsets the sensor, not the image, so a positive offset shifts the
+*rendered* image the opposite way on both axes (the standard lens/sensor-shift duality, not an
+axis-convention mirror — MuJoCo's and OpenCV's camera-frame `x` both point right); a real bug
+caught while building this passed the offset straight through unnegated and rendered every
+off-centre `cx`/`cy` at `(width - 1) - cx`/`(height - 1) - cy`, the mirror image of what was asked
+for on each axis (`test_off_centre_principal_point_lands_on_the_requested_side`).
 The pixel-intrinsics model is also not runtime-equivalent to the `fovy` model: a compiled
 pixel-intrinsics camera's frustum does not respond to a later write to `model.cam_fovy`, which
 `render.domain_rand`'s fovy jitter and `perception.views`/`perception.backproject` all do on the
@@ -242,11 +246,21 @@ wrist camera (and `backproject.camera_geometry` assumes a centred principal poin
 none of those call sites know about `CameraConfig` yet, so a measured-intrinsics wrist camera run
 through one of them keeps whatever frustum it compiled with.
 `brick_builder.calib.camera.camera_config_from_params` builds one from a loaded parameter file's
-`camera.*` fields, switching to the pixel-intrinsics path only when at least one of
-`fx_px`/`fy_px`/`cx_px`/`cy_px` has `status: measured` in the file — the shipped default file
-carries plausible-looking values for all four (derived from `diagonal_fov_deg`, `status: assumed`)
-so a member reading it sees a number, not a blank, which would otherwise switch every default
-scene's wrist camera onto the pixel-intrinsics model even though nothing was actually calibrated.
+`camera.*` fields. Each of `fx_px`/`fy_px`/`cx_px`/`cy_px` only reaches the built config when that
+individual field has `status: measured` in the file — not "any of the four measured, so pass all
+four through": a file that only measured `fx_px` must build a config with `fy_px` still `None`
+(square pixels), not the default file's own unmeasured `fy_px` number silently standing in as if it
+were part of the same calibration. The mount pose (`mount_x_mm`/`_y_mm`/`_z_mm`/`_roll_deg`/
+`_pitch_deg`/`_yaw_deg`) is gated the same way, together, since one hand-eye calibration measures
+the whole pose: the built config's position/orientation come from the file's numbers only when at
+least one of those six is `status: measured`, and are `CameraConfig()`'s own defaults otherwise —
+not the default file's `assumed` mount numbers recomputed through degrees and trigonometry, which
+do not reproduce `WRIST_CAM_QUAT_IN_GRIPPER` to full precision (`mount_roll_deg`'s stored 3 decimal
+places are one order of magnitude coarser than the module constant's own 6-decimal literal) and so
+would silently compile the default scene's wrist camera fractionally off the constant it is meant
+to reproduce exactly. The shipped default file carries plausible-looking `assumed` values for every
+`camera.*` field regardless, so a member reading it sees a number, not a blank, without any of them
+switching a default scene's wrist camera onto the measured path.
 `brick_builder.params.to_arm_config` calls it to set `ArmConfig.camera`.
 
 **Calibration.** Implemented in `brick_builder/calib/camera.py` (checkerboard corner detection,
@@ -290,33 +304,41 @@ truth:
 
 (`.venv/bin/python -m pytest tests/calib/test_camera_sim.py -m slow`; seeds 0/1/2 respectively,
 `tsai` hand-eye method, 65 poses requested per case — `format_report_table`'s own output, pasted
-in here, not retyped by hand.)
+in here, not retyped by hand. This table predates the corner-detection fix described below and has
+not yet been re-run against it; the fix should lower every one of these numbers, most visibly the
+perturbed-pose row's, but by how much is not yet measured.)
 
-The 180° flip check correctly reports "not flipped" in every case (4-177°/2-180°/1-179° to the
-expected/expected-flipped pose respectively — nowhere near ambiguous;
+The 180° flip check correctly reports "not flipped" in every case (nowhere near ambiguous;
 `test_flipped_images_are_detected_by_the_180_degree_flip_check` renders a flipped set and confirms
 the check does fire). The perturbed-pose case's reprojection RMS and focal error are both worse
-than the other two cases' (1.021 px/6.15%, against 0.668-0.742 px/0.32-1.26%): on this rendered
-pose set, `cv2.calibrateCamera`'s five-coefficient distortion fit is the weaker step, not the
-hand-eye solve, and `solve_checkerboard_pose` uses that same fitted (not the true) camera matrix
-to get each view's checkerboard pose, so the intrinsics error propagates into the hand-eye solve
-and inflates its position/rotation error too. Re-solving the same detected corners and gripper
-poses with the *true* camera matrix instead of this case's fitted one recovers the position to
-within a few mm and the rotation to within a few degrees
-(`test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics`) — the closed-form
-`AX = XB` solver itself is not the hard part here. At this close a hover with the tool tilted, only
-a fraction of poses keep the board's outermost corner row clear of the gripper's own silhouette
-(`render_calibration_set`'s docstring); the script and the test both oversample to compensate
-rather than trusting every rendered pose to be usable.
+than the other two cases' (1.021 px/6.15%, against 0.668-0.742 px/0.32-1.26%). The root cause is
+not the intrinsics fit's own conditioning: given clean corners, `cv2.calibrateCamera` and the
+closed-form `AX = XB` hand-eye solve are both accurate (a real
+`cv2.calibrateHandEye` binding would not change this — see `HAS_CV2_HAND_EYE_BINDING`, which is a
+separate, honestly-documented gap). It traces to `find_corners`' `cv2.cornerSubPix` refinement: a
+single fixed 11x11-pixel search window, which also runs on real photographs, is too large on this
+pose set's foreshortened far rows, where adjacent squares are only about 10-15 px apart — the
+window then reaches past the neighbouring corner and the refined estimate is pulled toward it,
+by up to several pixels on the worst-affected rows. `solve_checkerboard_pose` uses that same
+corner-detection error (through whichever camera matrix it is given, fitted or true) to get each
+view's checkerboard pose, so it reaches the intrinsics fit and, through it, the hand-eye solve.
+`find_corners` now sizes its `cornerSubPix` window from each image's own detected corner spacing
+instead of a single fixed value (`brick_builder.calib.camera._corner_subpix_window`), capped below
+half the closest spacing per OpenCV's own guidance; this removes the failure mode on far rows
+without giving up the wider, steadier window near rows that can support it.
+`test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics` isolates the hand-eye
+solve from the intrinsics fit and checks its result against the injected perturbation itself; at
+this close a hover with the tool tilted, only a fraction of poses keep the board's outermost corner
+row clear of the gripper's own silhouette (`render_calibration_set`'s docstring); the script and
+the test both oversample to compensate rather than trusting every rendered pose to be usable.
 
 **This does not yet demonstrate resolving a real few-mm mount offset.** Every case's recovered
-position error (5.4-31.9 mm) is at or above both the pose perturbation being tested (5.4 mm) and
-the CAD-nominal mount pose's own prior uncertainty (`configs/params/default.yaml`'s
-`camera.mount_x_mm` etc., "about 3-5 mm"). What this table shows is that the pipeline runs end to
-end and recovers a camera in roughly the right place and orientation, with a working 180°-flip
-check — not that it can yet resolve a genuine few-mm mount offset from the CAD-nominal prior; that
-would need either a real `cv2.calibrateHandEye` binding or a better-conditioned intrinsics fit than
-this rendered pose set gets, neither attempted here.
+position error in the (not yet re-measured) table above is at or above both the pose
+perturbation being tested (5.4 mm) and the CAD-nominal mount pose's own prior uncertainty
+(`configs/params/default.yaml`'s `camera.mount_x_mm` etc., "about 3-5 mm"). What this table shows
+is that the pipeline runs end to end and recovers a camera in roughly the right place and
+orientation, with a working 180°-flip check — not that it can yet resolve a genuine few-mm mount
+offset from the CAD-nominal prior.
 
 **Lens.** The specified lens is the "~120°" wide-angle class, stated range 100-130° on the sensor
 **diagonal**. `WRIST_CAM_DIAGONAL_FOV_RANGE_DEG = (100.0, 130.0)` is that range (for domain

@@ -330,21 +330,23 @@ well-conditioned) at a default, a perturbed-pose (a few mm/degrees) and a pertur
 | perturbed pose (+4/-3/+2 mm, ~2°) | 35/65 | 1.021 | 6.15 | 31.85 | 1.515 |
 | perturbed fov (100° diagonal) | 22/65 | 0.742 | 0.32 | 5.42 | 0.968 |
 
-(`tsai`, seeds 0/1/2; the 180° flip check correctly reports "not flipped" in all three.) The
-perturbed-pose case's reprojection RMS and focal error are both worse than the other two cases'
-(1.021 px/6.15% against 0.668-0.742 px/0.32-1.26%): its checkerboard intrinsics fit, not the
-hand-eye solve, is the weaker step on this rendered pose set, and that error propagates into every
-per-view pose the hand-eye solve is given. Re-solving the same detected corners and gripper poses
-with the *true* camera matrix instead of this case's own fitted one recovers the perturbation to
-within a few mm/degrees (`docs/guide/03`'s wrist-camera section has the full account).
+(`tsai`, seeds 0/1/2; the 180° flip check correctly reports "not flipped" in all three. This table
+predates a corner-detection fix and has not yet been re-run against it -- see `docs/guide/03`'s
+wrist-camera section for the full account and why the perturbed-pose row is expected to improve.)
+The perturbed-pose case's reprojection RMS and focal error are both worse than the other two
+cases' (1.021 px/6.15% against 0.668-0.742 px/0.32-1.26%). The root cause is not the intrinsics
+fit's own conditioning, and a genuine `cv2.calibrateHandEye` binding would not change it: given
+clean corners both the intrinsics fit and the closed-form hand-eye solve are accurate. It traces
+to `find_corners`' checkerboard corner refinement using a single fixed search window that overruns
+neighbouring corners on this pose set's foreshortened far rows; `find_corners` now sizes that
+window from each image's own detected corner spacing instead.
 
 **This does not yet demonstrate resolving a real few-mm mount offset.** Every case's recovered
-position error (5.4-31.9 mm) is at or above both the perturbation being tested (5.4 mm) and the
-CAD-nominal mount pose's own prior uncertainty (`configs/params/default.yaml`, `camera.mount_x_mm`
-etc., "about 3-5 mm"). What is validated: the pipeline runs end to end, recovers a camera in
-roughly the right place and orientation, and the 180°-flip check works. Whether it can resolve a
-real few-mm mount offset once a genuine hand-eye binding or a better-conditioned intrinsics fit is
-in place is open.
+position error in the (not yet re-measured) table above is at or above both the
+perturbation being tested (5.4 mm) and the CAD-nominal mount pose's own prior uncertainty
+(`configs/params/default.yaml`, `camera.mount_x_mm` etc., "about 3-5 mm"). What is validated: the
+pipeline runs end to end, recovers a camera in roughly the right place and orientation, and the
+180°-flip check works.
 
 ## Findings from simulation to check on hardware
 
