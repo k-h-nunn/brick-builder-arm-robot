@@ -159,6 +159,15 @@ class ArmConfig:
     printed arm may be a different colour (unmeasured; see ``docs/guide/10``)."""
     primitive_collision: bool = True
     timestep: float = 0.002
+    camera: "CameraConfig" = None  # type: ignore[assignment]  # set to CameraConfig() below
+    """Wrist camera resolution, lens, distortion and mount pose; see :class:`CameraConfig`.
+    Declared ``None`` here only because :class:`CameraConfig` is defined after this class (it
+    reuses ``fovy_from_diagonal_fov`` and the ``WRIST_CAM_*`` constants); ``__post_init__`` below
+    fills in ``CameraConfig()`` so ``ArmConfig().camera`` is never actually ``None``."""
+
+    def __post_init__(self) -> None:
+        if self.camera is None:
+            object.__setattr__(self, "camera", CameraConfig())
 
 
 # ------------------------------------------------------------------------------- the servo law ---
@@ -561,6 +570,85 @@ WRIST_CAM_DISTORTION_K1_RANGE = (-0.35, -0.10)
 WRIST_CAM_DISTORTION_K2_RANGE = (0.0, 0.08)
 
 
+# --------------------------------------------------------------------------- camera: config object ---
+
+
+@dataclass(frozen=True)
+class CameraConfig:
+    """Everything about the wrist camera a caller may want to measure, randomize or dial in.
+
+    Two ways to specify the lens: ``diagonal_fov_deg`` (the vendor spec, converted to MuJoCo's
+    vertical ``fovy`` at ``resolution``) or measured pixel intrinsics -- ``fx_px``/``fy_px``/
+    ``cx_px``/``cy_px``, exactly what ``cv2.calibrateCamera`` returns. Leaving all four at
+    ``None`` (the default) compiles the camera from ``diagonal_fov_deg``; setting any one of them
+    switches the compiled camera to MuJoCo's pixel-intrinsics camera model instead (see
+    :func:`_add_sites_and_camera`), taking whichever of ``fx_px``/``fy_px`` is given (both default
+    to the other if only one is set, i.e. square pixels) and centring ``cx_px``/``cy_px`` on the
+    resolution if either is left at ``None``.
+
+    ``distortion_k1``/``distortion_k2`` are carried here for calibration and domain-randomization
+    callers to read back -- MuJoCo's pinhole camera has no lens-distortion model, so this module
+    does not apply them; ``render.domain_rand.PostProcessConfig`` is the image-space remap that
+    does (see the module docstring above ``WRIST_CAM_DISTORTION_K1_RANGE``).
+
+    ``pos_in_gripper``/``quat_in_gripper`` are the camera pose in the ``gripper`` body frame -- the
+    body the official SO-ARM100 wrist camera mount bolts to (see the mount-geometry derivation
+    above ``WRIST_CAM_POS_IN_GRIPPER``).
+
+    Every default reproduces the module constants above exactly, so building an :class:`ArmConfig`
+    without touching ``camera`` compiles the identical camera this module has always built (pinned
+    by ``tests/calib/test_camera_config.py``'s pixel-identity tests).
+    """
+
+    resolution: tuple[int, int] = WRIST_CAM_NOMINAL_RESOLUTION
+    diagonal_fov_deg: float = WRIST_CAM_DIAGONAL_FOV_DEG
+    fx_px: float | None = None
+    fy_px: float | None = None
+    cx_px: float | None = None
+    cy_px: float | None = None
+    distortion_k1: float = 0.5 * (WRIST_CAM_DISTORTION_K1_RANGE[0] + WRIST_CAM_DISTORTION_K1_RANGE[1])
+    distortion_k2: float = 0.5 * (WRIST_CAM_DISTORTION_K2_RANGE[0] + WRIST_CAM_DISTORTION_K2_RANGE[1])
+    pos_in_gripper: tuple[float, float, float] = tuple(float(v) for v in WRIST_CAM_POS_IN_GRIPPER)
+    quat_in_gripper: tuple[float, float, float, float] = tuple(float(v) for v in WRIST_CAM_QUAT_IN_GRIPPER)
+
+    @property
+    def uses_measured_intrinsics(self) -> bool:
+        """True once any of ``fx_px``/``fy_px``/``cx_px``/``cy_px`` overrides the diagonal fov."""
+        return any(v is not None for v in (self.fx_px, self.fy_px, self.cx_px, self.cy_px))
+
+    def resolved_intrinsics_px(self) -> tuple[float, float, float, float]:
+        """``(fx, fy, cx, cy)`` in pixels, filling in square-pixel/centred defaults.
+
+        Valid whether or not :attr:`uses_measured_intrinsics` is set -- when it is not, this is
+        the fx/fy/cx/cy a checkerboard calibration run against a *perfect* render of this config
+        would be expected to recover (centred principal point, square pixels, the diagonal fov's
+        implied focal length), which is what the simulated validation compares recovery against.
+        """
+        width, height = self.resolution
+        if self.uses_measured_intrinsics:
+            fx = self.fx_px if self.fx_px is not None else self.fy_px
+            fy = self.fy_px if self.fy_px is not None else self.fx_px
+        else:
+            fy = 0.5 * height / math.tan(math.radians(self.fovy_deg()) / 2.0)
+            fx = fy
+        cx = self.cx_px if self.cx_px is not None else 0.5 * (width - 1)
+        cy = self.cy_px if self.cy_px is not None else 0.5 * (height - 1)
+        return float(fx), float(fy), float(cx), float(cy)
+
+    def fovy_deg(self) -> float:
+        """Vertical fovy [deg] MuJoCo compiles for this config, at :attr:`resolution`.
+
+        From the measured focal length when :attr:`uses_measured_intrinsics`, else from
+        ``diagonal_fov_deg`` via :func:`fovy_from_diagonal_fov` -- the same formula
+        :data:`WRIST_CAM_FOVY_DEG` uses, so the default reproduces it exactly.
+        """
+        width, height = self.resolution
+        if self.uses_measured_intrinsics:
+            fy = self.fy_px if self.fy_px is not None else self.fx_px
+            return math.degrees(2.0 * math.atan(0.5 * height / fy))
+        return fovy_from_diagonal_fov(self.diagonal_fov_deg, width, height)
+
+
 # ------------------------------------------------------------------------------- the patching ---
 
 
@@ -779,7 +867,7 @@ def _add_pad(body, name: str, pad, cfg: ArmConfig) -> None:
     )
 
 
-def _add_sites_and_camera(spec: mujoco.MjSpec) -> None:
+def _add_sites_and_camera(spec: mujoco.MjSpec, camera_cfg: CameraConfig) -> None:
     gripper = spec.body(GRIPPER_BODY)
     tcp = tcp_position()
     gripper.add_site(
@@ -793,12 +881,41 @@ def _add_sites_and_camera(spec: mujoco.MjSpec) -> None:
         rgba=[0.1, 0.9, 0.2, 1.0],
     )
 
-    gripper.add_camera(
-        name=WRIST_CAM,
-        pos=WRIST_CAM_POS_IN_GRIPPER,
-        quat=WRIST_CAM_QUAT_IN_GRIPPER,
-        fovy=WRIST_CAM_FOVY_DEG,
-    )
+    pos = np.array(camera_cfg.pos_in_gripper, dtype=float)
+    quat = np.array(camera_cfg.quat_in_gripper, dtype=float)
+    if camera_cfg.uses_measured_intrinsics:
+        # MuJoCo's pixel-intrinsics camera model: `focal_pixel`/`principal_pixel` need a
+        # `sensor_size` to convert through, but any positive value works -- the physical sensor
+        # size cancels out of the fovy MuJoCo derives (pixel pitch = sensor_size / resolution,
+        # focal_length = focal_pixel * pixel_pitch, fovy = 2*atan(0.5*sensor_size/focal_length) =
+        # 2*atan(0.5*resolution/focal_pixel), independent of the sensor_size value chosen). See
+        # `tests/calib/test_camera_config.py::test_measured_intrinsics_path_reproduces_fovy`.
+        #
+        # `principal_pixel` is an *offset* from the frame's centre, not an absolute pixel
+        # coordinate, so it needs the same zero reference `resolved_intrinsics_px()`'s own
+        # centred default (and `configs/params/default.yaml`'s `cx_px`/`cy_px` notes) use --
+        # OpenCV's pixel-*centre* convention, `(width - 1) / 2` (319.5 at 640 px), not the
+        # frame-*edge* midpoint `width / 2` (320): the two differ by half a pixel, which a
+        # default (`cx_px` left at its centred value) must cancel to exactly zero offset, or
+        # every "centred" measured calibration would compile a camera off-centre by construction.
+        fx, fy, cx, cy = camera_cfg.resolved_intrinsics_px()
+        width, height = camera_cfg.resolution
+        gripper.add_camera(
+            name=WRIST_CAM,
+            pos=pos,
+            quat=quat,
+            resolution=[int(width), int(height)],
+            sensor_size=[1.0, 1.0],
+            focal_pixel=[fx, fy],
+            principal_pixel=[cx - 0.5 * (width - 1), cy - 0.5 * (height - 1)],
+        )
+    else:
+        gripper.add_camera(
+            name=WRIST_CAM,
+            pos=pos,
+            quat=quat,
+            fovy=camera_cfg.fovy_deg(),
+        )
 
 
 def build_arm_spec(cfg: ArmConfig = ArmConfig()) -> mujoco.MjSpec:
@@ -814,7 +931,7 @@ def build_arm_spec(cfg: ArmConfig = ArmConfig()) -> mujoco.MjSpec:
     _patch_joints(spec, cfg)
     _patch_print_color(spec, cfg)
     _replace_collision(spec, cfg)
-    _add_sites_and_camera(spec)
+    _add_sites_and_camera(spec, cfg.camera)
     _add_backlash(spec, cfg)
     return spec
 
