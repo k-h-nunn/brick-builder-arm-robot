@@ -237,14 +237,25 @@ print(perturbation_study(out_dir='results/twin')[0])"
 first step: ping every id, read the identity and safety registers, read `Present_Position` across
 each joint's own range with torque off, then one small commanded move per joint with the reading
 checked — a pass/fail table, one row per servo. The range read and the commanded move run one
-joint at a time, interleaved, so at most one joint is ever away from a moderate pose at once (a
-full-range sweep leaves a joint at its own extreme; trying to bring all six back from their own
-extremes at the same time can overload a servo carrying a still-drooped downstream chain — see the
-result below). Nothing here goes around `Bus.enable_torque`'s own gate (voltage window,
-temperature, a non-zero status byte): the commanded move calls it exactly like any other caller,
-and a gate failure fails every joint's row, the same as it would on the wire. Torque is written off
-before anything else runs, so a servo left energized from a previous session does not fight the
-range read.
+joint at a time, interleaved: joint `k`'s range read, then its commanded move, then it is driven
+back toward the centre of its own travel before joint `k + 1`'s range read starts, so a joint
+already checked does not sit near its own extreme while the next joint sweeps its full range next
+to it (that compounding used to let one joint's saturated loop drag a neighbour past its own
+calibrated limit through the kinematic chain). That parking step cannot rescue the joint currently
+under test, though: a full-range sweep leaves *that* joint at its own extreme, with no gravity
+feed-forward anywhere in this check, so a gravity-loaded joint's own commanded move can genuinely
+fail there on the arm's own weight alone — see the result below. Nothing here goes around
+`Bus.enable_torque`'s own gate (voltage window, temperature, a non-zero status byte): the commanded
+move calls it exactly like any other caller, and a gate failure fails every joint's row, the same
+as it would on the wire. Torque is written off before anything else runs, so a servo left energized
+from a previous session does not fight the range read.
+
+Torque is bus-wide: every `disable_torque()` call (before the first range read, and after every
+joint's own commanded move) drops holding torque on all six servos at once, not just the one under
+test. Against the virtual bus this costs at most one 20 ms free-fall tick, because nothing here
+steps physics except a written goal. On the real arm every one of those calls leaves the whole arm
+limp — support it (or have it resting on something that will not damage it) for the full self-test
+run, not only during the range reads.
 
 | Check | What | Against the virtual bus | Against real hardware |
 |---|---|---|---|
@@ -258,16 +269,24 @@ range read.
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python scripts/hardware/arm_selftest.py --virtual
 ```
 
-Against the virtual bus, seed 0: **5 of 6 joints pass** (`results/servo_bringup/selftest.json`).
-`elbow_flex` fails the commanded-move check — it cannot hold its own range-read extreme once
-torque comes back on, because at that point in the joint order the still-unswept wrist chain
-(`wrist_flex`, `wrist_roll`, `gripper`) is resting wherever gravity alone settled it after
-`reset_scene`, tens of degrees off zero and unpowered, and elbow's P gain has to support that
-weight on top of its own. That is a real property of a proportional-only loop with no gravity
-feed-forward at a demanding pose, not a bug in the check: this is what "does the loop respond, stay
-within its rating" is for, and it is answering honestly. `RealArmWorld`'s gravity feed-forward
-(the world adapters section above) is not in this raw self-test on purpose, the same way it is not
-in `servo_workspace_map.py` below.
+Against the virtual bus, seed 0: **4 of 6 joints pass** (`results/servo_bringup/selftest.json`).
+`shoulder_lift` and `elbow_flex` fail the commanded-move check — each is tested right after its own
+full-range sweep, which leaves it at its own calibrated extreme, and at that extreme the rest of
+the arm's weight is close to or beyond what its P gain can hold or move away from with no gravity
+feed-forward: `shoulder_lift` moves −2 % of the commanded step (essentially stuck), `elbow_flex`
+moves −219 % (its own loop overshoots, and readings pass 117° against a ±96.8° calibrated range —
+on real hardware that is the joint driving into its own mechanical stop, not a number to wave
+through). `wrist_flex` passes but close to the check's own 150 % ceiling (115 %). This is a real
+property of a proportional-only loop with no gravity feed-forward tested at a joint's own
+mechanical limit, not a bug in the check or an artifact of testing order — see
+`servo_selftest.py`'s module docstring for the mechanism and `tests/calib/test_servo_selftest.py`
+for the reproduction. `RealArmWorld`'s gravity feed-forward (the world adapters section above) is
+not in this raw self-test on purpose, the same way it is not in `servo_workspace_map.py` below.
+
+**On real hardware, do not treat this FAIL as routine.** A gravity-loaded joint's commanded-move
+check failing at its own range extreme means that joint is at or past what it can hold there —
+support the arm through the range read and the move for `shoulder_lift`, `elbow_flex` and
+`wrist_flex` in particular, and be ready to catch it.
 
 This is the longer report a teammate reads once before trusting the bus at all; its JSON (`--out`)
 is one of the two inputs the parameter-file fragment below is built from.
@@ -296,13 +315,13 @@ CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python scripts/hardware/servo_sy
 **Every arm joint, nominal virtual bus** (`ArmConfig()`: P = 16 at 7.4 V, `backlash_deg` 0.435
 half-range, `frictionloss` 0.0515 N·m, dead band 0 — `results/servo_bringup/sysid_<joint>.json`):
 
-| joint | gravity torque range | kp | friction | dead band + free play |
-|---|---|---|---|---|
-| shoulder_pan | 0 N·m (vertical axis) | not identifiable — raises | not identifiable | not identifiable |
-| shoulder_lift | 0.74 N·m | 9.32 vs 9.384, 0.7 % | 0.0149 vs 0.0515, 71 % low | 1.22° vs 0.87°, 41 % |
-| elbow_flex | 0.26 N·m | 9.48 vs 9.384, 1.0 % | 0.0221 vs 0.0515, 57 % low | 1.11° vs 0.87°, 28 % |
-| wrist_flex | 0.066 N·m | 7.81 vs 9.384, 17 % | 0.0236 vs 0.0515, 54 % low | 1.03° vs 0.87°, 19 % |
-| wrist_roll | 0.0026 N·m | not identifiable — raises | not identifiable | not identifiable |
+| joint | gravity torque range | kp | friction | dead band + free play (combined) | dead band split [ticks] | free play (split) [deg] |
+|---|---|---|---|---|---|---|
+| shoulder_pan | 0 N·m (vertical axis) | not identifiable — raises | not identifiable | not identifiable | not identifiable | not identifiable |
+| shoulder_lift | 0.74 N·m | 9.32 vs 9.384, 0.7 % | 0.0149 vs 0.0515, 71 % low | 1.22° vs 0.87°, 41 % | 0.0 vs true 0-9.2, correct sign (no pocket) | 1.22° (= combined, nothing subtracted) |
+| elbow_flex | 0.26 N·m | 9.48 vs 9.384, 1.0 % | 0.0221 vs 0.0515, 57 % low | 1.11° vs 0.87°, 28 % | 0.0, same reasoning as shoulder_lift | 1.11° (= combined, nothing subtracted) |
+| wrist_flex | 0.066 N·m | 7.81 vs 9.384, 17 % | 0.0236 vs 0.0515, 54 % low | 1.03° vs 0.87°, 19 % | 18.5, **spurious** (true dead band is 0 here) | 0.00° (100 % low — see below) |
+| wrist_roll | 0.0026 N·m | not identifiable — raises | not identifiable | not identifiable | not identifiable | not identifiable |
 
 `shoulder_pan` (a vertical axis: exactly zero gravity torque at every angle) and `wrist_roll` (the
 wrist mass sits a lever arm under a millimetre from the roll axis) fail with an explicit
@@ -311,58 +330,89 @@ wrist mass sits a lever arm under a millimetre from the roll axis) fail with an 
 happened to produce — this is the identifiability answer for those two joints: their own `kp` has
 to come from the self-test's P-register read, not from a droop line. Of the three joints the
 method does work on, `kp` recovers to within about 1 % on the two with the most gravity torque
-(`shoulder_lift`, `elbow_flex`) and to 17 % on `wrist_flex`, whose torque range is roughly an order
-of magnitude smaller — the fit is real there, just noisier. Friction is under-recovered on all
-three (54-71 % low) because the settling transient of each hold crosses the friction dead zone
-rather than stopping inside it; treat the fitted friction as a lower bound, not a measurement.
-Improving the friction fit needs a slower approach, which is the first thing to change if the
-number matters.
+(`shoulder_lift`, `elbow_flex`, both validated over 5 randomized draws below) and to 17 % on
+`wrist_flex` (single nominal draw only, not separately validated), whose torque range is roughly an
+order of magnitude smaller. Friction is under-recovered on all three (54-71 % low) because the
+settling transient of each hold crosses the friction dead zone rather than stopping inside it;
+treat the fitted friction as a lower bound, not a measurement. Improving the friction fit needs a
+slower approach, which is the first thing to change if the number matters.
+
+`wrist_flex`'s own dead-band split is the outlier worth flagging on its own: against the nominal
+virtual bus (true dead band 0), `fit_dead_band_ticks` fits an 18.5-tick pocket that is not there,
+which zeroes out the split's own free-play estimate (0.00° against a true 0.87°, 100 % low). This
+does not reach `arm.backlash_total_deg` — `servo_params.py` fills that field from the *combined*
+(unsplit) figure whenever `ServoFit.dead_band_reachable` is `False`, which it is here (registered
+dead band 0 ticks under nominal conditions), so the parameter fragment uses the combined column
+above (1.03° vs 0.87°, 19 %), not this split. It is still a real identifiability gap worth
+recording: `wrist_flex`'s own droop is small enough, relative to the dead bands this project
+randomizes, that neither the split nor (on a large enough draw) the droop-line `kp`/`friction` fit
+itself is backed by the same margin `shoulder_lift` and `elbow_flex` have — see the validation
+section below.
 
 ### Validation: 5 randomized draws
 
 `--validate N` draws `N` sets of `dynamics.kp`, `dynamics.frictionloss`, `dynamics.backlash_deg`
 and `command.error_deadband_ticks` from `brick_builder.scene.randomize` (`level=1.0`, the full
-published range), applies them with `randomize.apply` exactly as training does, and identifies
-`shoulder_lift` through each one. `kp`, friction, backlash and the dead band are single values
-shared across every servo (one firmware configuration, guide 10), so one gravity-loaded joint's
-recovery validates all three joints' worth of droop-line identification at once; `identify` runs
-with the nominal kinematic model here too (not the randomized scene's own link masses), so
-`dynamics.link_mass_scale`'s confound with kp shows up in the error below rather than being hidden:
+published range), applies them with `randomize.apply` exactly as training does, and identifies one
+named joint through each draw; `identify` runs with the nominal kinematic model here too (not the
+randomized scene's own link masses), so `dynamics.link_mass_scale`'s confound with kp shows up in
+the error below rather than being hidden. `kp`, friction, backlash and the dead band are single
+values shared across every servo (one firmware configuration, guide 10), but the *recovery error*
+below is only run on `shoulder_lift` — it does not automatically carry over to `elbow_flex` or
+`wrist_flex`, which fit against their own gravity torque and their own droop-to-dead-band margin
+(the per-joint table above already shows `wrist_flex`'s single-draw fit diverging from
+`shoulder_lift`'s and `elbow_flex`'s). Read this table as `shoulder_lift`'s own randomized-draw
+recovery, not a blanket number for every gravity-loaded joint:
 
 ```bash
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python scripts/hardware/servo_sysid.py \
     --validate 5 --joint shoulder_lift --seed0 1000
 ```
 
-| quantity | mean \|error\| over 5 draws | identifiable from the bus? |
+| quantity | mean \|error\| over 5 draws, `shoulder_lift` | identifiable from the bus? |
 |---|---|---|
-| kp | 6.1 % | yes — the droop line is the reliable part of this kit, including the link-mass confound |
+| kp | 6.1 % | yes, on `shoulder_lift` (validated) and, by the per-joint table's single-draw fit, `elbow_flex` — not separately validated on `wrist_flex` (below) |
 | friction | 63.4 % low | yes in principle, biased low in practice (see above) |
-| free play, from the raw (unsplit) ramp hysteresis | 12.7 % | yes, on a gravity-loaded joint — see below |
+| free play, from the raw (unsplit) ramp hysteresis | 12.7 % | yes, on a gravity-loaded joint whose droop clears the dead band — see below |
 | dead band (the split attempt, `fit_dead_band_ticks`) | 100 % (fits 0 every draw) | **no** |
 
-**Dead band.** Not identifiable on any joint this kit can fit kp on — the reason is which joints
-those are, not a sampling-rate limit. `fit_dead_band_ticks` looks for a zero-`Present_Load` pocket
-at the ramp's turning point (inside the firmware's dead band the duty cycle should read exactly
-zero — `servo_model.py`'s `_update_overload` sets `duty = 0.0` exactly whenever the position error
-sits inside the dead band), but on `shoulder_lift` every one of the 5 draws fits 0, over true dead
-bands of 3.4-9.2 ticks. Checked directly on an 8-tick dead band: the ramp's steady-state position
-error stays 19-46 ticks off target the whole way, never once inside ±8 — the dead band has zero
-effect on this joint's ramp, so there is no pocket to find, on any draw. The split does find a real
-pocket, tens of encoder ticks wide, on a joint with negligible gravity torque and a nonzero dead
-band — but that is `shoulder_pan` or `wrist_roll`, exactly the two joints this method cannot
-identify kp on either (above). No joint gives this kit a working dead-band split; fill
-`arm.servo_dead_band_counts` from the self-test's direct register read (26/27) instead — that
-register is the one number this kit reads rather than infers.
+**Dead band.** Not identifiable on `shoulder_lift` (validated over 5 draws) or, by the same
+mechanism, `elbow_flex` — not because of a sampling-rate limit but because gravity droop keeps the
+ramp's own position error outside the dead band at every point, over any dead band this project
+randomizes. `fit_dead_band_ticks` looks for a zero-`Present_Load` pocket at the ramp's turning
+point (inside the firmware's dead band the duty cycle should read exactly zero — `servo_model.py`'s
+`_update_overload` sets `duty = 0.0` exactly whenever the position error sits inside the dead band),
+and on `shoulder_lift` every one of the 5 draws fits 0, over true dead bands of 3.4-9.2 ticks;
+checked directly on an 8-tick dead band, the ramp's steady-state position error stays 19-46 ticks
+off target the whole way, never once inside ±8. `wrist_flex` is different: its own gravity droop
+(3.5-8 ticks over the angles swept) is small enough to be comparable to a large randomized dead
+band, so the split's "no pocket" answer there is not backed by the same margin, and `identify`'s
+`registered_dead_band_ticks`/`min_droop_ticks` fields (`ServoFit.dead_band_reachable`) exist to
+flag exactly this, per joint and per unit, rather than assume it from which joint it is. Separately,
+against the *nominal* virtual bus (true dead band 0), `fit_dead_band_ticks` still fits a spurious
+18.5-tick pocket on `wrist_flex` (`results/servo_bringup/sysid_wrist_flex.json`) where none exists —
+a false positive from the split heuristic on this joint's particular ramp shape, not from a real
+dead band. The split does find a real pocket, tens of encoder ticks wide, on a joint with
+negligible gravity torque and a nonzero dead band — but that is `shoulder_pan` or `wrist_roll`,
+exactly the two joints this method cannot identify kp on either (above). No joint gives this kit a
+working dead-band split; fill `arm.servo_dead_band_counts` from the self-test's direct register
+read (26/27) instead — that register is the one number this kit reads rather than infers, and
+`servo_params.py` never uses `fit.backlash_deg` (the split's own output) to fill
+`arm.backlash_total_deg`, so the spurious wrist_flex pocket above does not reach the parameter
+fragment either way (next).
 
-**Free play.** Recovers from the raw (unsplit) ramp hysteresis, reliably, because the dead band
-has zero effect on `shoulder_lift`'s ramp (just above): the ramp's own combined hysteresis figure
-(droop already taken out) already is a free-play estimate on its own, with nothing to subtract.
-Subtracting the registered dead band, as if it had contributed to the ramp, would remove something
-the ramp never measured. `servo_params.py` takes the raw combined figure directly as
-`arm.backlash_total_deg` on the three gravity-loaded joints (`GRAVITY_LOADED_JOINTS`); off one of
-those three it still subtracts the registered dead band, an unvalidated fallback (the joint set
-that reasoning does not cover has no `identify` fit to begin with).
+**Free play.** Recovers from the raw (unsplit) ramp hysteresis on `shoulder_lift` (validated, 12.7
+% mean error) and, by the same droop-clears-the-dead-band argument, `elbow_flex`: the ramp's own
+combined hysteresis figure (droop already taken out) already is a free-play estimate on its own,
+with nothing to subtract, because the dead band has zero effect on either joint's ramp regardless
+of what it randomizes to. Subtracting the registered dead band, as if it had contributed to the
+ramp, would remove something the ramp never measured. `wrist_flex` is not validated this way — its
+own droop can be small enough for the dead band to matter, so whether "nothing to subtract" holds
+depends on the actual unit's registered dead band versus its own measured droop, computed per fit
+(`ServoFit.dead_band_reachable`) rather than assumed from the joint's name. `servo_params.py` takes
+the raw combined figure directly as `arm.backlash_total_deg` when `dead_band_reachable` is `False`;
+when it is `True` it subtracts the registered dead band instead, itself only a partial correction
+(the kp/friction fit above is biased in that case too, not just this field).
 
 **Confound.** `dynamics.link_mass_scale` (0.9-1.1) is not separable from `kp` in the droop line —
 both change the fitted `1/kp` the same way a real, unmeasured link mass would, and this kit has no
@@ -395,11 +445,13 @@ CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python scripts/hardware/servo_wo
 
 Against the virtual bus, nominal parameters, 15 grid points (3 radii x 5 headings): 12 reached, 3
 unreachable, all three at the 100 mm radius — and specifically the three *centre* headings (-25°,
-0°, +25°); both wide headings (±50°) reach at 100 mm. The grid's radius is measured from the
-base-frame origin, not the `shoulder_pan` axis (offset about 39 mm along +x): at 100 mm that
-leaves the three centre-heading targets geometrically closer to the arm's own base than the two
-wide ones, where a tool-down IK solution exists within the joint limits and a fold tight enough to
-reach in the same close does not. Settling error grows with radius — 3.8-11.3 mm at 100 mm,
+0°, +25°); both wide headings (±50°) reach at 100 mm. `tool_down_ik` (`brick_builder/scene/
+compose.py`) fails its own convergence check at those three: position residual 0.91 mm at -25°,
+7.73 mm at 0°, 0.67 mm at +25°. Two of the three residuals are under a millimetre, which does not
+by itself distinguish a genuine kinematic reachability limit from an artifact of the solver's own
+seeding or iteration count at that particular pose — this map does not run the solver with a
+different seed or more iterations to tell those apart, so the cause of the gap is open rather than
+asserted. Settling error grows with radius — 3.8-11.3 mm at 100 mm,
 8.7-9.7 mm at 150 mm, 11.7-13.5 mm at 200 mm, mean 10.5 mm, p95 13.3 mm over the 12 reached points —
 which is the expected shape for an open-loop-in-gravity command: the further out, the larger the
 joint angles' contribution to tool error for the same angular droop. `RealArmWorld`'s gravity
@@ -427,12 +479,15 @@ prints the `arm:` block in `configs/params/default.yaml`'s own
 
 `arm.servo_p_gain` and `arm.servo_dead_band_counts` come from the self-test's register reads
 (flagged in the notes if the six servos disagree). `arm.backlash_total_deg` is the sysid's raw
-(unsplit) ramp figure when the fit came from one of the three gravity-loaded joints
-(`GRAVITY_LOADED_JOINTS`) — nothing subtracted, because the dead band never contributed to it (see
-the validation above) — and the registered dead band subtracted out as an unvalidated fallback
-otherwise. `arm.joint_friction_Nm` is the sysid's friction fit, always written with
-`status: derived` (never `measured`, even against real hardware — the settling-transient bias is a
-property of the method, not of whether the bus is virtual), noted as a lower bound.
+(unsplit) ramp figure when `ServoFit.dead_band_reachable` is `False` for that fit — nothing
+subtracted, because this joint's own droop never got close enough to the registered dead band for
+it to matter (see the validation above) — and the registered dead band subtracted out as a partial
+correction when it is `True`. Computed per fit, not assumed from which joint it is: `shoulder_lift`
+and `elbow_flex` are reliably in the first case under any dead band this project randomizes,
+`wrist_flex` depends on the actual draw. `arm.joint_friction_Nm` is the sysid's friction fit,
+always written with `status: derived` (never `measured`, even against real hardware — the
+settling-transient bias is a property of the method, not of whether the bus is virtual), noted as a
+lower bound.
 
 Against the virtual bus this is the kit's self-consistency check, not a claim that every number
 comes back exact: `servo_p_gain` (16) and `servo_dead_band_counts` (0) match `ArmConfig()`'s
@@ -447,7 +502,7 @@ Each row is one procedure and the parameter-file entry it fills.
 
 | Measurement | Procedure | Fills |
 |---|---|---|
-| Self-test | `arm_selftest.py --port …` on the assembled bus. Ping/registers/gate `PASS` on every present joint before anything else runs; a commanded-move `FAIL` from a joint whose own downstream chain is still drooped from the range read is a known shape (see the self-test section above), not by itself a reason to stop — a `FAIL` from a missing servo, the voltage/temperature gate, or an overload trip is. | `arm.servo_p_gain`, `arm.servo_dead_band_counts` (also read here, see below) |
+| Self-test | `arm_selftest.py --port …` on the assembled bus, arm supported throughout. Ping/registers/gate `PASS` on every present joint before anything else runs; a commanded-move `FAIL` on `shoulder_lift` or `elbow_flex` at their own range extreme is expected (see the self-test section above) and not by itself a reason to stop, but watch the joint sag or drive toward its stop while it happens — a `FAIL` on any other joint, from a missing servo, the voltage/temperature gate, or an overload trip is a real fault. | `arm.servo_p_gain`, `arm.servo_dead_band_counts` (also read here, see below) |
 | Homing offsets and directions | Drive each joint to both stops with torque off, log `Present_Position` at each, and set `JointCalibration.centre`/`direction` so the model's zero and sign match. **This is the one calibration that has no shipped value worth trusting.** | `JointCalibration` (code), to be mirrored into the parameter file |
 | Servo system identification | `servo_sysid.py --port … --joint <name>`, on `shoulder_lift`, `elbow_flex` and `wrist_flex` (`shoulder_pan`/`wrist_roll` raise -- their kp comes from the self-test's register read instead). | `arm.joint_friction_Nm`; `arm.backlash_total_deg` from the raw ramp figure on these three joints (see the parameter-file fragment) |
 | Settling-error map | `servo_workspace_map.py --port …`. Diagnostic, not a parameter fill: a large or uneven error against the virtual bus's own map above is the sign to stop and debug before anything else. | — (a cross-check) |

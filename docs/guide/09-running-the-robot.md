@@ -18,12 +18,17 @@ the day the arm arrives -- same commands, same order, same pass criteria; step 4
 (it reads the JSON steps 1-2 wrote with `--out`).
 
 1. **Self-test.** `scripts/hardware/arm_selftest.py` -- ping, identity and safety registers, a
-   torque-off range read, one small commanded move per joint. Pass: every present joint's ping,
-   registers and gate (voltage/temperature/status) read `PASS`, and the commanded-move column
-   reads `PASS` for every joint except one whose own downstream chain was still drooped from the
-   range read when its turn came (a known shape, not a fault -- see guide 08's self-test section).
-   A commanded-move `FAIL` from a missing servo, the gate, or an overload trip is a real fault:
-   stop and fix it before continuing.
+   torque-off range read, one small commanded move per joint. **Support the arm (or rest it on
+   something that will not be damaged) for the whole run: torque drops on all six servos at once
+   between every joint, and each joint is tested right at its own mechanical limit.** Pass: every
+   present joint's ping, registers and gate (voltage/temperature/status) read `PASS`, and the
+   commanded-move column reads `PASS` for every joint except `shoulder_lift` and `elbow_flex`,
+   which are expected to `FAIL` there against the virtual bus's own no-gravity-feed-forward check
+   (see guide 08's self-test section for why, and its numbers to compare against) -- a `FAIL`
+   there is not a reason to stop, but it does mean watching those two joints sag or drive toward
+   their own stop under load they cannot hold, so keep supporting the arm through it. A
+   commanded-move `FAIL` from a joint other than those two, from a missing servo, the gate, or an
+   overload trip is a real fault: stop and fix it before continuing.
 2. **System identification.** `scripts/hardware/servo_sysid.py --joint <name>`, on
    `shoulder_lift`, `elbow_flex` and `wrist_flex`, one joint at a time with the others holding.
    `shoulder_pan` and `wrist_roll` raise (their own axis carries too little gravity torque to fit
