@@ -1256,7 +1256,12 @@ class TrackingEpisode:
             spin=float(command.spin + self.correction[2]), grip=float(command.grip),
             correction=self.correction.copy(), k=self.k, vision=vision,
             err_mm=err_mm if vision else float("nan"),
-            tol_mm=self.cfg.tol_mm, predict_mm=self._pred_mm if vision else float("nan"),
+            tol_mm=self.cfg.tol_mm,
+            # `_pred_mm` is an instance field that only changes on the tick that measures a
+            # fresh comparison (see `_feedback`); a blind or unmatched vision tick leaves it at
+            # its last measured value, so it is reported here only on the same tick `err_mm`
+            # itself is measured, not on every vision tick.
+            predict_mm=self._pred_mm if (vision and err_mm == err_mm) else float("nan"),
             refs_seen=seen,
         )
         if vision:
