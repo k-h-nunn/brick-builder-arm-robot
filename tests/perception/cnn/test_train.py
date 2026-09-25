@@ -145,15 +145,19 @@ def test_init_weights_is_loaded_when_the_run_starts_fresh(tmp_path, monkeypatch)
     _write_split(cache, "train", 4, seed=1)
     _write_split(cache, "val", 2, seed=2)
 
-    torch.manual_seed(0)
+    # A seed other than TrainConfig's own default (0): `train()` calls `torch.manual_seed(cfg.seed)`
+    # before building its own random-init model, so a snapshot built at seed 0 would coincide with
+    # that default init and the check below would pass even if `init_weights` were never read.
+    torch.manual_seed(12345)
     init_model = SceneModelNet(width=1.0)
     init_path = tmp_path / "init.pt"
     torch.save({"model": pack_weights(init_model.state_dict())}, init_path)
 
     out = tmp_path / "out"
     # lr=0.0 makes AdamW's update exactly zero every step, so one epoch from `init_weights`
-    # must leave the checkpoint bit-for-bit equal to the snapshot it started from -- direct
-    # evidence the snapshot was actually loaded, not just that training ran without error.
+    # must leave the checkpoint bit-for-bit equal to the snapshot it started from. Combined with
+    # the seed mismatch above, a match here is evidence the snapshot was loaded rather than the
+    # run's own default seed-0 init.
     cfg = _tiny_cfg(cache, out, save_shipped=False, init_weights=str(init_path), lr=0.0)
 
     train(cfg, verbose=False)
