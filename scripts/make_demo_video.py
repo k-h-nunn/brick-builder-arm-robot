@@ -63,15 +63,15 @@ CAPTION = ("scripted controller, stock SO-101 gripper,\n"
 inside the left column of the frame instead of reaching across the arm."""
 
 CAPTION_PHASES = frozenset({"home", "to_tray", "open"})
-"""The phases the caption is up for: the opening, until the arm arrives over the tray.
+"""The phases the caption is up for: the opening, until the arm arrives over the supply.
 
 It says what the viewer is watching and none of it changes during the take, so once the arm is
 at work it is three lines of dead type sitting on the picture.  In the first cut it stayed up to
 the last frame and covered the upper arm and the wrist during the closing hold on the seated
 brick, which is the one shot in the video with nothing else in it."""
 
-BRICK = "tray_brick_0"
-"""Which of the two spare bricks in the tray the arm picks."""
+BRICK = "supply_brick_0"
+"""Which of the two spare bricks the arm picks."""
 
 TARGET = (3.5, 3.5, 0)
 """Where it goes: the middle of the baseplate, bottom layer.  A 2-wide footprint straddles two
@@ -297,7 +297,7 @@ def closed_loop_motion(scene, episode, panels, truth, brick, *, lead_seconds=2.0
         yield Tick(scene=scene, phase="Verify", data=dict(last))
 
 
-def closed_loop_film(out: Path, *, quality_name: str = "hd1080", seed: int = 1,
+def closed_loop_video(out: Path, *, quality_name: str = "hd1080", seed: int = 1,
                      lead_seconds: float = 2.0, hold_seconds: float = 3.0,
                      stills: int = 6, stills_dir: Path | None = None, pick: bool = False,
                      cnn_panels: bool = True, cnn_drives: bool = False):
@@ -386,7 +386,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     out = Path(args.out)
     stills_dir = Path(args.stills_dir) if args.stills_dir else out.parent / "stills"
-    result, episode, check, disp = closed_loop_film(
+    result, episode, check, disp = closed_loop_video(
         out, quality_name=args.quality, seed=args.seed, lead_seconds=args.lead,
         hold_seconds=args.hold, stills=args.stills,
         stills_dir=stills_dir if args.stills else None, pick=args.pick,
