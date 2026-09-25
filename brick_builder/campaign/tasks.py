@@ -1,6 +1,6 @@
 """The tasks the campaign performs, and one episode of each, scored.
 
-Three tasks, all closed loop and all scored by `control.pick_place.verify_placement` reading the
+Four tasks, all closed loop and all scored by `control.pick_place.verify_placement` reading the
 simulator after the arm has left:
 
 | Task | Starts | Unknown to the controller |
@@ -8,10 +8,11 @@ simulator after the arm has left:
 | `placement` | brick already held | baseplate 4-8 mm, 2-3 deg |
 | `pick_and_place` | brick loose on the table | the above, and the brick 8-15 mm, 10-20 deg |
 | `build_2` | as above, twice | the above, per cycle |
-| `STACK_TASK` | as above, twice, one brick on the other | the above, per cycle |
+| `stack_2` | as above, twice, the second brick on the first | the above, per cycle |
 
-`build_2` is one English command compiled by `brick_builder.language` into two placements and
-executed as consecutive pick-and-place cycles. The goal's expected grid is checked after each
+`build_2` and `stack_2` are each one English command compiled by `brick_builder.language` into
+two placements and executed as consecutive pick-and-place cycles. `stack_2` is not in a
+campaign's default task list; it is evaluated on its own (`--tasks stack_2`). The goal's expected grid is checked after each
 cycle and `Goal.remaining_steps` decides what is left to do, which is what lets a failed
 placement be re-planned once.
 
@@ -59,12 +60,10 @@ the press was 0.43-4.50 mm short. The left-hand neighbour is at 154 mm, inside t
 
 STACK_COMMAND = ("put a blue 2x2 at column 5 row 4 "
                  "then put a blue 2x2 on top of the blue brick")
-"""A two-brick tower, in English: the same first placement and a second one a layer up.
+"""The whole of `stack_2`, in English: `build_2`'s first placement and a second one a layer up.
 
-Not one of `TASKS`; it is what `STACK_TASK` runs and what the guide's "Stacked placements"
-numbers were measured on. It compiles to `2x2 (4,3,0) blue` and `2x2 (4,3,1) blue`, which is the
-same cell one brick height higher, so the second cycle seats on the first brick's studs rather
-than on the plate.
+It compiles to `2x2 (4,3,0) blue` and `2x2 (4,3,1) blue`: the same cell one brick height higher,
+so the second cycle seats on the first brick's studs rather than on the plate.
 """
 
 BASE_PLACED = (REF_YELLOW, REF_RED)
@@ -139,12 +138,13 @@ TASKS: dict[str, TaskSpec] = {
     "pick_and_place": TaskSpec("pick_and_place", pick=True, cells=(TARGET_CELL,)),
     "build_2": TaskSpec("build_2", pick=True, cells=_cells_for(BUILD_COMMAND),
                         command=BUILD_COMMAND),
+    # Last, so the performing-seed streams of the three tasks above keep their offsets.
+    "stack_2": TaskSpec("stack_2", pick=True, cells=_cells_for(STACK_COMMAND),
+                        command=STACK_COMMAND),
 }
 
-STACK_TASK = TaskSpec("build_stack_2", pick=True, cells=_cells_for(STACK_COMMAND),
-                      command=STACK_COMMAND)
-"""The two-brick tower. Runs through `run_episode` like any other task and is deliberately not
-in `TASKS`, so which tasks a campaign round performs is unchanged by its existence."""
+STACK_TASK = TASKS["stack_2"]
+"""The two-brick tower."""
 
 
 def perform_seeds(task: str, round_index: int, n: int) -> list[int]:
@@ -516,7 +516,8 @@ def run_episode(spec: TaskSpec, seed: int, *, phase: str = "evaluate", round_ind
             if log is not None and attempts < 2:
                 log(f"    {spec.name} seed {seed} cycle {cycle}: "
                     f"{len(left)} step(s) outstanding, re-planning")
-            if not any(s.placement.x == cell[0] and s.placement.y == cell[1] for s in left):
+            if not any((s.placement.x, s.placement.y, s.placement.z)
+                       == (cell[0], cell[1], cell_layer(cell)) for s in left):
                 break
 
         check = result["check"]
@@ -549,8 +550,7 @@ def run_episode(spec: TaskSpec, seed: int, *, phase: str = "evaluate", round_ind
                 else max(record.peak_wall_stress_MPa, stress))
 
         if on_target:
-            cell = spec.cells[cycle]
-            observed.append(Placement(h=2, w=2, x=cell[0], y=cell[1], z=0, colour="blue"))
+            observed.append(spec.placement(cycle))
 
     record.median_tracking_mm = (float(statistics.median(tracking)) if tracking
                                  else float("nan"))

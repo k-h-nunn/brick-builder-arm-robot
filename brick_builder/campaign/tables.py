@@ -96,7 +96,7 @@ def render(campaign_dir: Path) -> str:
     rows = read_summary(campaign_dir / "summary.csv")
     state = json.loads((campaign_dir / "campaign.json").read_text())
     blocks = []
-    for task in ("placement", "pick_and_place", "build_2"):
+    for task in ("placement", "pick_and_place", "build_2", "stack_2"):
         table = task_table(rows, task)
         if table:
             blocks.append(f"### {task.replace('_', ' ').capitalize()}, seeds 0-9\n\n{table}")

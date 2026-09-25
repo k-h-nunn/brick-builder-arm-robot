@@ -11,20 +11,22 @@ predictor `F` and the one-step inverse `G` on everything logged so far, through
 the campaign's own runs load and gives them a version id. **Evaluate** scores every task on the
 held-out seeds, with the learned inverse and with the analytic one.
 
-The tasks are in `tasks.py`: `placement`, `pick_and_place`, and `build_2`, a two-brick build
-compiled from one English command by `brick_builder.language`. Seeds 0-9 are the held-out
-evaluation set and are never performed on.
+The tasks are in `tasks.py`: `placement`, `pick_and_place`, `build_2`, a two-brick build side
+by side, and `stack_2`, the second brick on top of the first; each build is compiled from one
+English command by `brick_builder.language`. Seeds 0-9 are the held-out evaluation set and are
+never performed on.
 """
 
 from __future__ import annotations
 
 from .campaign import Campaign, CampaignConfig, RoundRecord
 from .tasks import (
-    BUILD_COMMAND, EVAL_SEEDS, TASKS, BrickRecord, EpisodeRecord, TaskSpec, build_goal,
-    perform_seeds, run_episode,
+    BUILD_COMMAND, EVAL_SEEDS, STACK_COMMAND, TASKS, BrickRecord, EpisodeRecord, TaskSpec,
+    build_goal, perform_seeds, run_episode,
 )
 
 __all__ = [
-    "BUILD_COMMAND", "EVAL_SEEDS", "TASKS", "BrickRecord", "Campaign", "CampaignConfig",
-    "EpisodeRecord", "RoundRecord", "TaskSpec", "build_goal", "perform_seeds", "run_episode",
+    "BUILD_COMMAND", "EVAL_SEEDS", "STACK_COMMAND", "TASKS", "BrickRecord", "Campaign",
+    "CampaignConfig", "EpisodeRecord", "RoundRecord", "TaskSpec", "build_goal", "perform_seeds",
+    "run_episode",
 ]
