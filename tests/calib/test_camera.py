@@ -398,7 +398,11 @@ def test_camera_config_from_params_reproduces_the_shipped_default():
     assert cfg.distortion_k1 == pytest.approx(default.distortion_k1)
     assert cfg.distortion_k2 == pytest.approx(default.distortion_k2)
     assert cfg.pos_in_gripper == pytest.approx(default.pos_in_gripper, abs=1e-9)
-    assert cfg.quat_in_gripper == pytest.approx(default.quat_in_gripper, abs=1e-6)
+    # abs=1e-5, not 1e-6: WRIST_CAM_QUAT_IN_GRIPPER is a 6-decimal literal in patch_so101.py, not
+    # itself computed to full double precision, so re-deriving the same physical rotation from
+    # mount_roll_deg through trig disagrees with that literal a couple of ULPs above 1e-6 -- see
+    # test_euler_xyz_pure_roll_matches_the_documented_wrist_cam_quat_convention's own abs=1e-4.
+    assert cfg.quat_in_gripper == pytest.approx(default.quat_in_gripper, abs=1e-5)
     assert cfg.fovy_deg() == pytest.approx(default.fovy_deg())
 
 
