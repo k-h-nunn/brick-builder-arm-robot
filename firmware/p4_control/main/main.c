@@ -168,6 +168,10 @@ static void bus_task(void *arg)
         int i;
 
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        /* The bus counters in s_session are written here on core 0 without a lock, while
+         * bb_session_init on core 1 clears the whole struct at the start of every session. An
+         * update that races the clear can be lost or survive it. Only STATUS reads the
+         * counters; nothing in the control path depends on them. */
         now = esp_timer_get_time();
         if (last != 0) {
             uint32_t gap = (uint32_t)(now - last);
