@@ -12,6 +12,7 @@ library for its own `sizeof` of each and compares, rather than trusting that the
 from __future__ import annotations
 
 import ctypes
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +24,9 @@ LIB_DIR = REPO_ROOT / "firmware" / "control_lib"
 SRC_DIR = LIB_DIR / "src"
 INC_DIR = LIB_DIR / "include"
 RUNNER_SRC = REPO_ROOT / "firmware" / "host_runner" / "main.c"
-DEFAULT_BUILD_DIR = LIB_DIR / "_build"
+DEFAULT_BUILD_DIR = Path(os.environ.get("BB_CONTROL_BUILD_DIR", LIB_DIR / "_build"))
+"""Where the library and the runner are compiled; `BB_CONTROL_BUILD_DIR` moves it, so a test
+run does not rebuild a library another process has loaded."""
 
 CFLAGS = ["-O2", "-std=c99", "-ffp-contract=off", "-Wall", "-Wextra"]
 

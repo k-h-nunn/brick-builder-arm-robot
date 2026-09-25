@@ -224,3 +224,227 @@ def test_the_tick_log_payload_round_trips():
     log = P.parse_tick_log(body)
     assert log.k == 4 and log.refs_seen == 3 and log.ik_failures == 1
     assert log.err_mm == pytest.approx(1.5)
+
+
+def test_the_c_and_python_decoders_agree_on_a_damaged_stream(lib):
+    """Flipped bytes, cut frames, garbage and sync pairs inside payloads, fed to both decoders."""
+    rng = np.random.default_rng(11)
+    stream = bytearray()
+    for i in range(300):
+        payload = bytes(rng.integers(0, 256, int(rng.integers(0, 120)), dtype=np.uint8))
+        if i % 17 == 0:
+            payload = P.SYNC * 3 + payload
+        frame = bytearray(P.encode(int(rng.integers(1, 13)), payload, seq=i))
+        roll = rng.random()
+        if roll < 0.1:
+            frame[int(rng.integers(2, len(frame)))] ^= 0xFF
+        elif roll < 0.18:
+            frame = frame[:int(rng.integers(1, len(frame)))]
+        elif roll < 0.24:
+            stream.extend(rng.integers(0, 256, int(rng.integers(1, 9)), dtype=np.uint8).tobytes())
+        stream.extend(frame)
+    python = P.Decoder()
+    want = [(f.type, f.seq, f.payload) for f in python.feed(bytes(stream))]
+    got, bad_crc, _ = lib.decode(bytes(stream))
+    assert got == want
+    assert bad_crc == python.bad_crc
+    assert len(want) > 200
+
+
+# ------------------------------------------------------ the native process (second rung) ---
+
+N_FRAMES = 24
+J_SYNTH = np.array([[9.0, 0.5, 0.0], [0.3, 8.0, 0.0], [9.5, -0.4, 0.0], [-0.2, 8.5, 0.0]])
+"""Feature change per metre of tool motion, two rows per blob."""
+
+
+def _synthetic_bundle():
+    """A small bundle with no recording behind it: two coloured blobs to line up on, a step
+    boundary where the correction freezes, and five 50 Hz writes per frame."""
+    from types import SimpleNamespace
+
+    from brick_builder.action.place import PlaceConfig
+    from brick_builder.action.sequence import Command
+    from brick_builder.action.servo import Reference
+    from brick_builder.hil import bundle as B
+    from brick_builder.hil.plan import FramePlan, Plan, arm_constants
+    from brick_builder.robot.kinematics import ArmKinematics, _arm_template
+
+    yellow, red = (0.95, 0.8, 0.1), (0.8, 0.1, 0.1)
+    J = J_SYNTH
+    step = SimpleNamespace(
+        feature_names=("yellow", "red"),
+        refs=[Reference("yellow", colour=yellow), Reference("red", colour=red)],
+        b_star=None, J_brick=None, J=J, s_star=np.zeros(4), angle_mode="pair",
+        angle_slot=None, angle_period=1, spin_gain=0.8, spin_star=0.0, tol=0.0004,
+        brick_ref=None)
+    frames, plans = [], []
+    for k in range(N_FRAMES):
+        index = 0 if k < 16 else 1
+        title = "Align" if index == 0 else "Release"
+        x = 0.17 + 0.0004 * k
+        commands = [Command(pos=np.array([x + 0.00008 * i, 0.01, 0.05]), spin=0.02,
+                            grip=0.3, c_vert=1.0, c_lat=1.0) for i in range(5)]
+        slots = np.zeros((K_SLOTS, W_SLOTS), dtype=np.float32)
+        for row, (colour, cx) in enumerate(((yellow, -0.2), (red, 0.25))):
+            slots[row, 0] = 0.02
+            slots[row, 1:3] = (cx - 0.004 * k, 0.1 + 0.002 * k)
+            slots[row, 3:6] = (0.002, 0.0, 0.001)
+            slots[row, 6:9] = [2.0 * c - 1.0 for c in colour]
+        depth = np.full(K_SLOTS, 0.5, dtype=np.float32)
+        depth[:2] = (0.1, 0.2)
+        frames.append(SimpleNamespace(
+            k=k, step=title, step_index=index, commands=commands, travel=0.0004,
+            state=SimpleNamespace(slots=slots, depth=depth,
+                                  slot_ids=np.arange(K_SLOTS, dtype=np.int32)),
+            bodies={"yellow": "plate_a", "red": "plate_b"}))
+        plans.append(FramePlan(step=step, trusted=True, gain=8.0, held=False,
+                               is_freeze_step=title == "Align",
+                               step_id=("Align", "Release").index(title) * 2 + 4))
+    ideal = SimpleNamespace(frames=frames, held_body=None)
+    plan = Plan(frames=plans, descent_k=-1, grasp_k=-1, grasp_z=0.0, freeze_index=0)
+    arm = arm_constants(ArmKinematics(_arm_template()))
+    return B.write_bundle(ideal, plan, PlaceConfig(), arm, grip_range=(-0.2, 1.7)), frames
+
+
+K_SLOTS, W_SLOTS = 8, 14
+Q_HOME = np.array([0.05, -0.45, 0.85, 1.25, 0.02])
+
+
+@pytest.fixture(scope="module")
+def synthetic():
+    return _synthetic_bundle()
+
+
+def _drive(controller, blob, frames, *, ticks: int = 60, damage=None):
+    """Lock step against a plant that is off by a fixed offset the correction has to take out.
+    Returns every number the controller sent back, in order."""
+    from types import SimpleNamespace
+
+    offset = np.array([0.002, -0.0015])
+    controller.start(blob, Q_HOME)
+    out = []
+    for tick in range(ticks):
+        if damage is not None and tick == damage[0]:
+            damage[1](controller)
+        targets = controller.tick_begin()
+        if not targets.commands:
+            break
+        frame = frames[targets.k]
+        slots = frame.state.slots.copy()
+        # Where the tool really is against where the recording had it: the plate's offset plus
+        # the correction the controller added, seen through the step's own Jacobian.
+        moved = offset + (targets.commands[-1].pos[:2] - frame.commands[-1].pos[:2])
+        for row in range(2):
+            slots[row, 1:3] += (J_SYNTH[2 * row:2 * row + 2, :2] @ moved).astype(np.float32)
+        state = SimpleNamespace(slots=slots, depth=frame.state.depth,
+                                slot_ids=frame.state.slot_ids, t=0.1 * tick, frame_id=tick)
+        q = targets.commands[-1].q
+        bus = (q, np.full(6, 0.001 * (tick % 3)), np.zeros(6))
+        log = controller.tick_end(state, bus)
+        out.append((targets.k, [c.q.tobytes() + c.pos.tobytes() for c in targets.commands],
+                    log.k, log.holds, log.matched, np.float64(log.err_mm).tobytes(),
+                    log.correction.tobytes(), log.done, log.failure))
+        if log.done:
+            break
+    return out
+
+
+def _process(kind: str, timeout: float = 10.0):
+    from brick_builder.hil.controller import ProcessController
+    from brick_builder.hil.library import build
+
+    runner = build().runner
+    if kind == "tcp":
+        return ProcessController(runner, tcp_port=58431, timeout=timeout)
+    return ProcessController(runner, timeout=timeout)
+
+
+def test_the_synthetic_run_moves_the_index_and_the_correction(lib, synthetic):
+    from brick_builder.hil.controller import SilController
+
+    blob, frames = synthetic
+    got = _drive(SilController(lib), blob, frames)
+    ks = [row[2] for row in got]
+    assert max(ks) >= 16, "the index never crossed the step boundary"
+    assert any(np.frombuffer(row[6])[0] != 0.0 for row in got), "the correction never moved"
+
+
+@pytest.mark.parametrize("kind", ["pipe", "tcp"])
+def test_the_native_process_is_bit_identical_to_the_library_in_process(lib, synthetic, kind):
+    from brick_builder.hil.controller import SilController
+
+    blob, frames = synthetic
+    want = _drive(SilController(lib), blob, frames)
+    runner = _process(kind)
+    try:
+        got = _drive(runner, blob, frames)
+        status = runner.status()
+    finally:
+        runner.close()
+    assert got == want
+    assert status.bad_crc == 0 and status.ticks == len(want)
+
+
+@pytest.mark.parametrize("kind", ["crc", "drop"])
+def test_a_damaged_frame_between_ticks_is_dropped_and_the_run_carries_on(lib, synthetic, kind):
+    """A stray damaged frame costs nothing: the decoder drops it and resynchronises, and every
+    later tick is still bit-identical to the undisturbed run."""
+    from brick_builder.hil.controller import SilController
+
+    blob, frames = synthetic
+    want = _drive(SilController(lib), blob, frames)
+    runner = _process("pipe")
+    try:
+        got = _drive(runner, blob, frames, damage=(7, lambda c: c.inject_corruption(kind)))
+        status = runner.status()
+    finally:
+        runner.close()
+    assert got == want
+    assert status.bad_crc + status.resyncs >= 1
+
+
+@pytest.mark.parametrize("kind", ["crc", "lose"])
+def test_a_damaged_request_fails_loudly(lib, synthetic, kind):
+    """A request that never arrives whole is never acted on, and the host says so rather than
+    carrying on with a tick the controller did not run."""
+    from brick_builder.hil import protocol as proto
+    from brick_builder.hil.controller import ControllerError
+
+    blob, frames = synthetic
+    runner = _process("pipe", timeout=1.0)
+    try:
+        with pytest.raises(ControllerError, match="timed out waiting for TICK_LOG"):
+            _drive(runner, blob, frames,
+                   damage=(5, lambda c: c.damage_next(proto.MSG_SCENE_STATE, kind)))
+    finally:
+        runner.close()
+
+
+def test_the_runner_greets_a_host_that_asks(lib):
+    runner = _process("pipe", timeout=5.0)
+    try:
+        runner._await(P.MSG_HELLO)
+        runner._write(P.MSG_HELLO)
+        frame = runner._await(P.MSG_HELLO)
+        version, capacity = struct.unpack_from("<II", frame.payload, 0)
+    finally:
+        runner.close()
+    assert version == 2 and capacity >= 1 << 20
+
+
+def test_a_damaged_bundle_is_refused(lib, synthetic):
+    import ctypes
+
+    blob, _ = synthetic
+    bad = bytearray(blob)
+    bad[len(bad) // 2] ^= 0x01
+    ctrl = ctypes.create_string_buffer(lib.sizeof("bb_controller"))
+    q = (ctypes.c_double * 5)(*Q_HOME)
+    good_rc = lib._lib.bb_control_init(ctypes.cast(ctrl, ctypes.c_void_p),
+                                       ctypes.create_string_buffer(blob, len(blob)), len(blob), q)
+    bad_rc = lib._lib.bb_control_init(ctypes.cast(ctrl, ctypes.c_void_p),
+                                      ctypes.create_string_buffer(bytes(bad), len(bad)),
+                                      len(bad), q)
+    assert good_rc == 0
+    assert bad_rc == -3  # BB_ERR_CRC
