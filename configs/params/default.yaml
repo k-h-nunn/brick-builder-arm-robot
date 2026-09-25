@@ -580,6 +580,13 @@ camera:
   # chessboard shots through cv2.calibrateCamera. The procedure is in
   # docs/guide/08-hardware-wiring-calibration.md. They are in pixels at
   # resolution_width_px x resolution_height_px and mean nothing at another resolution.
+  #
+  # fx_px/fy_px/cx_px/cy_px only switch the compiled wrist camera onto MuJoCo's pixel-intrinsics
+  # model (brick_builder.calib.camera.camera_config_from_params) once at least one of them has
+  # status: measured below -- scripts/calibrate_camera.py's output fragment sets that. That model
+  # does not respond to a runtime write to model.cam_fovy the way the fovy model does; anything
+  # that jitters or reads cam_fovy on the wrist camera (render.domain_rand's fovy jitter,
+  # perception.views/perception.backproject) is not yet aware of a measured-intrinsics camera.
 
   fx_px:
     # What: focal length in pixels, x.
