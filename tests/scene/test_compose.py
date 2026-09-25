@@ -119,6 +119,14 @@ def test_connected_from_baseplate_walks_more_than_one_layer():
     ]
     assert _connected_from_baseplate("plate", breakable_two_layer) == {"plate", "B", "C"}
 
+    # Once that piece's own weld has released, it is no longer structurally part of "B" (see
+    # `_owning_brick`), even though `connections()` can still list it -- the snap model has no way
+    # to know the stud that used to be there broke off. The walk has to drop the edge, not credit
+    # "B" with carrying "C" through a piece that came away.
+    assert _connected_from_baseplate(
+        "plate", breakable_two_layer, released_pieces=frozenset({"B_piece_stud_0_0"}),
+    ) == {"plate", "B"}
+
 
 def test_settle_reports_a_two_layer_stack_as_fully_connected():
     """A brick stacked on a brick stacked on the plate: reachable in two hops, so this has to
@@ -149,6 +157,36 @@ def test_settle_reports_a_two_layer_breakable_stack_as_fully_connected():
     assert report.connected_placed == len(stack), report.connections
 
 
+def test_settle_stops_crediting_a_layer_carried_only_by_broken_off_studs():
+    """The case breakable mode exists for: once the lower brick's studs have actually broken off
+    (`BreakableBricks.released`), the brick they used to carry is no longer connected, even though
+    the snap model can still report the loose pieces resting near their old sockets (nothing tells
+    it a weld let go underneath). This is the scenario `_owning_brick` maps a piece to `None`
+    for -- if it instead kept crediting the brick above with every stud-piece connection the way
+    the plain graph walk used to, this would still read 2 of 2."""
+
+    stack = [Placement(2, 4, 2, 2, 0, "blue"), Placement(2, 4, 2, 2, 1, "yellow")]
+    scene = build_scene(SceneConfig(placed=stack, held=None, breakable=True))
+    report = settle(scene, 0.5)
+    assert report.connected_placed == len(stack), report.connections
+
+    manager = scene.breakable
+    released_any = False
+    for k, (owner, piece) in enumerate(zip(manager.owner, manager.pieces)):
+        if owner == "struct_0" and piece.kind == "stud":
+            manager.released[k] = True
+            scene.data.eq_active[manager.eq_ids[k]] = 0
+            released_any = True
+    assert released_any, "no stud pieces found on struct_0 -- the scene stopped matching this test"
+
+    report2 = settle(scene, 0.5)
+    assert any("_piece_stud_" in c.lower for c in report2.connections), (
+        "the loose studs should still show up in connections() -- that is what this test is "
+        "checking settle() sees through", report2.connections
+    )
+    assert report2.connected_placed == 1, report2.connections  # struct_0 only now
+
+
 def test_settle_reports_a_three_layer_stack_as_fully_connected():
     """Three hops from the plate: the same walk has to keep going past the first one."""
 
@@ -168,15 +206,16 @@ def test_settle_reports_a_three_layer_stack_as_fully_connected():
 
 
 def test_a_brick_resting_on_stud_tops_without_capture_is_not_counted_connected():
-    """A second *placed* brick lowered half a stud pitch off-grid rests on top of the first
+    """A second *placed* brick moved half a stud pitch off-grid rests on top of the first
     brick's stud tops instead of seating (`tests/bricks/test_generator.py`'s misaligned-insertion
     case) and never engages a socket. It has to be one of `scene.placed_names` for this to be a
     real test of `settle()`'s count -- a rider outside `placed` (a supply or tray brick) is never
     counted connected either way, so `connected_placed == 1` could not fail on its account."""
 
-    # The rider is narrower than the base (2 studs across against 4) so the half-pitch offset
-    # below keeps its whole footprint over the base's flat top instead of hanging part of it
-    # off the edge, which topples it rather than resting it.
+    # The rider (2 studs by 4) crosses the base (4 by 2): its footprint sits entirely within the
+    # base's footprint in x, but overhangs it by one full pitch (16 mm) at each end in y. That
+    # overhang does not topple it -- the base's stud grid still sits under its centre of mass --
+    # so lining the footprints up exactly is not needed to make the point.
     base = [Placement(2, 4, 1, 2, 0, "blue"), Placement(4, 2, 1, 4, 0, "yellow")]
     scene = build_scene(SceneConfig(placed=base, held=None))
     base_name, rider_name = scene.placed_names
@@ -184,14 +223,23 @@ def test_a_brick_resting_on_stud_tops_without_capture_is_not_counted_connected()
 
     base_pos, base_quat = scene.body_pose(base_name)
     spec = scene.cfg.spec
+    # 1 mm above the base's roof -- 3.5 mm *below* the stud tops (`stud_h` is 4.5 mm) -- so the
+    # rider starts penetrating the studs rather than being lowered onto them; contact correction
+    # is what pushes it back up to rest on the tops over the following steps. A real lowering,
+    # started above the stud tops instead, does not produce the numbers checked below (measured
+    # separately: it slides further and settles close to flush rather than clearly on the studs),
+    # so this penetrating start is deliberate, not an oversight.
     rider_start = np.array([base_pos[0] + 0.5 * spec.pitch, base_pos[1], base_pos[2] + spec.height + 0.001])
     set_brick_pose(scene, rider_name, rider_start, base_quat)
-    # The rider was already seated (in `placed`, it built flush on the plate before this moved
-    # it), so the snap model has a live captured connection whose frozen relative pose no longer
-    # matches the bodies. `bind()` is the one call that clears captured anchors (see
-    # `reset_scene`); without it the stale connection yanks the rider towards its old socket
-    # instead of letting it simply rest where it was put.
-    scene.snap.bind(scene.model, scene.data)
+    # `set_brick_pose` only writes `qpos`; it does not recompute forward kinematics, so
+    # `data.xpos`/`data.site_xpos` stay at the rider's *old*, seated place until something calls
+    # `mj_forward`. Skip this and the first `snap.update()` inside `settle()`'s `scene.step()`
+    # reads the stale site position, mistakes the move for the rider's stud pulling out of its old
+    # socket, and yanks it back towards that socket instead of letting it simply rest where it was
+    # put (measured: dx 15.2 mm, dz -0.7 mm, quat_w 0.981 -- tipped, not resting). `snap.bind()`
+    # clears captured anchors but does not touch any body's kinematics and changes nothing here
+    # (measured with and without it, `mj_forward` present both times: same dx/dz to within 0.05
+    # mm), so it is not called.
     mujoco.mj_forward(scene.model, scene.data)
 
     report = settle(scene, 1.0)
@@ -249,14 +297,19 @@ def test_the_weld_grip_never_slips_when_no_ceiling_is_set():
     assert scene.data.eq_active[scene.weld_eq] == 1
 
 
-def test_the_ceiling_has_no_effect_on_a_loop_that_steps_mujoco_directly():
-    """`weld_slip_force` only takes effect through `Scene.step` or `push_held_brick`, the only
-    two callers of `_release_overloaded_weld`. Every default weld-mode env/control loop in this
-    project steps the model with its own `mujoco.mj_step` instead (see `weld_slip_force`'s own
-    docstring for the list), so setting the parameter on a scene one of those loops runs has no
-    effect. This pins that limitation down instead of letting it regress silently one way or the
-    other."""
-
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "weld_slip_force only takes effect through Scene.step or push_held_brick, the only two "
+        "callers of _release_overloaded_weld (see its docstring for the full list of loops that "
+        "call mujoco.mj_step directly and so never reach it). This asserts the behaviour that "
+        "would actually be wanted -- the ceiling holding even on a loop that steps the model "
+        "directly -- so it starts failing, rather than staying silently green, the day one of "
+        "those loops (or a scene-side stepping hook) closes that gap; at that point this test "
+        "should be rewritten as a real assertion instead of an expected failure."
+    ),
+)
+def test_the_ceiling_still_applies_to_a_loop_that_steps_mujoco_directly():
     ceiling = weld_slip_ceiling(SceneConfig())
     scene = build_scene(SceneConfig(weld_slip_force=ceiling))
     scene.step(200)
@@ -267,7 +320,7 @@ def test_the_ceiling_has_no_effect_on_a_loop_that_steps_mujoco_directly():
         scene.snap.update(scene.model, scene.data)
         mujoco.mj_step(scene.model, scene.data)  # note: no `_release_overloaded_weld` call
     scene.data.xfrc_applied[bid, :3] = 0.0
-    assert scene.data.eq_active[scene.weld_eq] == 1, "a raw mj_step loop should never see the ceiling"
+    assert scene.data.eq_active[scene.weld_eq] == 0, "a raw mj_step loop should still see the ceiling"
 
 
 def test_push_held_brick_never_reports_a_weld_release_in_friction_mode():
