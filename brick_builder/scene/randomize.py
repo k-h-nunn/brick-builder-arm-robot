@@ -259,6 +259,14 @@ def sample_command(rng: np.random.Generator, level: float = 1.0) -> dict:
     ``rng``'s own state (and therefore every other ``command.*`` field above, and every field a
     later group draws in the same :func:`sample` call) is exactly what it would be if this
     parameter did not exist -- adding it does not shift any pre-existing draw for a fixed seed.
+
+    Caveat: ``rng.bit_generator.state`` does not capture this. ``SeedSequence.spawn`` keeps its
+    own spawn counter outside that state, so saving ``rng.bit_generator.state``, calling
+    :func:`sample_command` (or :func:`sample`), restoring that saved state and calling it again
+    reproduces every pre-existing draw but *not* ``error_deadband_ticks``, which advances one
+    step further each call regardless of ``bit_generator.state``. Nothing in this codebase saves
+    and restores ``bit_generator.state`` today; a fresh ``np.random.default_rng(seed)`` per
+    episode, which this project uses throughout, is unaffected.
     """
     out = _group("command", rng, level, exclude=(ERROR_DEADBAND_KEY,))
     if ERROR_DEADBAND_KEY in RANGES:

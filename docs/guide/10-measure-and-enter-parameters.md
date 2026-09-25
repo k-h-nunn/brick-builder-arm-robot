@@ -397,18 +397,19 @@ describes), which is arm bring-up work, not this page's. Until that identificati
 team's own servos, leave it at the shipped default and `status: assumed`.
 
 **Run**, if you do change it: `params` shows the value the report will use; there is no
-dedicated report section, the same way `arm.backlash_total_deg` has none. A change here does not
-appear in the step-response, sag or settling-error figures
+dedicated report section, the same way `arm.backlash_total_deg` has none. It does reach
+`pick-and-place` the same way `backlash_total_deg` does — that experiment builds its scene from
+this file's `ArmConfig` and always calls `pick_place.bench` at `dr_level=0.0`. A change here does
+not appear in the step-response, sag or settling-error figures
 [Robot and servo model](03-robot-and-servo-model.md#figures) regenerates — `make_figures` always
 compiles a default `ArmConfig`, not one built from a parameter file.
 
-A value entered here also does not survive `brick_builder/scene/randomize.py`'s `dynamics` group:
-`apply()` writes `dof_frictionloss` from `NOMINAL["dynamics.frictionloss"]`, a fixed constant
-equal to the shipped default, whenever the `dynamics` group is applied — including at
-randomization level 0. Every environment reset and every `pick-and-place` bench run at
-`dr_level > 0` replaces a measured `arm.joint_friction_Nm` with that constant; only a scripted run
-that never calls `randomize.apply` sees the value this page describes entering. `backlash_deg` and
-`kp` have the same property already.
+A value entered here does not survive `brick_builder/scene/randomize.py`'s `dynamics` group being
+applied at a randomization level above 0: `apply()` then writes `dof_frictionloss` from a draw
+between `NOMINAL["dynamics.frictionloss"]` (the shipped default, used exactly at level 0) and
+`RANGES["dynamics.frictionloss"]` (0.03-0.10 N·m), replacing whatever the scene was built with.
+`pick-and-place` calls `bench` at `dr_level=0.0`, so it keeps a measured value; an `ArmEnv`/
+`PressEnv` reset at `dr_level > 0` does not. `backlash_deg` and `kp` have the same property.
 
 ---
 
@@ -431,7 +432,11 @@ arm:
 ```
 
 **Run:** `params` reflects the new values immediately. No physics report changes — this is a
-render-only parameter, read by a vision task's rendered image and by nothing else on this page.
+render-only parameter. Anything that builds a scene from this file through `to_scene_config`
+picks it up, in particular the GUI worlds (`brick_builder/gui/world.py`) and `pick-and-place`'s
+own scene; the convolutional scene model's own training-data generator
+(`brick_builder/perception/cnn/data.py`) does not read the parameter file at all — it always
+builds a default `ArmConfig`, so a colour entered here does not reach it.
 
 ---
 
@@ -520,7 +525,7 @@ be filled in before and after, not just after.
 | `arm.torque_limit_Nm` | not a kitchen-scale measurement — see step 4 | `seating-feasibility`, `force-map` |
 | `arm.backlash_total_deg` | ruler at the tool, by feel (total play, not half) | `pick-and-place` |
 | `arm.servo_dead_band_counts` | servo tool, registers 26/27 | `params` (no run consumes it yet) |
-| `arm.joint_friction_Nm` | not a kitchen-scale measurement — system identification, see guide 03 | no dedicated section; overwritten by domain randomization's `dynamics` group |
+| `arm.joint_friction_Nm` | not a kitchen-scale measurement — system identification, see guide 03 | `pick-and-place` (no dedicated report section); overwritten by domain randomization's `dynamics` group above level 0 |
 | `arm.print_color_r`/`_g`/`_b` | look at the printed arm — not a physics measurement | `params` (render only) |
 | `camera.diagonal_fov_deg`, resolution | printed checkerboard or a sheet of paper | `params` |
 | `bricks.youngs_modulus_GPa` | three-point bend on a wall cut from a brick | `params` |

@@ -690,9 +690,9 @@ def test_error_deadband_ticks_reaches_servo_config_and_only_that_field():
 
 
 def test_error_deadband_ticks_is_sampled_at_every_level():
-    """The key this package guarantees: it is drawn by `R.sample` and reaches `ServoConfig`
-    (the previous two tests). Whether `envs.base_env.DR_PARAM_KEYS` carries it is that module's
-    own choice, checked by its own width assertion (`base_env.py`, next to the tuple)."""
+    """`command.error_deadband_ticks` is drawn by `R.sample` at every randomization level and
+    reaches `ServoConfig` (the previous two tests). It is not one of
+    `envs.base_env.DR_PARAM_KEYS`, whose width is checked by its own test next to that tuple."""
     from brick_builder.scene import randomize as R
 
     for level in (0.0, 0.5, 1.0):
