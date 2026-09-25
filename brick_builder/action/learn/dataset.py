@@ -126,9 +126,11 @@ def hindsight_pairs(data: Episodes, rng: np.random.Generator, *, repeats: int = 
     dwell is: there the change of the scene between `i` and `i + j` is the correction's doing and
     not the feed-forward's. Leaving it `None` uses every acting tick.
 
-    Empty, not an error, when nothing in the log passes the `trusted & ~frozen` gate: `x`/`y` come
-    back with zero rows and `log` gets one line saying so, so a round with nothing to learn from
-    skips training instead of failing on `np.stack([])`.
+    Empty, not an error, when nothing in the log produces a usable window -- whether because
+    nothing passes the `trusted & ~frozen` gate, or because everything that does is then dropped
+    by the same-step or travel filter: `x`/`y` come back with zero rows and `log` gets one line
+    saying which case it was, so a round with nothing to learn from skips training instead of
+    failing on `np.stack([])`.
     """
     corr = data.corrections()
     obs, val, wgt = data["obs_rows"], data["obs_valid"], data["obs_weight"]
@@ -153,8 +155,14 @@ def hindsight_pairs(data: Episodes, rng: np.random.Generator, *, repeats: int = 
         idx.append(i)
         js.append(j)
     if not xs:
-        log(f"hindsight_pairs: 0 of {data.n} logged ticks pass the trusted-and-not-frozen gate "
-            f"({int(acting.sum())} acting tick(s) total); no hindsight pairs")
+        gate = int(acting.sum())
+        if gate == 0:
+            log(f"hindsight_pairs: 0 of {data.n} logged ticks pass the trusted-and-not-frozen "
+                f"gate; no hindsight pairs")
+        else:
+            log(f"hindsight_pairs: {gate} of {data.n} logged ticks pass the "
+                f"trusted-and-not-frozen gate, but same-step and travel filtering dropped every "
+                f"window; no hindsight pairs")
         x = np.zeros((0, INVERSE_IN), dtype=np.float64)
         y = np.zeros((0, INVERSE_OUT), dtype=np.float64)
     else:

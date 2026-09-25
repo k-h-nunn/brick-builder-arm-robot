@@ -20,8 +20,7 @@ name differ from `docs/guide/16-closed-loop-campaign.md`.
 `brick_builder/perception/weights/vision_model.pt`, sha256
 `3e07a382f963145318479f81b61dbe273ffd421ea2e772dd2c0df1bbe40bcafb`. Every measured number on this
 page is against this checkpoint. A later checkpoint at the same path needs its own sha256 line
-here and its own numbers; a changed weights file changes what the scene model reports, which is
-exactly what this page measures.
+here and its own numbers.
 
 `brick_builder/action/twin.py` and `brick_builder/action/learn/dataset.py` changed after the
 numbers below were measured (see Fixes to the crashes); the sha256 above did not change, and the
@@ -125,26 +124,45 @@ place's two scene-model bars are the same one-episode measurement described abov
 | Campaign | Round | Evaluate [min] | Episodes scored | Episodes crashed |
 |---|---|---|---|---|
 | `closed_loop_cnn` | 0 (analytic) | 18.8 | 21 / 30 | 9 |
-| `closed_loop_cnn` | 5 (r5 learned) | 49.3 | 41 / 50 | 9 |
+| `closed_loop_cnn` | 5 (learned, plus the analytic recheck) | 49.3 | 41 / 50 | 9 |
 
 Total heavy time for this step: 68.1 min inside `run_campaign.py` (both rounds, cumulative, the
 figure the campaign itself reports) plus roughly 10 min of one-off recording outside it, seeds 0-9
 for both tasks (see The pickling workaround) -- about 78 min against the 60-minute target.
 
-Placement's per-episode wall time spans widely and does not move the same way between rounds:
-round 0's ten placement episodes run 27-63 s; round 5's run 17-232 s, with its five slowest at
-151, 152, 163, 206 and 232 s. What made the slow round-5 episodes slower than round 0's is not
-measured here -- both replanning (a second attempt when the first cycle's brick does not land) and
-machine load from other work running at the same time are possible causes, and this page does not
-have per-episode replan counts or load samples to tell them apart.
+Placement's per-episode wall time spans widely and does not move the same way between rounds, or
+even between two rows of the same round. Round 0 scores placement twenty times (ten seeds against
+each of two `predictor` columns, the analytic inverse throughout): 27-63 s. Round 5 scores it forty
+times (ten seeds times two inverses times two `predictor` columns), 17-232 s, but the two halves
+do not behave alike: the twenty rows using the round-5 learned inverse run 17-56 s, inside round
+0's own span; every row above 150 s uses the analytic inverse that `recheck_analytic`
+(`campaign.py:402`) reruns at the final round for comparison -- its five slowest are 151.6, 162.8,
+205.6, 220.8 and 231.8 s. The 49.3 min in the table above includes this recheck; it is not the cost
+of the learned pair.
+
+`evaluate.csv`'s `replanned` and `vision_ticks` columns separate replanning from machine load for
+these analytic-inverse rows. The same seed carries the same `vision_ticks` and the same `replanned`
+flag in round 0 and round 5 (seed 0: 163 ticks, replanned, in both), and within round 5 itself the
+two `predictor` columns for the same seed and inverse also carry identical `vision_ticks`/`replanned`
+values yet differ in wall time by up to 4x -- seed 0: 54.0 s against 205.6 s; seed 9: 71.6 s against
+220.8 s, the slower column swapping sides between the two seeds. The recorded work is identical and
+the wall time is not, so machine load from the other work running on the machine at the same time,
+not replanning, accounts for the spread.
 
 ### Mislabeled reference bodies
 
-Every `pick_and_place` crash before the fix in twin.py (see Fixes to the crashes) raised the same
-exception at `Approach` or `Lift`:
+Every `pick_and_place` crash before the fix in twin.py (see Fixes to the crashes) raised
+`RuntimeError` from the same check in `build_step`, at `Approach` or `Lift`, with a different
+reference count each time -- Approach:
 
 ```
 RuntimeError: step 'Approach': the twin only shows 0 of the 0 reference blobs, which is not enough to line up on
+```
+
+and Lift:
+
+```
+RuntimeError: step 'Lift': the twin only shows 0 of the 1 reference blobs, which is not enough to line up on
 ```
 
 The exception comes from `brick_builder/action/twin.py`'s `build_step`, called from
@@ -163,24 +181,34 @@ recorded sequence carries the scene model's states throughout (`record_for` reco
 sequence through the same source that will drive the run), so `reference_bodies()` reads slot
 indices as if they were instance ids and names the wrong body, or none, at essentially every step.
 
-The recorded caches show this directly. A ground-truth `pick_and_place` recording's `Approach`
-step names an empty reference set (nothing to line up on is asked of the twin there by design);
-the matching `--source cnn` recording for seed 0 names `{'brick to pick up': 'supply_brick_0'}` at
-`Approach` -- a real body in the twin's scene, just not the one at that pose, so `calibrate()`
-matches nothing and `build_step` raises. `placement` recordings carry the same defect but it
-surfaces differently: their per-step body sets are frequently empty outright (`Transport {}`,
-`Align {}`), which `_prepare_step` already treats as an untrusted step without raising (a body
-dict that is empty, rather than non-empty and wrong, hits a different, pre-existing branch); other
-`placement` recordings carry non-empty but arbitrary sets (`Transport {'plate'}`,
-`Align {'placed brick 1'}`, `'held'` named as a reference at `Release`/`Retract`, where nothing is
-held). Both tasks' recorded reference sets are affected; `placement` does not raise because its
-sets are more often empty than wrong.
+The recorded caches show this only partially. A ground-truth `pick_and_place` recording's
+`Approach` step names `{'brick to pick up': 'supply_brick_0'}` in 520 of 620 frames across the ten
+seeds -- every frame after the first ten of each 62-frame step. The matching `--source cnn`
+recordings name the same body in 353 of 620 Approach frames and an empty set in the other 267,
+never any other body: `place.py`'s pick-and-place filter keeps only entries that already equal
+`SUPPLY_BODY` at `Approach`/`Grasp` (`place.py:595-603`), so whatever else the slot-id/instance-id
+mismatch mislabels there is dropped rather than shown. Why the label is present in some frames and
+absent in others under `--source cnn` is not traced further here.
+
+`placement` recordings carry the same slot-id/instance-id mismatch, but under `--source cnn` most
+of their per-step body sets are not empty: `Align` is empty in none of 400 cnn frames, `Transport`
+in 14 of 80, `Press the brick down` in 144 of 728, `Verify` in 8 of 150 -- 166 of 1597 frames
+overall, about 10 %. Some non-empty sets are arbitrary (`Transport {'plate'}`,
+`Align {'placed brick 1'}`), a direct instance of the mismatch reading a real body's name off a
+slot index that only coincides with that body's instance id by chance. Why `placement`'s
+`build_step` calls do not raise despite these wrong, non-empty sets is not analyzed further here.
+
+`held` named as a reference at `Release`, `Retract` and `Verify` in ground-truth `placement`
+recordings, in all ten seeds, is not a mislabeling: the released brick keeps the MuJoCo body name
+`held` (`compose.py:917`), and `reference_bodies()` only excludes it while `_in_hand(step)`
+(`place.py:594`) -- true through `Grasp`/`Lift`/`Transport`/`Align`/`Press the brick down`, false
+once the brick is let go, so it names the released brick's own body.
 
 The pattern that stays fixed across both inverses in the table above (seven seeds crash at
 `Approach`, two at `Lift`, seed 7 is the one that completes) is the recorded label, not either
 inverse: both rounds replay the same cached `pick_and_place` recordings. Fixing the label mapping
-is `record_ideal`/`reference_bodies` in `place.py`, a file this page does not edit; this page
-measures and reports it.
+needs a change in `record_ideal`/`reference_bodies` (`place.py`); this page reports the effect, not
+the fix.
 
 ### Training round
 
@@ -226,22 +254,26 @@ tests/action` also passes, 47 tests, no regressions).
   `_prepare_step` already catches `BlindStep` and marks the step untrusted instead of losing the
   episode. The first check now raises `BlindStep` too, and prints the count (blobs seen, blobs
   needed, the step name) to stderr before raising, since nothing downstream of the catch sees the
-  message again. A `pick_and_place` episode that hits this at `Approach` or `Lift` now plays that
-  step open-loop rather than raising; it is scored by `verify_placement` at the end like any other
-  episode. This was not re-run through a campaign (see Scene-model weights); the crash counts in
-  the table above are from before this change.
+  message again. Reading `_prepare_step`, a `pick_and_place` episode that hits this at `Approach`
+  or `Lift` should play that step open-loop and reach `verify_placement` at the end like any other
+  episode -- inferred from the code, not observed: no episode with the fix applied was run,
+  because a single-episode check queued behind the machine's other work and did not return in
+  time. Neither `place.py` nor `campaign/tasks.py`'s `EpisodeRecord` (both outside this page's
+  files) give the blind step its own failure class, so a blind step's effect on the reported
+  numbers is indistinguishable from any other cause of a low seated fraction in `evaluate.csv`.
+  This was not re-run through a campaign (see Scene-model weights); the crash counts in the table
+  above are from before this change.
 - **`brick_builder/action/learn/dataset.py`.** `hindsight_pairs` and `teacher_pairs` both crashed
   on `np.stack([])` when zero ticks passed the `trusted & ~frozen` gate. Both now return zero-row
   `x`/`y` arrays and log one line saying how many of how many ticks passed the gate, through an
   optional `log` argument (`print` by default). This does not, on its own, make
   `closed_loop_cnn_train`'s round 1 train cleanly: `train_inverse`
-  (`brick_builder/action/learn/train.py`, a file this page does not edit) reshapes
-  `obs[j] - obs[i]` against `len(i)` two lines after calling `hindsight_pairs`, and numpy refuses
-  to reshape a zero-size array into `(0, -1)` -- a different `ValueError`
-  (`cannot reshape array of size 0 into shape (0,newaxis)`), at `train.py:194`, confirmed by
-  calling `train_inverse` directly on a synthetic zero-acting-tick log. The round still ends the
-  campaign on this input; the crash moves one file and 17 lines, and fixing it needs a change in
-  `train.py`, which this page does not edit.
+  (`brick_builder/action/learn/train.py`) reshapes `obs[j] - obs[i]` against `len(i)` at
+  `train.py:194`, 18 lines after calling `hindsight_pairs` at `train.py:176`, and numpy refuses to
+  reshape a zero-size array into `(0, -1)` -- a different `ValueError`
+  (`cannot reshape array of size 0 into shape (0,newaxis)`), confirmed by calling `train_inverse`
+  directly on a synthetic zero-acting-tick log. The round still ends the campaign on this input;
+  fixing it needs a change in `train.py`.
 
 ## The pickling workaround
 
@@ -263,8 +295,8 @@ way, and nothing before this page had run the closed loop with `--source cnn` en
 `decode` is documented as "viewer/evaluation only... not read by anything on the control path"
 (`scene_model.py`), so dropping `_decode_fn` before the cache is written changes nothing the loop
 reads. Fixing `record_for` or `SceneState` itself needs changes in `brick_builder/campaign/**` and
-`brick_builder/perception/**`, neither of which this page edits; the numbers on this page instead
-come from a one-off script, run separately and never imported by the repository, that
+`brick_builder/perception/**`; the numbers on this page instead come from a one-off script, run
+separately and never imported by the repository, that
 monkey-patches `SceneState.__getstate__` to drop the field and
 pre-populates the ideal-sequence cache before the unmodified `run_campaign.py` / `campaign.runner`
 pipeline reads it back with a plain `pickle.load`. The cache files it wrote are ordinary pickles
@@ -296,5 +328,8 @@ populate the cache itself and remove the need for it.
   round and Fixes to the crashes), so there is no round-1 pair, no round 2, and nothing to compare
   against `docs/guide/16-closed-loop-campaign.md`'s own five rounds of ground-truth training.
 - The dataset.py fix (see Fixes to the crashes) does not by itself get `closed_loop_cnn_train`
-  past round 1: `train_inverse` (`brick_builder/action/learn/train.py`) still raises on the same
-  zero-tick input, two lines further into training, in a file this page does not edit.
+  past round 1: `train_inverse` (`brick_builder/action/learn/train.py:194`) still raises on the
+  same zero-tick input, 18 lines further into training than the `hindsight_pairs` call.
+- The twin.py fix's effect on a `pick_and_place` episode is inferred from reading `_prepare_step`,
+  not observed: no episode was run with the fix applied (see Fixes to the crashes), and neither
+  `place.py` nor `campaign/tasks.py` give a blind step its own failure class in `evaluate.csv`.

@@ -217,7 +217,8 @@ class DigitalTwin:
             # and treats the step as untrusted rather than losing the whole episode. The count is
             # printed here because nothing downstream of the catch sees this message again.
             print(f"twin: step {name!r} sees {len(names)} of {len(references)} reference "
-                  f"blob(s), needs {min_refs}; scoring this step blind", file=sys.stderr)
+                  f"blob(s), needs {min_refs}; step marked untrusted, no correction applied",
+                  file=sys.stderr)
             raise BlindStep(
                 f"step {name!r}: the twin only shows {len(names)} of the "
                 f"{len(references)} reference blobs, which is not enough to line up on"
