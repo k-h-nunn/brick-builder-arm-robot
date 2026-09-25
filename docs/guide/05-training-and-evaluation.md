@@ -14,13 +14,13 @@ any brick_builder environment.
     before the servo model's encoder was moved to the output shaft
     ([Robot and servo model](03-robot-and-servo-model.md)) and have not been re-measured.
     Re-measured 2026-09-25, after the correction: the scripted-baseline row of the press smoke
-    table below (20 episodes, level 0), and both Pendulum learning-curve figures (PPO and SAC;
-    Pendulum-v1 is the RL core's own toy task, not a `brick_builder` arm environment, so
-    re-running it is not an arm-environment training run). Still predating the correction, and
-    not re-run this pass since each needs training a policy on an actual `brick_builder` arm
-    task: the 6-update press smoke checkpoint row, the Reach/Press/Align PPO and SAC training
-    runs referenced throughout this page. Current closed-loop results are in
-    [Closed-loop videos](../demos/videos.md).
+    table below (20 episodes, level 0, the environment's own misalignment box), and both Pendulum
+    learning-curve figures (PPO and SAC; Pendulum-v1 is the RL core's own toy task, not a
+    `brick_builder` arm environment, so re-running it is not an arm-environment training run).
+    Still predating the correction, and not re-measured here because each needs training a policy
+    on an actual `brick_builder` arm task: the 6-update press smoke checkpoint row, the
+    Reach/Press/Align PPO and SAC training runs referenced throughout this page. Current
+    closed-loop results are in [Closed-loop videos](../demos/videos.md).
 
 ## Purpose
 
@@ -330,24 +330,44 @@ lookup-table builds, over 10,000 random observations.
 tests/rl/test_sac_asym.py::test_learns_pendulum -s`), same Dict-wrapped `Pendulum-v1` wrapper as
 PPO's own acceptance test, `SACConfig(n_envs=4, total_steps=8_000, warmup_steps=300,
 batch_size=256, buffer_size=50_000, utd_ratio=1.0, lr_actor=1e-3, lr_critic=1e-3, gamma=0.98,
-hidden_critic=(128, 128), async_envs=False)`, seed 0:
+hidden_critic=(128, 128), async_envs=False)`, seed 0. Like the PPO test above, this one trains
+into a discarded pytest `tmp_path`; regenerating `docs/media/rl/sac_pendulum_learning_curve.png`
+needs the same config against a persistent run directory:
+
+```python
+import json
+from pathlib import Path
+
+from tests.rl.test_sac_asym import make_pendulum
+from brick_builder.rl.sac_asym import SACConfig, train
+from brick_builder.rl.ppo_asym import plot_learning_curve
+
+cfg = SACConfig(n_envs=4, total_steps=8_000, seed=0, async_envs=False, warmup_steps=300,
+                 batch_size=256, buffer_size=50_000, utd_ratio=1.0, lr_actor=1e-3,
+                 lr_critic=1e-3, gamma=0.98, hidden_critic=(128, 128))
+run_dir = Path("runs/pendulum_sac_figure")
+train(make_pendulum, cfg, run_dir)
+history = json.loads((run_dir / "returns.json").read_text())
+plot_learning_curve(history, Path("docs/media/rl/sac_pendulum_learning_curve.png"),
+                     title="SAC learning curve")
+```
 
 ![SAC Pendulum learning curve](../media/rl/sac_pendulum_learning_curve.png)
 
 Re-measured and the plot above regenerated 2026-09-25 (this project's dev machine, CPU only,
-`SyncVectorEnv`, shared with the other packages' own compute at the time): mean return over 10
+`SyncVectorEnv`, under ordinary background load): mean return over 10
 held-out episodes reaches **-167.7** (up from about -1200 for a random policy), in **76.7
 seconds** wall-clock for training plus evaluation — inside the 3-minute acceptance budget.
 `hidden_critic=(128, 128)` here (not `SACConfig`'s (256, 256) default) is deliberate for this
 3-dimensional toy task, not a general recommendation (see the update-throughput measurement
 below).
 
-> **rl-eval-export-1.** This run (and the plot above) already includes the fix to
+> This run (and the plot above) already includes the fix to
 > `_flush_n_step`'s truncation handling (a time-limit truncation no longer stores `done=1` and
 > drops the bootstrap the way a true termination does; it now stores `done=0` and bootstraps
 > from the episode's real final observation). Two earlier measurements bracket it and are kept
 > for the history: pre-fix, **-168.3** over 69.2 s; a first post-fix check at the same seed and
-> config, **-168.0**, called "not re-measured carefully enough to replace the plot" at the time.
+> config, **-168.0**, not carried forward to the plot at the time.
 > This run is that replacement. The number barely moved across all three (this toy task's return
 > is not sensitive to the fix); PPO's own number below did change materially.
 
@@ -378,7 +398,27 @@ tests/rl/test_ppo_asym.py::test_learns_pendulum`. It wraps `Pendulum-v1` so its 
 observation becomes `{"actor": obs, "critic": obs}` (both halves identical — Pendulum's
 observation is already the full state, so there's no extra privileged information for the critic),
 trains for 400,000 steps with `gamma=0.9` and `lr=1e-3` (tuned for this short-horizon toy task,
-not the arm's `PPOConfig` defaults), and evaluates for 10 held-out episodes.
+not the arm's `PPOConfig` defaults), and evaluates for 10 held-out episodes. The test itself
+trains into a pytest `tmp_path`, which is discarded, so it reproduces the number above but not the
+PNG; regenerating `docs/media/rl/pendulum_learning_curve.png` needs the same config pointed at a
+real, persistent run directory instead (`train()` always writes `<run_dir>/returns.json`;
+`scripts/make_media.py`'s RL section does not call this because it has no such directory to read
+back — see its comment):
+
+```python
+import json
+from pathlib import Path
+
+from tests.rl.test_ppo_asym import make_pendulum
+from brick_builder.rl.ppo_asym import PPOConfig, plot_learning_curve, train
+
+cfg = PPOConfig(n_envs=8, n_steps=1024, epochs=10, minibatches=32, lr=1e-3, gamma=0.9,
+                total_steps=400_000, seed=0, async_envs=False, ent_coef=0.0)
+run_dir = Path("runs/pendulum_ppo_figure")
+train(make_pendulum, cfg, run_dir)
+history = json.loads((run_dir / "returns.json").read_text())
+plot_learning_curve(history, Path("docs/media/rl/pendulum_learning_curve.png"))
+```
 
 ![Pendulum learning curve](../media/rl/pendulum_learning_curve.png)
 
@@ -387,7 +427,7 @@ Re-measured and the plot above regenerated 2026-09-25 (this project's dev machin
 over held-out episodes, in **128.8 seconds** wall-clock for training plus evaluation — inside the
 acceptance test's 4-minute budget.
 
-> **rl-eval-export-1.** This run (and the plot above) already includes the fix to PPO's GAE
+> This run (and the plot above) already includes the fix to PPO's GAE
 > bootstrap: every episode here truncates at Pendulum's 200-step time limit, and the pre-fix code
 > treated that as a true termination, zeroing the value bootstrap instead of bootstrapping from
 > the truncated episode's real final observation. The number this replaces, **-271.6**, was
@@ -416,21 +456,30 @@ budget (`--sync-envs --n-envs 4 --total-steps 6144`, i.e. 6 PPO updates — a fe
 
 | policy | level | episodes | successes | 95% Wilson CI |
 |---|---|---|---|---|
-| scripted baseline (`press_env.scripted_action`) | 0 | 20 | 20 | [0.839, 1.000] |
+| scripted baseline (`press_env.scripted_action`) | 0 | 20 | 4 | [0.161, 0.643] |
 | 6-update smoke checkpoint | 0 | 20 | 15 | [0.531, 0.888] |
 
-The scripted-baseline row is re-measured (2026-09-25, after the servo-encoder correction); it
-moved from 16/20 to 20/20 for the same reason the press-vs-oracle table in
-[Environments](04-environments.md#measured-numbers-press) did — `PressFromHeld`'s weld grasp lets
-the spiral search's socket-drop trigger fire once the corrected arm actually arrives within its
-reach. **The 6-update smoke checkpoint row is not re-run**: reproducing it means training a PPO
-policy on `PressFromHeld-v0`, an arm environment, which this pass does not do. Read the two rows
-as no longer comparable — the checkpoint's 15/20 predates the correction, the baseline's 20/20
-does not — rather than re-concluding "the two overlap." Six PPO updates moving the actor's
-weights off their random init is still all that row checks: the training path (`scripts/train.py`
--> `PressFromHeld-v0` -> `scripts/eval.py`) runs end to end, not that the residual policy has
-learned anything. A real run needs `press.yaml`'s full budget (or several times it — see open
-issues) before the sweep comparison (`scripts/eval.py --sweep press-misalign`) means anything.
+The scripted-baseline row is re-measured (2026-09-25, after the servo-encoder correction:
+`PressEnv(level=0, misalign=None, dr=True)`, `scripted_action`, seeds 10000-10019, matching
+`scripts/eval.py --actor scripted`'s own seeding). It moved from 16/20 to 4/20, not up — an
+earlier revision of this page reported 20/20 here and attributed the change to the same
+(incorrect) mechanism as the press-vs-oracle table in
+[Environments](04-environments.md#measured-numbers-press): that number came from a measurement
+bug (`evaluate_point()` forces an exact zero misalignment instead of drawing from level 0's own
+box), not from this row's own methodology, and did not survive a corrected re-measurement either.
+The real result: the corrected arm's precise tracking removes the lucky backlash-creep seating
+the old 16/20 depended on (see [Environments](04-environments.md#measured-numbers-press) for the
+fuller explanation, measured on the by-level table there), and nothing replaces it, so the
+scripted floor is now lower, not higher. **The 6-update smoke checkpoint row is not re-run**:
+reproducing it means training a PPO policy on `PressFromHeld-v0`, an arm environment, which is not
+done here. Read the two rows as no longer comparable — the checkpoint's 15/20 predates the
+correction, the baseline's 4/20 does not, and their overlapping-looking Wilson intervals are not
+evidence the checkpoint learned anything, since both rows are separately small-sample and now
+measure different arms. Six PPO updates moving the actor's weights off their random init is still
+all that row checks: the training path (`scripts/train.py` -> `PressFromHeld-v0` ->
+`scripts/eval.py`) runs end to end, not that the residual policy has learned anything. A real run
+needs `press.yaml`'s full budget (or several times it — see open issues) before the sweep
+comparison (`scripts/eval.py --sweep press-misalign`) means anything.
 
 ## AlignFromTokens: measured results
 

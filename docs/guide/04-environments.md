@@ -14,11 +14,12 @@ first task built on them, used to prove the whole multi-rate loop end to end.
     Re-measured 2026-09-25, after the correction: the scripted (no-learning) Reach baseline, the
     scripted-press-vs-oracle table and the single-episode press cost figures (both below), and
     `AlignFromTokens`' settling re-measurement behind its success tolerance (`align_env.py`,
-    `SUCCESS_TOL_POS`). Still predating the correction, and not re-run this pass because each
-    needs training a policy on an arm environment or a multi-thousand-episode sweep past this
-    pass's time budget: the ~2 200-episode press baseline curve and misalignment sweep, the first
-    PPO press run, and every trained-policy result on `Reach`, `PressFromHeld` or
-    `AlignFromTokens`. Current closed-loop results are in [Closed-loop videos](../demos/videos.md).
+    `SUCCESS_TOL_POS`). Still predating the correction, and not re-measured here because each
+    needs training a policy on an arm environment or a multi-thousand-episode sweep past what a
+    single non-training measurement session can cover: the ~2 200-episode press baseline curve
+    and misalignment sweep, the first PPO press run, and every trained-policy result on `Reach`,
+    `PressFromHeld` or `AlignFromTokens`. Current closed-loop results are in
+    [Closed-loop videos](../demos/videos.md).
 
 ## Purpose
 
@@ -185,18 +186,22 @@ bricks, no vision; grip and compliance frozen. The residual clips to a box aroun
   (`tests/envs/test_reach_env.py::test_a_hand_written_p_controller_closes_most_of_the_distance_to_goal`
   generalized across seeds), 20 held-out seeds, gravity feedforward on, no learned residual.
   **2/20** reach the literal 3 mm / 10-tick success band; final TCP error mean 2.75 mm, median
-  2.52 mm, max 5.71 mm. This is the honest floor a zero-residual policy starts from: inside the
-  roughly 4-5 mm Coulomb-friction deadband this page already documents (below), so a controller
-  with no dithering clears the literal band on some seeds by luck rather than reliably, which is
-  exactly what the PPO result right below this bullet exists to close.
+  2.52 mm, max 5.71 mm. This is not a settled floor: tracked tick by tick over the last 20 ticks
+  of each episode, true TCP error keeps swinging rather than converging — lows around 0.2-1.4 mm
+  and highs around 3.0-6.6 mm, on every one of the 20 seeds — so a single seed's final-tick number
+  is one sample of that ongoing oscillation, not a value the controller has settled to. A
+  pure-proportional residual (gain 0.3, no derivative term) reading position error every 20 ms
+  tick and commanding a rate is exactly the kind of loop that rings instead of settling; gravity
+  feedforward and IK remove the static components of tracking error, not this dynamic one. This is
+  the honest floor a zero-residual policy starts from, and it is what a policy with a derivative
+  term or learned dithering — the PPO result below — can close.
 - PPO (`brick_builder.rl.ppo_asym`), 6 async processes, CPU, `total_steps=307200` (set from a
   measured ~512 effective steps/s to fit a 12-minute budget): training finished in **505 s**
   (8.4 min), mean return rising from -20.6 (update 0) to a plateau near +8.4 (update ~150 of 200;
   `docs/media/envs/reach_learning_curve.png`). Evaluated over 200 held-out episodes (seeds
   10000-10199, deterministic actions): **200/200 successes**, Wilson interval [0.981, 1.0] (above
   the 90 % target), mean final TCP error 1.02 mm, median 0.98 mm — both below the 3 mm success
-  band and the roughly 4-5 mm Coulomb-friction deadband. Checkpoint, TensorBoard log, per-update
-  metrics:
+  band. Checkpoint, TensorBoard log, per-update metrics:
   `runs/reach_smoke/` (git-ignored).
 
 ## Scripted press and the press environment
@@ -264,19 +269,23 @@ gymnasium.
 
 VERIFY as specified does not work on this arm. Spec: a small upward tug at reduced torque limit; a
 rise in `Present_Load` means the brick is attached. But `Present_Load` is the scaled joint
-position error, and this arm has a Coulomb-friction dead band of about 4-5 mm at the TCP (see
-gravity feedforward, above). A tug small enough to spare a seated brick stays entirely inside that
-stiction band: the tool does not move whether or not the brick is held, and the load rise measures
-stiction, not grip. Over 20 trials at a 4 mm tug: correct 6-8 times out of 20, seated and loose
-distributions overlapping in reverse. An 8 mm tug beats the stiction but pulls a seated 2×4 back
-off the plate.
+position error, and this arm's own joint friction is enough that a tug this small does not
+reliably move the tool whether or not the brick is held, so the load rise measures stiction, not
+grip. Over 20 trials at a 4 mm tug: correct 6-8 times out of 20, seated and loose distributions
+overlapping in reverse. An 8 mm tug beats the stiction but pulls a seated 2×4 back off the plate.
 
-The settled tool height after the press releases (`SkillFSM.seated_by_height`) works instead: a
-seated 2×4 leaves the tool 2.0-2.3 mm above the seated height, one resting on the stud tops
-4.6-6.5 mm, marginal cases between. Correct 40 out of 40 on two held-out seeds. Most of the 2 mm
-baseline is weld stretch, so the threshold needs recalibration for the friction grasp, and again
-on hardware. Both verdicts are reported; `SkillFSM.verified` still reports the spec's load-rise
-result.
+The settled tool height after the press releases (`SkillFSM.seated_by_height`) works better, not
+perfectly: a seated 2×4 leaves the tool 2.0-2.3 mm above the seated height, one resting on the
+stud tops 4.6-6.5 mm, marginal cases between. Correct 37 out of 40 on held-out seeds (seed 7;
+Wilson [0.801, 0.974]) — short of the spec's 95 % bar, from a traced failure mode near the
+capture gate's own edge (a case can look seated by height while a stud is still shallow, or miss
+the cell entirely with the empty tool settling inside tolerance by coincidence; see the module
+docstring). Most of the 2 mm baseline is weld stretch, so the threshold needs recalibration for
+the friction grasp, and again on hardware. Both verdicts are reported; `SkillFSM.verified` still
+reports the spec's load-rise result. A third, independent cross-check (`seated_by_occupancy`) is
+available whenever a caller binds `occupancy_check` to a scene model or, for a sim-only caller,
+`ground_truth_occupancy` — never overriding the height verdict, since it answers a coarser
+question ("is anything there") that a truly seated and a merely resting brick can both satisfy.
 
 ## `BrickBuilder/PressFromHeld-v0`
 
@@ -425,43 +434,51 @@ clearance 0.20 mm), weld grasp.
   smoothly over 6 mm. Largest gap between this environment and the spec's level-5 ±12° target.
 
 **Scripted press vs. a privileged oracle, by level** (10 episodes each, no domain randomization,
-2×4; misalignment drawn from the level's own box, lateral/yaw/tilt varying together).
-`oracle_action` reads the true misalignment and cancels it; not a policy, but a check for whether
-a learner has anything to gain. Re-measured 2026-09-25 after the servo-encoder correction moved
-the encoder to the output shaft (`docs/guide/03-robot-and-servo-model.md`); the table below
-replaces the pre-correction one:
+2×4; misalignment drawn from the level's own box — `PressEnv(level=k, misalign=None, dr=False)`,
+lateral/yaw/tilt varying together, seed0=0). `oracle_action` reads the true misalignment and
+cancels it; not a policy, but a check for whether a learner has anything to gain. Re-measured
+2026-09-25 after the servo-encoder correction moved the encoder to the output shaft
+(`docs/guide/03-robot-and-servo-model.md`); the table below replaces the pre-correction one:
 
 | level | scripted | mean return | oracle | mean return |
 |---|---|---|---|---|
-| 0 (±1 mm, 2°) | 10/10 | +18.3 | 10/10 | +18.3 |
-| 1 (±2 mm, 4°) | 10/10 | +18.3 | 10/10 | +18.3 |
-| 2 (±4 mm, 8°) | 10/10 | +18.3 | 10/10 | +18.3 |
-| 3 (±6 mm, 12°) | 10/10 | +18.3 | 10/10 | +18.3 |
+| 0 (±1 mm, 2°) | 3/10 | +2.5 | 7/10 | +13.4 |
+| 1 (±2 mm, 4°) | 2/10 | +0.3 | 1/10 | +2.9 |
+| 2 (±4 mm, 8°) | 1/10 | −2.0 | 2/10 | +5.2 |
+| 3 (±6 mm, 12°) | 0/10 | −3.5 | 1/10 | +2.3 |
 
-**This is a different result, not a rounding change: before the correction, scripted collapsed
-from 9/10 at level 0 to 1/10 by level 2, and the oracle's own gap (turning a 10-30 % task into an
-80-90 % one, defeated again by yaw at level 3) was the headline finding of this whole table.**
-Both numbers are gone. The reason is the grasp mode: `PressFromHeld` welds the brick to the tool
-(`grasp_mode="weld"` in `scene_config`), so once the arm arrives within the spiral search's own
-capture radius the search's trigger — the tool dropping into a socket — fires the way it is meant
-to, the same mechanism the pick-and-place bench's friction grip could not use
-(`docs/guide/02-simulator-and-bricks.md`, "Brick seating with the stock gripper"). Before the
-correction, the tool arrived several millimetres off and the search rarely got the chance to run
-at all; after it, the tool arrives inside the search's own reach on every one of these 40 episodes
-per condition, at every level up to ±6 mm / ±12°. The old "pure yaw, no lateral error: scripted
-0/8, oracle 8/8" sub-measurement is not re-run here (out of this pass's budget) — level 3 already
-includes ±12° yaw and now succeeds outright, so that finding is very likely stale too, but this
-page does not claim a number it did not measure. Level 4/5 (two-brick) episodes are likewise not
-re-run this pass.
+n=10 per cell, so every count above carries a wide 95 % Wilson interval (roughly ±0.2-0.3 on the
+rate); read this as an order-of-magnitude re-measurement, not four-significant-figure numbers.
+**This is not the pre-correction table either, and not in the direction the servo fix generally
+helps in: level 0 was 9/10 scripted / 10/10 oracle before the correction, and is now 3/10 / 7/10;
+level 2 was 1/10 / 9/10 and is now 1/10 / 2/10. Level 3 is close to unchanged (1/10 / 2/10 then,
+0/10 / 1/10 now).** The mechanism that produced the wrong all-10/10 table above (evaluate this
+page carried in an earlier revision) was a measurement bug, not a real result:
+`press_env.evaluate_point()` always passes an exact `(lateral, yaw)` pair, so a caller building
+that table with `lateral=0, yaw=0` silently ran every level at zero misalignment instead of the
+level's own box — the table above is measured with `misalign=None` instead, which is what draws
+from the box. The real result is worse than pre-correction at levels 0 and 2, not better: the
+old backlash creep this section used to credit for helping the search connect no longer happens
+(the tool now arrives within about half a millimetre of its commanded pose, not several), so
+whatever yaw the level's own box draws is delivered as commanded, with no lucky sideways drift to
+compensate it. That is consistent with what this page already documents about yaw elsewhere in
+this section — a 2-3° yaw alone already produces a `partial_seat` the search cannot fix — and
+level 0's own box already draws yaw up to 2°, on the same draw as a lateral and tilt error, in a
+random direction. This page does not isolate the yaw contribution specifically for this table
+(that needs a per-axis sweep, not run here); "consistent with" is as far as this measurement
+supports. Level 4/5 (two-brick) episodes and the old "pure yaw, no lateral error" sub-measurement
+are not re-run here.
 
 **Scripted baseline curve** (target for the learned press) — **predates the servo-encoder
-correction and was not re-run this pass (2 200 episodes, ~36 min at one process against this
-pass's 30-minute budget); read it as history, not current behaviour.** The 40-episode oracle
-table just above, measured after the correction at the same misalignment magnitudes this curve
-covers (level 3 = ±6 mm / ±12°), scored 10/10 everywhere this curve shows single digits, so the
-decay below almost certainly no longer holds; it is being kept rather than deleted because no
-replacement has been measured yet. 100 episodes per point, one misalignment axis at a time, exact
-magnitude in a random direction, level 0 dynamics, no randomization
+correction and was not re-run here (2 200 episodes, ~36 minutes at one process); read it as
+history, not current behaviour.** The by-level table just above, re-measured after the correction
+at similar misalignment magnitudes (level 3 = ±6 mm / ±12°, mixed with yaw and tilt rather than
+this curve's one-axis-at-a-time sweep), does not say this curve reads too pessimistic — if
+anything the by-level numbers came back lower than pre-correction at the smaller levels, the
+opposite of what an earlier revision of this page claimed. The curve is kept as history because no
+replacement single-axis sweep has been measured, not because the by-level result vouches for it
+either way. 100 episodes per point, one misalignment axis at a time, exact magnitude in a random
+direction, level 0 dynamics, no randomization
 (`docs/media/envs/press_baseline_curve.png`; raw counts
 `runs/press_baseline/curve.json`; 1 451 s on six processes):
 
@@ -556,9 +573,11 @@ first reaches 10 ticks. There is no early termination condition (`terminated()` 
   budget such a run from per-episode wall-clock time.
 - **Scripted-controller success against noise, age and producer** is a token-pipeline property,
   not this environment's, covered in [Perception](06-perception.md), "From tokens to a target:
-  AlignFromTokens." Even at zero token noise the scripted controller does not reach 100 % (the
-  same Coulomb-friction deadband that limits `Reach`'s hand-written P controller); success falls
-  off as noise grows, from a modest floor at 0-2 mm to zero at 8 mm.
+  AlignFromTokens." Even at zero token noise the scripted controller does not reach 100 %: this
+  task only ever gets one vision reading per episode (see `align_env.py`'s module docstring), so a
+  loose brick that keeps settling physically after that one reading leaves the controller aimed at
+  a stale target on some seeds; success falls off further as noise grows, from a modest floor at
+  0-2 mm to zero at 8 mm.
 - **No policy has been trained to convergence.** `configs/train/align.yaml`'s budget is 600k steps
   (hours-long); only smoke-budget checkpoints exist, so there is no learned-vs-scripted comparison
   yet (same open issue as `PressFromHeld`, above).
