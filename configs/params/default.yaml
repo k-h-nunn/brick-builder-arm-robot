@@ -580,6 +580,13 @@ camera:
   # chessboard shots through cv2.calibrateCamera. The procedure is in
   # docs/guide/08-hardware-wiring-calibration.md. They are in pixels at
   # resolution_width_px x resolution_height_px and mean nothing at another resolution.
+  #
+  # fx_px/fy_px/cx_px/cy_px only switch the compiled wrist camera onto MuJoCo's pixel-intrinsics
+  # model (brick_builder.calib.camera.camera_config_from_params) once at least one of them has
+  # status: measured below -- scripts/calibrate_camera.py's output fragment sets that. That model
+  # does not respond to a runtime write to model.cam_fovy the way the fovy model does; anything
+  # that jitters or reads cam_fovy on the wrist camera (render.domain_rand's fovy jitter,
+  # perception.views/perception.backproject) is not yet aware of a measured-intrinsics camera.
 
   fx_px:
     # What: focal length in pixels, x.
@@ -654,6 +661,11 @@ camera:
   # ---- extrinsics: where the camera sits on the gripper --------------------------------------
   # One measurement, cv2.calibrateHandEye over the same shots as the intrinsics, converted from
   # OpenCV's camera convention (+z forward, +y down) to MuJoCo's (-z forward, +y up).
+  #
+  # Like fx_px/etc. above, these six only switch the compiled wrist camera's pose onto this file's
+  # own numbers once at least one of them has status: measured -- below that, CameraConfig()'s own
+  # default pose is used directly rather than recomputing it from these (assumed, coarser) numbers,
+  # which do not reproduce patch_so101.WRIST_CAM_QUAT_IN_GRIPPER's own precision (see mount_roll_deg).
 
   mount_x_mm:
     # What: camera position in the gripper body frame, x.

@@ -350,11 +350,22 @@ the point is not to hand-wave a factor between horizontal and diagonal, because 
 close enough for that to be a good approximation at a wide-angle lens like this one.
 
 **Proper version**, once you have five minutes with a laptop and OpenCV: print a 9x6-internal-
-corner checkerboard at 15 mm squares (fits this arm's short working distance), take 15-20 photos
-of it from varied distances and angles with the wrist camera, and run `cv2.calibrateCamera`
-against the detected corners. This gives you real intrinsics (and, if you want to go further,
-[Robot and servo model](03-robot-and-servo-model.md#the-wrist-camera) has the full
-`cv2.calibrateHandEye` procedure for the camera's *position*, not just its field of view).
+corner checkerboard at 15 mm squares (fits this arm's short working distance), take 15-20+ photos
+of it from varied positions *and orientations* with the wrist camera, log the `gripper` body's
+base-frame pose at each shot, and run
+
+```bash
+.venv/bin/python scripts/calibrate_camera.py --images captures/ --poses captures/poses.json \
+    --out camera_measured.yaml
+```
+
+This gives you real intrinsics + distortion (`cv2.calibrateCamera`) and, from the same shots, the
+camera's mount *position* (a hand-eye `AX = XB` solve, not just field of view), and writes both
+straight into a `configs/params/` fragment ready to paste into `my_params.yaml` -- see
+[Robot and servo model](03-robot-and-servo-model.md#the-wrist-camera) for the full procedure and
+[Hardware, wiring, calibration](08-hardware-wiring-calibration.md#camera-calibration) for what the
+script prints and how to read it. `--simulate` runs the whole pipeline against a rendered
+checkerboard with no camera or arm needed, as a self-check of the pipeline itself.
 
 **Type into `my_params.yaml`:**
 
@@ -374,12 +385,18 @@ camera:
 ```
 
 **Read the report:** the camera section of the parameter table shows the vertical `fovy` MuJoCo
-will actually compile the camera with, computed for your resolution. There is no dedicated
-camera experiment among the six — none of `press-bench`, `seating-feasibility`, `force-map`,
-`grasp-hold` or `pick-and-place` render an image at all, so this is the one measurement whose
-only feedback loop today is "does the number in the report look like what your lens actually
-does," not a report that changes because of it. If a vision-based task is added later, this is
-where its camera model would come from.
+will actually compile the camera with, computed for your resolution. None of the six experiments
+render an image from the wrist camera; `seating-feasibility` and `force-map` (through
+`to_arm_config`) and `grasp-hold` and `pick-and-place` (through `to_scene_config`, which calls
+`to_arm_config`) do compile the `camera.*` fields into the scene's wrist camera even though they
+never render from it, so a wrong `fx_px`/etc. entry would still change what those experiments
+build, just not anything they check; `press-bench` reads no camera field. A `diagonal_fov_deg`-only
+entry from the quick version above therefore has no feedback loop besides "does the number in the
+report look like what your lens actually does." `scripts/calibrate_camera.py`'s own printout
+(reprojection RMS, focal-length percent) is the real feedback loop for the proper version's
+`fx_px`/etc., and its `--simulate` mode's recovery-error table (guides 03 and 08) is how that
+pipeline's own accuracy was checked before trusting it on real photographs. If a vision-based task
+reads the camera model at runtime, this is where it comes from.
 
 ---
 
@@ -528,6 +545,7 @@ be filled in before and after, not just after.
 | `arm.joint_friction_Nm` | not a kitchen-scale measurement — system identification, see guide 03 | `pick-and-place` (no dedicated report section); overwritten by domain randomization's `dynamics` group above level 0 |
 | `arm.print_color_r`/`_g`/`_b` | look at the printed arm — not a physics measurement | `params` (render only) |
 | `camera.diagonal_fov_deg`, resolution | printed checkerboard or a sheet of paper | `params` |
+| `camera.fx_px`/`fy_px`/`cx_px`/`cy_px`/`opencv_*`, `mount_*_mm`/`_deg` | `scripts/calibrate_camera.py` against checkerboard photos | `params` |
 | `bricks.youngs_modulus_GPa` | three-point bend on a wall cut from a brick | `params` |
 | `bricks.tensile_yield_MPa`, `flexural_strength_MPa` | destructive: push a wall sideways to a visible set, then to a crack (guide 02c section 7.7) | `grasp-hold` |
 | `bricks.contact_model`, `damage_monitor`, `breakable` | switches, not measurements — see guide 02d | `pick-and-place` |

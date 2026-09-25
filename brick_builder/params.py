@@ -735,7 +735,8 @@ def to_snap_params(params: ParamFile, base: SnapParams = SnapParams()) -> SnapPa
 
 
 def to_arm_config(params: ParamFile, base: ArmConfig = ArmConfig()) -> ArmConfig:
-    """An :class:`~brick_builder.robot.patch_so101.ArmConfig` from the ``arm.*`` fields.
+    """An :class:`~brick_builder.robot.patch_so101.ArmConfig` from the ``arm.*`` and ``camera.*``
+    fields.
 
     ``arm.backlash_total_deg`` is the TOTAL free play a teammate measures at the tool;
     ``ArmConfig.backlash_deg`` is a half-range, so this halves it before setting the field.
@@ -744,7 +745,16 @@ def to_arm_config(params: ParamFile, base: ArmConfig = ArmConfig()) -> ArmConfig
     ``patch_so101._patch_joints`` applies to every actuated joint's ``frictionloss``.
     ``arm.print_color_r``/``_g``/``_b`` set ``ArmConfig.print_color_rgba`` (alpha fixed at 1.0),
     which ``patch_so101._patch_print_color`` applies to every printed-part material.
+
+    ``ArmConfig.camera`` comes from :func:`brick_builder.calib.camera.camera_config_from_params`,
+    imported lazily (it pulls in ``patch_so101``'s ``mujoco`` import, which this module otherwise
+    avoids at import time -- module docstring). The shipped default file reproduces
+    ``CameraConfig()`` exactly (``tests/calib/test_camera.py``); a file with a real calibration's
+    ``fx_px``/etc. at ``status: measured`` switches the built config onto MuJoCo's pixel-intrinsics
+    camera model, same as calling ``camera_config_from_params`` directly.
     """
+    from .calib.camera import camera_config_from_params
+
     kwargs = {
         "vin": float(params.value("arm.supply_voltage_V")),
         "p_gain": int(params.value("arm.servo_p_gain")),
@@ -758,6 +768,7 @@ def to_arm_config(params: ParamFile, base: ArmConfig = ArmConfig()) -> ArmConfig
             float(params.value("arm.print_color_b")),
             1.0,
         ),
+        "camera": camera_config_from_params(params),
     }
     kept, _ = filter_dataclass_kwargs(ArmConfig, kwargs)
     return dataclasses.replace(base, **kept)
@@ -776,13 +787,14 @@ def to_servo_config(params: ParamFile, base: ServoConfig = ServoConfig()) -> Ser
 
 @dataclass(frozen=True)
 class CameraSettings:
-    """The wrist camera's field of view and resolution, plus its lens distortion.
+    """The wrist camera's field of view and resolution, plus its lens distortion, for
+    :func:`to_postprocess_config`'s domain-randomization ranges.
 
-    There is no ``CameraConfig`` dataclass anywhere in the simulator to build -- the wrist
-    camera's fovy and pose are module-level constants in ``patch_so101.py``, computed once at
-    import time. This is a params-module-local stand-in so a member's field-of-view entry has
-    somewhere typed to land; see the accompanying report for why a real ``CameraConfig`` would
-    be a useful hook.
+    ``brick_builder.robot.patch_so101.CameraConfig`` (built from this same file by
+    :func:`brick_builder.calib.camera.camera_config_from_params`, and set on
+    :attr:`~brick_builder.robot.patch_so101.ArmConfig.camera` by :func:`to_arm_config`) is the
+    full wrist-camera configuration the compiled model actually uses; this narrower dataclass
+    stays only for the postprocess-config conversion below.
     """
 
     diagonal_fov_deg: float
