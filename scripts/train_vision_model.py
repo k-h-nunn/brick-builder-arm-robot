@@ -14,9 +14,12 @@ Two steps, either of which can be run on its own:
 
 Everything a run produces lands in `--out` (default `results/vision_model/`, git-ignored):
 `checkpoint.pt` (model, optimizer, history -- re-running the same command resumes from it),
-`training_log.csv`, `loss_curves.png` and `train_summary.json`. The best held-out checkpoint is
-also written to `brick_builder/perception/weights/vision_model.pt`, which is the one
-`brick_builder.perception.cnn.source.CnnSceneModel` loads by default and the one that ships.
+`training_log.csv`, `loss_curves.png` and `train_summary.json`. With `--out results/vision_model`
+(the default) or an explicit `--ship-weights`, the best held-out checkpoint is also written to
+`brick_builder/perception/weights/vision_model.pt`, the file
+`brick_builder.perception.cnn.source.CnnSceneModel` loads by default and the one that ships; any
+other `--out` writes `out/best.pt` only, unless `--ship-weights` is passed explicitly (see
+`--ship-weights`, `--no-ship-weights` below).
 
 CPU only by default, per project policy: the GPU may be busy with someone else's job, so
 `CUDA_VISIBLE_DEVICES` is cleared before torch is imported. Pass `--device cuda` on a machine
@@ -69,11 +72,9 @@ def main(argv: list[str] | None = None) -> dict:
                              "(ignored once that --out already has a checkpoint.pt to resume)")
     parser.add_argument("--ship-weights", dest="ship_weights", action="store_true",
                         default=None,
-                        help="let a new best epoch overwrite the live "
-                             "brick_builder/perception/weights/vision_model.pt as it trains "
-                             "(default: on for a plain run, off whenever --out is not the "
-                             "default results/vision_model, so an experimental run cannot "
-                             "clobber the shipped checkpoint before its numbers are gated)")
+                        help="write new best epochs to brick_builder/perception/weights/"
+                             "vision_model.pt (default: on for --out results/vision_model, "
+                             "off otherwise)")
     parser.add_argument("--no-ship-weights", dest="ship_weights", action="store_false")
     args = parser.parse_args(argv)
 

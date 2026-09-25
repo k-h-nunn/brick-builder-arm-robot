@@ -116,11 +116,9 @@ class TrainConfig:
     save_shipped: bool = True
     """Whether a new best-held-out epoch also overwrites the live
     `brick_builder/perception/weights/vision_model.pt` (the file `CnnSceneModel` loads by
-    default), on top of always writing `out/best.pt`. Leave this on for an ordinary training run;
-    turn it off for an experimental run (a speed probe, a fine-tune whose numbers have not been
-    gated yet) so a script interrupted or still under evaluation can never leave the shipped
-    checkpoint in an unvetted, partially-trained state -- shipping is then a deliberate, separate
-    step: copy `out/best.pt` over the shipped file once the gate in the guide passes."""
+    default), on top of always writing `out/best.pt`. Off for an experimental run (a speed probe,
+    an ungated fine-tune) so the shipped checkpoint stays fixed; shipping is then a separate,
+    explicit step: copy `out/best.pt` over the shipped file once the gate in the guide passes."""
 
     photometric_strength: float = 1.0
     """Scales the photometric jitter `_augment` applies, relative to the original fixed ranges
@@ -491,7 +489,7 @@ def train(cfg: TrainConfig, verbose: bool = True) -> dict:
         "best_val_loss": best,
         "final": history[-1] if history else {},
         "parameters": model.n_parameters(),
-        "weights": str(WEIGHTS_DIR / WEIGHTS_NAME),
+        "weights": str(WEIGHTS_DIR / WEIGHTS_NAME) if cfg.save_shipped else str(out_dir / "best.pt"),
     }
     (out_dir / "train_summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     return summary
