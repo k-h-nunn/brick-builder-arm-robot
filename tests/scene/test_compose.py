@@ -110,6 +110,15 @@ def test_connected_from_baseplate_walks_more_than_one_layer():
     with_a_stranger = two_layer + [Connection("F", "G", 4, False)]
     assert _connected_from_baseplate("plate", with_a_stranger) == {"plate", "B", "C"}
 
+    # A breakable scene's socket connects to a stud's own piece body, not the brick's roof
+    # (`bricks.breakable.add_breakable_brick`), so `lower` can be `'B_piece_stud_0_0'` instead of
+    # `'B'`. The walk has to recognise that as the same brick.
+    breakable_two_layer = [
+        Connection("B", "plate", 8, True),
+        Connection("C", "B_piece_stud_0_0", 1, True),
+    ]
+    assert _connected_from_baseplate("plate", breakable_two_layer) == {"plate", "B", "C"}
+
 
 def test_settle_reports_a_two_layer_stack_as_fully_connected():
     """A brick stacked on a brick stacked on the plate: reachable in two hops, so this has to
@@ -123,6 +132,21 @@ def test_settle_reports_a_two_layer_stack_as_fully_connected():
     assert any(c.upper == "struct_1" and c.lower == "struct_0" for c in report.connections), (
         report.connections
     )
+
+
+def test_settle_reports_a_two_layer_breakable_stack_as_fully_connected():
+    """The same two-layer stack, built breakable: its sockets connect to stud pieces
+    (`'struct_0_piece_stud_i_j'`), not `struct_0` itself, so this is the case the graph walk has
+    to map back to the brick rather than the one the plain monolithic test already covers."""
+
+    stack = [Placement(2, 4, 2, 2, 0, "blue"), Placement(2, 4, 2, 2, 1, "yellow")]
+    scene = build_scene(SceneConfig(placed=stack, held=None, breakable=True))
+    report = settle(scene, 0.5)
+    assert report.warnings == {}, report.warnings
+    assert any("_piece_stud_" in c.lower for c in report.connections), (
+        "this scene is not exercising the stud-piece naming the test is about", report.connections
+    )
+    assert report.connected_placed == len(stack), report.connections
 
 
 def test_settle_reports_a_three_layer_stack_as_fully_connected():
@@ -144,24 +168,35 @@ def test_settle_reports_a_three_layer_stack_as_fully_connected():
 
 
 def test_a_brick_resting_on_stud_tops_without_capture_is_not_counted_connected():
-    """A brick lowered half a stud pitch off-grid rests on top of the stud tops instead of
-    seating (`tests/bricks/test_generator.py`'s misaligned-insertion case) and never engages a
-    socket, so it must not count as connected even though it is plainly resting there."""
+    """A second *placed* brick lowered half a stud pitch off-grid rests on top of the first
+    brick's stud tops instead of seating (`tests/bricks/test_generator.py`'s misaligned-insertion
+    case) and never engages a socket. It has to be one of `scene.placed_names` for this to be a
+    real test of `settle()`'s count -- a rider outside `placed` (a supply or tray brick) is never
+    counted connected either way, so `connected_placed == 1` could not fail on its account."""
 
-    base = [Placement(2, 4, 2, 2, 0, "blue")]
-    scene = build_scene(SceneConfig(placed=base, supply=((2, 4, "yellow"),), held=None))
-    base_name = scene.placed_names[0]
-    rider_name = "supply_brick_0"
+    # The rider is narrower than the base (2 studs across against 4) so the half-pitch offset
+    # below keeps its whole footprint over the base's flat top instead of hanging part of it
+    # off the edge, which topples it rather than resting it.
+    base = [Placement(2, 4, 1, 2, 0, "blue"), Placement(4, 2, 1, 4, 0, "yellow")]
+    scene = build_scene(SceneConfig(placed=base, held=None))
+    base_name, rider_name = scene.placed_names
+    assert len(base) == 2
 
     base_pos, base_quat = scene.body_pose(base_name)
     spec = scene.cfg.spec
     rider_start = np.array([base_pos[0] + 0.5 * spec.pitch, base_pos[1], base_pos[2] + spec.height + 0.001])
     set_brick_pose(scene, rider_name, rider_start, base_quat)
+    # The rider was already seated (in `placed`, it built flush on the plate before this moved
+    # it), so the snap model has a live captured connection whose frozen relative pose no longer
+    # matches the bodies. `bind()` is the one call that clears captured anchors (see
+    # `reset_scene`); without it the stale connection yanks the rider towards its old socket
+    # instead of letting it simply rest where it was put.
+    scene.snap.bind(scene.model, scene.data)
     mujoco.mj_forward(scene.model, scene.data)
 
     report = settle(scene, 1.0)
     assert report.warnings == {}, report.warnings
-    assert report.connected_placed == 1, report.connections
+    assert report.connected_placed == 1, report.connections  # the base only, not the rider
     assert all(c.upper != rider_name for c in report.connections), report.connections
 
     rider_pos, _ = scene.body_pose(rider_name)

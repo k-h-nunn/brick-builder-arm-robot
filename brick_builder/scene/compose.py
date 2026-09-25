@@ -1288,21 +1288,35 @@ class SettleReport:
     connected_placed: int
 
 
+def _owning_brick(body: str) -> str:
+    """The brick (or plate) body a connection endpoint stands for.
+
+    Every connection endpoint is already a whole brick's own body, with one exception: in a
+    breakable scene (`SceneConfig.breakable`) a socket connects to a stud's own piece body,
+    ``'<brick>_piece_stud_<i>_<j>'``, not the brick's roof (`bricks.breakable.add_breakable_brick`
+    gives each stud its own free joint precisely so it can break off on its own). ``'_piece_'``
+    appears in no whole-brick or plate name, so splitting on its first occurrence recovers the
+    owning brick in that case and is a no-op in every other.
+    """
+
+    root, sep, _ = body.partition("_piece_")
+    return root if sep else body
+
+
 def _connected_from_baseplate(plate_name: str, conns: list[Connection]) -> set[str]:
-    """Body names reachable from the baseplate by walking snap connections, layer by layer.
+    """Brick names reachable from the baseplate by walking snap connections, layer by layer.
 
     A stack is a graph with an edge from every `Connection.lower` to its `Connection.upper` (the
-    body a stud belongs to, to the body whose socket it is in). Counting only the connections
-    whose `lower` is the plate itself -- what this used to do -- answers "does this brick touch
-    the plate directly", so a correctly built two-layer stack reports its top brick as
-    unconnected (1 of 2): that brick's own connection has the *first* brick as `lower`, not the
-    plate. A breadth-first walk from the plate answers the question this module actually means by
-    "connected": reachable from the plate through any number of intermediate bricks.
+    body a stud belongs to, to the body whose socket it is in), both passed through
+    `_owning_brick` first so a breakable scene's stud-piece connections still walk brick to brick.
+    A breadth-first walk from the plate reaches a brick through any number of intermediate bricks,
+    which is what "connected" means in this module: not only the bricks that touch the plate
+    directly.
     """
 
     by_lower: dict[str, list[str]] = {}
     for c in conns:
-        by_lower.setdefault(c.lower, []).append(c.upper)
+        by_lower.setdefault(_owning_brick(c.lower), []).append(_owning_brick(c.upper))
     reached = {plate_name}
     frontier = [plate_name]
     while frontier:
