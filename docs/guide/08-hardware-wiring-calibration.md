@@ -280,8 +280,7 @@ Each row is one procedure and the parameter-file entry it fills.
 | Servo system identification | `servo_sysid.py --port …`, per joint. | `arm.p_gain`, `arm.backlash_total_deg`, `arm.servo_dead_band_counts`, `arm.joint_friction_Nm` |
 | Stall torque | Load a joint through a lever with known masses until the duty saturates at 0.97 and the joint gives way. Resolves the 1.9 vs 3.41 N·m disagreement of guide 03, which scales every press-force number. | `arm.torque_limit_Nm` |
 | Press-force ramp | Tool-down onto a kitchen scale, jaws together; command the tool down in 1 mm steps and record the scale reading against `Present_Load` and `Present_Current` at each step. Gives the duty-to-force map the compliance scalars assume. Real only — there is no scale in the simulator. | `arm.torque_limit_Nm` (cross-check), guide 03's force map |
-| Camera intrinsics | 15-20 shots of a 9x6, 15 mm chessboard at varied poses, `cv2.findChessboardCorners` then `cv2.calibrateCamera` at 640x480. | `camera.fx_px`, `fy_px`, `cx_px`, `cy_px`, `opencv_k1`, `k2`, `p1`, `p2`, `k3` |
-| Camera extrinsics (hand-eye) | Same shots. Feed each shot's gripper-to-base transform (`ArmKinematics.fk`) and board-to-camera transform (`cv2.solvePnP`) to `cv2.calibrateHandEye`. Convert from OpenCV's convention (+z forward, +y down) to MuJoCo's (-z forward, +y up): a fixed 180° flip about the camera's own x axis. | `camera.mount_x_mm`, `mount_y_mm`, `mount_z_mm`, `mount_roll_deg`, `mount_pitch_deg`, `mount_yaw_deg` |
+| Camera intrinsics + extrinsics | `scripts/calibrate_camera.py --images DIR --poses poses.json --out FRAGMENT.yaml`: 15-20+ shots of a 9x6, 15 mm chessboard at varied *position and orientation*, each with the logged gripper-to-base pose (`ArmKinematics.fk`). Runs `cv2.calibrateCamera` for intrinsics/distortion and a hand-eye `AX = XB` solve for the mount pose (see "Camera calibration" below), converts the hand-eye result from OpenCV's convention to MuJoCo's, prints a 180°-sensor-flip check, and writes the fragment directly. | `camera.fx_px`, `fy_px`, `cx_px`, `cy_px`, `opencv_k1`, `k2`, `p1`, `p2`, `k3`, `mount_x_mm`, `mount_y_mm`, `mount_z_mm`, `mount_roll_deg`, `mount_pitch_deg`, `mount_yaw_deg` |
 | Baseplate and tray survey | Ruler from the arm's base mounting point to the plate centre and the tray centre. | `workspace.baseplate_x_m`, `baseplate_y_m`, `baseplate_yaw_deg`, `tray_x_m`, `tray_y_m` |
 | Twin baseline | One `TwinSync` run over the real bus on the same press motion, logged with `source: "real"`, compared against the `virtual_bus` log from the same motion. | the discrepancy table above, with a real row |
 
@@ -289,6 +288,47 @@ Each row is one procedure and the parameter-file entry it fills.
 first is the lens's nominal figure and the last two are the image-space remap
 `render/domain_rand.py` uses, which is a **different parametrization** from the OpenCV coefficients
 the calibration produces. Do not copy one into the other.
+
+## Camera calibration
+
+`brick_builder/calib/camera.py` implements checkerboard corner detection, `cv2.calibrateCamera`
+intrinsics + distortion, a hand-eye `AX = XB` solve, and a 180°-sensor-flip check;
+`scripts/calibrate_camera.py` is the command-line wrapper (see the table row above for real-hardware
+use). This project's installed OpenCV (5.0.0) exposes the `CALIB_HAND_EYE_*` method constants but
+not the `cv2.calibrateHandEye` Python function itself (checked directly: absent from `dir(cv2)` and
+from the installed `cv2/__init__.pyi` stub) — `calibrate_hand_eye` calls it when present and
+otherwise falls back to a from-scratch closed-form solve (`brick_builder.calib.camera`'s own module
+docstring has the convention notes; re-check this once OpenCV is upgraded).
+
+**`--simulate`**: dry-runs the whole pipeline with no hardware, rendering a test-only checkerboard
+scene with MuJoCo at a known `CameraConfig` (never reachable from the default scene builder) and
+reporting recovery error against that known truth:
+
+```
+.venv/bin/python scripts/calibrate_camera.py --simulate --out-dir sim_calib --out sim.yaml
+```
+
+Validated (`tests/calib/test_camera_sim.py`, slow): 65 known arm poses (position, pitch and roll,
+not just position and yaw — real rotational spread is what makes the hand-eye solve
+well-conditioned; an early version that only varied yaw with the tool held straight down gave a
+position error of tens of metres, not millimetres) at a default, a perturbed-pose (a few mm/degrees)
+and a perturbed-field-of-view `CameraConfig`:
+
+| Case | poses (found/requested) | reprojection RMS [px] | focal error [%] | position error [mm] | rotation error [deg] |
+|---|---|---|---|---|---|
+| default | 16/65 | 0.668 | 1.26 | 5.85 | 4.050 |
+| perturbed pose (+4/-3/+2 mm, ~2°) | 35/65 | 1.021 | 6.15 | 31.85 | 1.515 |
+| perturbed fov (100° diagonal) | 22/65 | 0.742 | 0.32 | 5.42 | 0.968 |
+
+Reprojection error is sub-pixel throughout, and the 180° flip check correctly reports "not
+flipped" every time. The perturbed-pose case's 31.85 mm position error, against 5.4-5.9 mm for the
+other two, is a real, measured sensitivity of the closed-form hand-eye solve to how rotationally
+diverse that seed's realized pose sample happens to be, not a bug (`docs/guide/03`'s own camera
+section and `tests/calib/test_camera_sim.py` have the detail). At this close a hover with the tool
+tilted, only a fraction of rendered poses keep the checkerboard's outermost corner row clear of the
+gripper's own silhouette, so both the script and the test oversample rather than trusting every
+render to be usable (`brick_builder.calib.camera_sim.render_calibration_set`'s docstring has the
+number).
 
 ## Findings from simulation to check on hardware
 
@@ -308,10 +348,9 @@ the calibration produces. Do not copy one into the other.
 
 ## Not yet written
 
-- `scripts/hardware/arm_selftest.py`, `force_ramp.py` and `camera_calibration.py`: the procedures
-  are in the table above and the driver exposes what each needs (`Bus.self_test`,
-  `Bus.cycle` with a per-joint torque limit, `CameraIntrinsics`), but the three command-line
-  wrappers do not exist yet.
-- Chessboard image generation for a camera-calibration self-check, and the hand-eye fit itself.
+- `scripts/hardware/arm_selftest.py` and `force_ramp.py`: the procedures are in the table above and
+  the driver exposes what each needs (`Bus.self_test`, `Bus.cycle` with a per-joint torque limit),
+  but the two command-line wrappers do not exist yet. (Camera calibration's own wrapper,
+  `scripts/calibrate_camera.py`, is written — see "Camera calibration" above.)
 - Watchdog and emergency-stop wiring. The driver's soft stop is a software stop on a live bus; it
   is not a substitute for cutting power.
