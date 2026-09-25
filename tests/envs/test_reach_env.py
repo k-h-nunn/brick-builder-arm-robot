@@ -107,6 +107,18 @@ def test_random_policy_never_produces_nans_or_mujoco_warnings():
         assert not env.scene.warnings(), env.scene.warnings()
 
 
+def test_structure_intact_is_reported_true_since_there_is_nothing_to_break():
+    """Reach never places a brick, so the acceptance criterion the campaign checks
+    (``EpisodeResult.structure_intact``) has to be reported explicitly rather than left at
+    whatever the base class happens to default to -- see ``episode_result_extra``."""
+    env = ReachEnv(horizon=3, seed=0)
+    env.reset(seed=0)
+    info = {}
+    for _ in range(3):
+        obs, reward, terminated, truncated, info = env.step(np.zeros(8, dtype=np.float32))
+    assert info["structure_intact"] is True
+
+
 def test_timeout_without_success_is_reported_as_a_timeout_failure():
     env = ReachEnv(horizon=3, seed=0)
     env.reset(seed=0)

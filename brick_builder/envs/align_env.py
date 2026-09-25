@@ -69,6 +69,24 @@ from brick_builder.robot.kinematics import euler_zyx
 from brick_builder.robot.patch_so101 import WRIST_CAM, gripper_angle_for_width
 from brick_builder.scene.compose import SceneConfig, grasp_pose
 
+# 3 mm / 5 deg is the spec's own success band (docs/guide/06-perception.md, "From tokens to a
+# target"), not a number this file chose. Re-measured (2026-09-25) on 20 seeds, zero token
+# noise/dropout/yaw-jitter -- isolating the scripted go-to-token controller's own settling from
+# everything perception-side: `final_pos_error_m` is bimodal, not the smooth ~5 mm spread the
+# earlier code review measured before the servo-encoder correction. 11/20 seeds land at 1.0-1.7 mm,
+# comfortably inside this tolerance; 9/20 land at 7.6-11.8 mm, comfortably outside it (mean
+# 5.54 mm, range 1.0-11.8 mm -- almost unchanged from the pre-correction figure, 5.1 mm /
+# 2-14 mm). That is the tell: the *generic* joint-settling error the encoder correction fixed
+# fell from 3.6 mm to 0.43 mm (docs/guide/03-robot-and-servo-model.md), but this environment's
+# own error barely moved, so settling was never the bottleneck here. The bad cluster instead
+# matches this task's own high IK-fallback rate (35.8 %, docs/guide/04-environments.md#ik-
+# convergence-behavior): some of the brick poses this env's LOOK-pose geometry draws sit at the
+# edge of what five joints can reach at all, and the scripted controller simply cannot get closer
+# from there. The tolerance is kept at the spec's number, not loosened for this; the gap a
+# residual policy has to close is real, and it is workspace/IK reachability, not hidden play.
+# Reproducible measurement: the same 20 seeds this comment quotes are
+# `tests/envs/test_align_env.py::test_the_scripted_go_to_token_controller_beats_chance_at_zero_noise`
+# (slow), whose own bounds (max < 20 mm, median < 6 mm) the bad cluster above still clears.
 SUCCESS_TOL_POS = 0.003             # m
 SUCCESS_TOL_YAW = math.radians(5.0)
 SUCCESS_TICKS = 10
@@ -428,7 +446,9 @@ class AlignFromTokensEnv(ArmEnv):
 
     def episode_result_extra(self) -> dict:
         pos_err, yaw_err = self._pose_error()
-        return {"params": {
+        # One loose brick, nothing placed and nothing snapped to it (see scene_config): there is
+        # no structure in this task for the arm to shove apart, so this is vacuously true.
+        return {"structure_intact": True, "params": {
             "final_pos_error_m": pos_err, "final_yaw_error_deg": math.degrees(yaw_err),
             "producer": self.producer_name, "token_confidence": self._token.confidence,
             "token_age_s": self._token_age,

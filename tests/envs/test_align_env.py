@@ -367,6 +367,19 @@ def test_unknown_colour_is_rejected():
 # ------------------------------------------------------------------------- success criterion ---
 
 
+def test_structure_intact_is_reported_true_since_there_is_nothing_to_break():
+    """One loose brick, nothing placed and nothing snapped to it (see ``scene_config``): the
+    acceptance criterion the campaign checks (``EpisodeResult.structure_intact``) has to be
+    reported explicitly rather than left at whatever the base class defaults to -- see
+    ``episode_result_extra``."""
+    env = AlignFromTokensEnv(horizon=3, seed=0)
+    env.reset(seed=0)
+    info = {}
+    for _ in range(3):
+        obs, reward, terminated, truncated, info = env.step(np.zeros(8, dtype=np.float32))
+    assert info["structure_intact"] is True
+
+
 def test_success_streak_needs_position_and_yaw_within_tolerance_for_ten_ticks():
     env = AlignFromTokensEnv(horizon=20, seed=0)
     env.reset(seed=0)
