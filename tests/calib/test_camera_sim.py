@@ -137,35 +137,37 @@ def test_perturbed_pose_recovery_still_finds_enough_poses(perturbed_pose_report:
 
 
 def test_perturbed_pose_recovery_reprojection_error(perturbed_pose_report: sim.RecoveryReport):
-    """Measured 1.021 px at seed 1 -- worse than the default/perturbed-fov cases' 0.668/0.742 px
-    (see ``test_perturbed_pose_recovery_position_error_is_bounded``): the intrinsics fit is
-    already visibly worse here in the number this pipeline can check without external ground
-    truth, not just in the hand-eye position error that needs it."""
+    """This case's reprojection RMS was measured worse than the default/perturbed-fov cases' (see
+    ``test_perturbed_pose_recovery_position_error_is_bounded`` for why -- not the intrinsics fit
+    itself, but detected-corner error on this pose set's foreshortened far rows).
+    ``find_corners``' ``cornerSubPix`` window is now sized from each image's own detected corner
+    spacing rather than a single fixed window (see ``brick_builder.calib.camera._corner_subpix_window``);
+    this bound is left at its pre-fix value with headroom rather than retightened, since the
+    post-fix number has not been re-measured (see the module-level caveat below)."""
     assert perturbed_pose_report.reprojection_rms_px < 1.5
 
 
 def test_perturbed_pose_recovery_focal_length_error(perturbed_pose_report: sim.RecoveryReport):
-    """Measured 6.15% at seed 1, against <1.3% for the default and perturbed-fov cases -- the
-    intrinsics fit, not the hand-eye solve, is what is worse on this pose set (see
-    ``test_perturbed_pose_recovery_position_error_is_bounded``)."""
+    """Left at its pre-fix bound with headroom, not retightened -- see
+    ``test_perturbed_pose_recovery_reprojection_error``."""
     assert perturbed_pose_report.focal_error_pct < 10.0
 
 
 def test_perturbed_pose_recovery_position_error_is_bounded(perturbed_pose_report: sim.RecoveryReport):
-    """Measured 31.8 mm at seed 1 (35 usable poses -- more than the default case's 16), against
-    5.4-5.9 mm for the default and perturbed-fov cases at their own seeds.
-
-    This is the intrinsics fit, not the hand-eye solve, being worse on this particular rendered
-    pose set: this case's fitted focal length is off by 6.15% and its reprojection RMS is 1.021 px
-    (both worse than the other two cases -- see the two tests above), and
-    ``solve_checkerboard_pose`` uses that same fitted (not the true) camera matrix to get each
-    view's checkerboard pose, so an intrinsics error propagates into every pose fed to hand-eye.
-    ``test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics`` below re-solves
-    the same detected corners and gripper poses with the *true* camera matrix instead of this
-    case's fitted one and recovers the perturbation to within a few mm -- the closed-form AX=XB
-    solver itself is not the hard part here. The bound below is set from this measurement with
-    headroom, not tightened to a value that would already be failing, and is not a claim that a
-    few-mm mount offset is resolved (see the module-level caveat below).
+    """This case's position error was measured worse than the default/perturbed-fov cases' at
+    their own seeds. The root cause is corner-detection error on this pose set's foreshortened far
+    rows, not the intrinsics fit or the hand-eye solver as such: ``solve_checkerboard_pose`` uses
+    the fitted (not the true) camera matrix, so any upstream corner error reaches both the
+    intrinsics fit and, through it, every pose fed to hand-eye.
+    ``test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics`` below isolates the
+    hand-eye solve from the intrinsics fit and checks its result against the injected perturbation
+    itself, not a fixed number -- the closed-form AX=XB solve is accurate given accurate corners;
+    what actually degraded it on this pose set was ``find_corners``' fixed 11x11 ``cornerSubPix``
+    window overrunning neighbouring corners on far rows only ~10-15 px apart (now sized from each
+    image's own detected spacing instead -- ``brick_builder.calib.camera._corner_subpix_window``).
+    The bound below is left at its pre-fix value with headroom rather than retightened, since the
+    post-fix number has not been re-measured (see the module-level caveat below), and is not a
+    claim that a few-mm mount offset is resolved.
     """
     assert perturbed_pose_report.position_error_mm < 45.0
 
@@ -180,11 +182,17 @@ def test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics(
     """Isolates the hand-eye ``AX = XB`` solve from the intrinsics fit that feeds it.
 
     Re-detects the same rendered corners and re-solves each used view's checkerboard pose with
-    the known-true camera matrix (instead of this pose set's own poorly fitted one), then re-runs
-    hand-eye: this recovers the pose perturbation to within a few mm/degrees, unlike the full
-    pipeline's 31.8 mm/1.5 deg on this case (``test_perturbed_pose_recovery_position_error_is_bounded``).
-    That confirms the 31.8 mm comes from the intrinsics fit, not from the closed-form solver being
-    sensitive to this pose set's rotational spread.
+    the known-true camera matrix (instead of this pose set's own fitted one), then re-runs
+    hand-eye, and checks the result against the injected perturbation itself
+    (``_perturbed_pose_camera_cfg`` vs the un-perturbed ``CameraConfig()``) rather than a fixed
+    constant: a bound with no reference to the perturbation being tested (the previous ``< 10.0``
+    mm / ``< 3.0`` deg here was looser than the roughly 5.4 mm / 2.6 deg perturbation itself) would
+    still pass if this solve returned the *unperturbed* pose -- the fixed-recovery outcome this
+    test exists to rule out. Recovering under 90% of the injected perturbation is a real, if
+    modest, floor: it is not a claim that this pipeline resolves a genuine few-mm mount offset
+    (the module-level caveat below), only that the closed-form solve itself, given accurate
+    intrinsics, moves substantially toward the true pose rather than sitting at (or past) the
+    unperturbed one.
     """
     calib_set = perturbed_pose_calibration_set
     cfg = calib_set.camera_cfg
@@ -205,8 +213,19 @@ def test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics(
     r_true, t_true = sim._camera_to_gripper_truth(cfg)
     position_error_mm = float(np.linalg.norm(hand_eye.translation_m_mujoco() - t_true) * 1000.0)
     rotation_error_deg = calib.angle_between_rotations_deg(r_true, hand_eye.rotation_mujoco())
-    assert position_error_mm < 10.0
-    assert rotation_error_deg < 3.0
+
+    r_nominal, t_nominal = sim._camera_to_gripper_truth(CameraConfig())
+    position_perturbation_mm = float(np.linalg.norm(t_true - t_nominal) * 1000.0)
+    rotation_perturbation_deg = calib.angle_between_rotations_deg(r_nominal, r_true)
+
+    assert position_error_mm < 0.9 * position_perturbation_mm, (
+        f"{position_error_mm:.2f} mm recovered vs. a {position_perturbation_mm:.2f} mm "
+        "perturbation -- no better than returning the unperturbed pose"
+    )
+    assert rotation_error_deg < 0.9 * rotation_perturbation_deg, (
+        f"{rotation_error_deg:.3f} deg recovered vs. a {rotation_perturbation_deg:.3f} deg "
+        "perturbation -- no better than returning the unperturbed pose"
+    )
 
 
 # --------------------------------------------------------------------------------- recovery: perturbed fov ---
@@ -249,20 +268,21 @@ def test_perturbed_fov_recovery_is_distinguishable_from_the_default_fov(
 
 def test_off_centre_principal_point_lands_on_the_requested_side():
     """Regression guard for a real sign bug caught while building this: MuJoCo's
-    ``principal_pixel`` is defined against its own camera-frame convention, mirrored left-right
-    relative to this module's OpenCV-style ``cx``/``cy`` -- passing the offset straight through
-    compiled a camera whose rendered principal point was at ``(width - 1) - cx``, the mirror image
-    of the requested ``cx``, for any off-centre measured calibration.
+    ``principal_pixel`` offsets the sensor, not the image, so a positive offset shifts the rendered
+    image the *opposite* way on both axes (see ``patch_so101._add_sites_and_camera``'s own
+    comment) -- passing the offset straight through unnegated compiled a camera whose rendered
+    principal point was at ``(width - 1) - cx``/``(height - 1) - cy``, the mirror image of the
+    requested ``cx``/``cy`` on each axis, for any off-centre measured calibration.
 
-    Renders a checkerboard with ``cx`` moved well off centre (``fx``/``fy`` at the default focal
-    length so this is otherwise an ordinary measured-intrinsics config) and checks the detected
-    corners land close to the OpenCV pinhole projection of their known 3D positions using the
-    *requested* ``cx`` -- not close to the projection using the mirrored ``(width - 1) - cx``,
-    which is what the pre-fix sign produced.
+    Renders a checkerboard with both ``cx`` and ``cy`` moved off centre (``fx``/``fy`` at the
+    default focal length so this is otherwise an ordinary measured-intrinsics config) and checks
+    the detected corners land close to the OpenCV pinhole projection of their known 3D positions
+    using the *requested* ``cx``/``cy`` on both axes -- not close to the projection using the
+    mirrored ``(width - 1) - cx``/``(height - 1) - cy``, which is what the pre-fix sign produced.
     """
     import cv2
 
-    cfg = CameraConfig(fx_px=254.828, fy_px=254.828, cx_px=340.0, cy_px=239.5)
+    cfg = CameraConfig(fx_px=254.828, fy_px=254.828, cx_px=340.0, cy_px=260.0)
     calib_set = sim.render_calibration_set(camera_cfg=cfg, n_poses=8, seed=0)
     shot = next(s for s in calib_set.shots if calib.find_corners(s.rgb, calib_set.target) is not None)
     corners = calib.find_corners(shot.rgb, calib_set.target)
@@ -279,11 +299,17 @@ def test_off_centre_principal_point_lands_on_the_requested_side():
     mean_offset_px = (corners - projected.reshape(-1, 2)).mean(axis=0)
 
     mirrored_cx = (cfg.resolution[0] - 1) - cx
-    mirror_offset_px = mirrored_cx - cx  # ~41 px: what the pre-fix sign error produced
+    mirrored_cy = (cfg.resolution[1] - 1) - cy
+    mirror_offset_x_px = mirrored_cx - cx  # ~41 px: what the pre-fix sign error produced
+    mirror_offset_y_px = mirrored_cy - cy  # ~41 px, same bug on the y axis
 
     assert abs(mean_offset_px[0]) < 2.0, (
         f"principal point landed {mean_offset_px[0]:+.1f} px from the requested cx "
-        f"(the pre-fix mirror-image bug would show ~{-mirror_offset_px:+.1f} px here)"
+        f"(the pre-fix mirror-image bug would show ~{-mirror_offset_x_px:+.1f} px here)"
+    )
+    assert abs(mean_offset_px[1]) < 2.0, (
+        f"principal point landed {mean_offset_px[1]:+.1f} px from the requested cy "
+        f"(the pre-fix mirror-image bug would show ~{-mirror_offset_y_px:+.1f} px here)"
     )
 
 

@@ -110,12 +110,16 @@ def test_compiled_default_camera_matches_the_module_constants_exactly():
 
 
 def test_default_camera_compiles_to_a_bit_for_bit_identical_model():
-    """The exact form of the pixel-identity proof below: two independently built and compiled
-    default models, serialized with `mujoco.mj_saveModel` (the same MJB format `mj_loadModel`
-    reads back), compare byte-for-byte equal -- not just close on the handful of `cam_*` fields
-    checked above, and with none of the pixel-identity tests' GL-rasterizer noise tolerance."""
+    """The exact form of the pixel-identity proof below: today's `CameraConfig`-driven
+    `build_arm_spec` and `_legacy_build_arm_spec` (the pre-`CameraConfig` code path, module
+    docstring), both compiled from the default `ArmConfig` and serialized with
+    `mujoco.mj_saveModel` (the same MJB format `mj_loadModel` reads back), compare byte-for-byte
+    equal -- not just close on the handful of `cam_*` fields checked above, and with none of the
+    pixel-identity tests' GL-rasterizer noise tolerance. Comparing two calls to the *same*
+    `build_arm_spec` would only prove compiling is deterministic; this compares against the
+    independent legacy path instead."""
     model_a = build_arm_spec(ArmConfig()).compile()
-    model_b = build_arm_spec(ArmConfig()).compile()
+    model_b = _legacy_build_arm_spec(ArmConfig()).compile()
     size = mujoco.mj_sizeModel(model_a)
     assert size == mujoco.mj_sizeModel(model_b)
     buf_a = np.zeros(size, dtype=np.uint8)
@@ -193,6 +197,24 @@ def test_measured_intrinsics_path_reproduces_fovy_within_float32_precision():
 def test_measured_intrinsics_path_uses_a_different_fovy_when_focal_length_differs():
     cfg = CameraConfig(resolution=(640, 480), fx_px=300.0, fy_px=300.0, cx_px=320.0, cy_px=240.0)
     assert cfg.fovy_deg() != pytest.approx(CameraConfig().fovy_deg())
+
+
+def test_principal_point_only_config_does_not_crash_and_keeps_the_diagonal_fov_focal_length():
+    """A real crash caught while building this: a config with only `cx_px` (or `cy_px`) set --
+    principal point measured, focal length not -- must still resolve a focal length (from
+    `diagonal_fov_deg`, the same one an unmeasured config would use) rather than raising, since
+    `uses_measured_intrinsics` (any of the four fields set) is not the same question as "is a focal
+    length among the fields that were set"."""
+    default = CameraConfig()
+    cfg = CameraConfig(cx_px=330.0)
+    assert cfg.uses_measured_intrinsics
+    fx, fy, cx, cy = cfg.resolved_intrinsics_px()
+    default_fx, default_fy, _, _ = default.resolved_intrinsics_px()
+    assert fx == pytest.approx(default_fx)
+    assert fy == pytest.approx(default_fy)
+    assert cx == pytest.approx(330.0)
+    assert cy == pytest.approx(default.resolved_intrinsics_px()[3])  # centred, unset
+    assert cfg.fovy_deg() == pytest.approx(default.fovy_deg())
 
 
 def test_centred_principal_point_compiles_to_zero_offset():

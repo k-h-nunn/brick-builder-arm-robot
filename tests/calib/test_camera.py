@@ -381,7 +381,18 @@ def test_camera_config_from_params_reproduces_the_shipped_default():
     """The shipped `configs/params/default.yaml` camera block was written to match
     `CameraConfig()`'s own defaults exactly (`fx_px`/etc. at `status: assumed`, derived from
     `diagonal_fov_deg`, not a real calibration -- see the file's own notes fields); loading it must
-    reproduce the default `CameraConfig` exactly, not merely something with the same numbers."""
+    reproduce the default `CameraConfig` exactly, not merely something with the same numbers.
+
+    `pos_in_gripper`/`quat_in_gripper` are checked with ``== default.pos_in_gripper`` /
+    ``== default.quat_in_gripper`` (exact, not `pytest.approx`): the default file's own
+    `mount_roll_deg` is `assumed`, not `measured`, so `camera_config_from_params` must take
+    `CameraConfig()`'s own default pose directly rather than recomputing it from the file's 3
+    decimal-place `mount_roll_deg` through degrees and trigonometry -- a real gap the file's
+    rounding exposed (`mount_roll_deg: -25.073` implies a quaternion about 3e-6 rad off
+    `WRIST_CAM_QUAT_IN_GRIPPER`'s own 6-decimal literal; a version of this test that only checked
+    `pytest.approx(..., abs=1e-5)` passed anyway and hid it -- see
+    `test_camera_config_from_params_measured_mount_switches_off_the_shipped_default_pose` below for
+    the file's own numbers taken through that conversion)."""
     from brick_builder import params as P
     from brick_builder.robot.patch_so101 import CameraConfig
 
@@ -389,20 +400,18 @@ def test_camera_config_from_params_reproduces_the_shipped_default():
     cfg = C.camera_config_from_params(pf)
     default = CameraConfig()
     assert not cfg.uses_measured_intrinsics
-    # Field by field with a tolerance, not `cfg == default`: the file's numbers went through a
-    # YAML round trip and an Euler-angle-to-quaternion conversion, `default`'s did not, and a
-    # `.225`-class literal is not bit-identical to the same value computed as `0.5 * (-0.35 - 0.10)`
-    # even though both are "the same number" to any precision anyone would ever type or read.
+    # Resolution/fov/distortion with a tolerance, not `==`: the file's numbers went through a YAML
+    # round trip, and a `.225`-class literal is not bit-identical to the same value computed as
+    # `0.5 * (-0.35 - 0.10)` even though both are "the same number" to any precision anyone would
+    # ever type or read.
     assert cfg.resolution == default.resolution
     assert cfg.diagonal_fov_deg == pytest.approx(default.diagonal_fov_deg)
     assert cfg.distortion_k1 == pytest.approx(default.distortion_k1)
     assert cfg.distortion_k2 == pytest.approx(default.distortion_k2)
-    assert cfg.pos_in_gripper == pytest.approx(default.pos_in_gripper, abs=1e-9)
-    # abs=1e-5, not 1e-6: WRIST_CAM_QUAT_IN_GRIPPER is a 6-decimal literal in patch_so101.py, not
-    # itself computed to full double precision, so re-deriving the same physical rotation from
-    # mount_roll_deg through trig disagrees with that literal a couple of ULPs above 1e-6 -- see
-    # test_euler_xyz_pure_roll_matches_the_documented_wrist_cam_quat_convention's own abs=1e-4.
-    assert cfg.quat_in_gripper == pytest.approx(default.quat_in_gripper, abs=1e-5)
+    # Exact: the mount fields are `assumed` in the shipped file, so `camera_config_from_params`
+    # takes `CameraConfig()`'s own pose directly rather than recomputing it (see docstring above).
+    assert cfg.pos_in_gripper == default.pos_in_gripper
+    assert cfg.quat_in_gripper == default.quat_in_gripper
     assert cfg.fovy_deg() == pytest.approx(default.fovy_deg())
 
 
@@ -422,6 +431,46 @@ def test_camera_config_from_params_switches_to_measured_intrinsics_only_when_mea
     cfg = C.camera_config_from_params(pf)
     assert cfg.uses_measured_intrinsics
     assert cfg.resolved_intrinsics_px() == pytest.approx((300.0, 300.0, 330.0, 250.0))
+
+
+def test_camera_config_from_params_gates_each_intrinsics_field_independently(tmp_path):
+    """A file that only measured `fx_px` must not let the default file's own unmeasured `fy_px`
+    stand in for a real calibration of it: `fy_px` stays `None` (square pixels, `fx_px`'s own
+    value), not the shipped default's `assumed` 254.828."""
+    from brick_builder import params as P
+
+    override = tmp_path / "override.yaml"
+    override.write_text("camera:\n  fx_px: 300.0\n")
+    pf = P.load_params(override)
+    assert pf.get("camera.fx_px").status == "measured"
+    assert pf.get("camera.fy_px").status == "assumed"
+
+    cfg = C.camera_config_from_params(pf)
+    assert cfg.fx_px == pytest.approx(300.0)
+    assert cfg.fy_px is None
+    assert cfg.resolved_intrinsics_px()[:2] == pytest.approx((300.0, 300.0))
+
+
+def test_camera_config_from_params_measured_mount_switches_off_the_shipped_default_pose(tmp_path):
+    """A file with only `mount_roll_deg` at `status: measured` must take the file's pose (recomputed
+    through degrees/trigonometry), not silently fall back to `CameraConfig()`'s own default --
+    the opposite regression from the one `test_camera_config_from_params_reproduces_the_shipped_default`
+    guards."""
+    from brick_builder import params as P
+    from brick_builder.robot.patch_so101 import CameraConfig
+
+    override = tmp_path / "override.yaml"
+    override.write_text("camera:\n  mount_roll_deg: -25.073\n")
+    pf = P.load_params(override)
+    assert pf.get("camera.mount_roll_deg").status == "measured"
+
+    cfg = C.camera_config_from_params(pf)
+    default = CameraConfig()
+    # The file's 3 decimal-place literal recomputed through trig does not reproduce the module
+    # constant's own 6-decimal literal exactly -- this is the real, small disagreement the previous
+    # test's exact check is built to catch when the mount is *not* measured; here it must show up.
+    assert cfg.quat_in_gripper != default.quat_in_gripper
+    assert cfg.quat_in_gripper == pytest.approx(default.quat_in_gripper, abs=1e-5)
 
 
 def test_to_arm_config_measured_intrinsics_file_reaches_the_compiled_model(tmp_path):
