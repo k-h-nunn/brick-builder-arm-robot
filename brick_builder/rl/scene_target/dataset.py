@@ -16,13 +16,15 @@ tick. Row 0 may be the reset observation (its action is then NaN).
 Other per-tick arrays of the transition record (`u`, `k`, `d_mm`, `gt_z`, ...) are kept in
 `EpisodeLog.extras`.
 
-**Window** `(t, H)`: rows `z_t`, the rows of the same slot ids at `t+1..t+H` (slot
-correspondence from the source's `slot_ids`), contexts `c_t..c_{t+H-1}`, actions
-`a_t..a_{t+H-1}` and joint positions `q_{t+1..t+H}`. The context of tick `t -> t+1` is
-`mech_t`, `tool_t`, `step_t` and the grip and compliance of row `t+1`; its action is
-`exec_action[t+1]`.
+**Window** `(t, H)`: the frame `z_t` exactly as logged (every slot, background included, with
+its validity and slot ids), the rows of the same slot ids at `t+1..t+H` (slot correspondence
+from the source's `slot_ids`), contexts `c_t..c_{t+H-1}`, actions `a_t..a_{t+H-1}` and joint
+positions `q_{t+1..t+H}`. The context of tick `t -> t+1` is `mech_t`, `tool_t`, `step_t` and
+the grip and compliance of row `t+1`; its action is `exec_action[t+1]`. `Windows.frame(i)` is
+the first tick as a `SlotFrame`, the same frame `EpisodeLog.frame(t)` gives.
 
-**Split.** Every 7th episode by id (`id % 7 == 6`) is held out of `F` training.
+**Split.** Every 7th episode by id (`id % 7 == 6`) is held out of `F` training
+(`Windows.split`, `split_logs`).
 """
 
 from __future__ import annotations
@@ -38,13 +40,14 @@ from typing import Iterator, Sequence
 import numpy as np
 
 from ...perception.scene_model import PLACEHOLDER_SLOT_SCHEMA, SlotSchema
+from .codec import SlotFrame
 from .model import (
     ACTION_W, CONTEXT_W, MECH_W, Q_W, STEP_W, TOOL_W, SlotLayout, context_vector,
 )
 
 __all__ = [
-    "EpisodeLog", "HOLDOUT_EVERY", "ToyConfig", "ToyDynamics", "Windows", "load_episodes",
-    "synthetic_logs",
+    "EpisodeLog", "HOLDOUT_EVERY", "ToyConfig", "ToyDynamics", "Windows", "episode_ids",
+    "load_episodes", "split_logs", "synthetic_logs",
 ]
 
 HOLDOUT_EVERY = 7
@@ -101,6 +104,10 @@ class EpisodeLog:
     @property
     def episode_id(self) -> int:
         return int(self.meta.get("episode_id", -1))
+
+    def frame(self, t: int) -> SlotFrame:
+        """Tick `t` as logged: every slot, background included."""
+        return SlotFrame(self.z[t], self.depth[t], self.valid[t], self.slot_ids[t])
 
     def contexts(self) -> np.ndarray:
         """`[N-1, 43]`: the context of each tick `t -> t+1` (the layout of `context_vector`)."""
@@ -209,6 +216,20 @@ def load_episodes(directory, pattern: str = "ep_*.npz") -> list[EpisodeLog]:
     return [EpisodeLog.load(p) for p in sorted(Path(directory).glob(pattern))]
 
 
+def episode_ids(logs: Sequence[EpisodeLog]) -> np.ndarray:
+    """`[n]` episode id per log: `meta["episode_id"]`, else the position in `logs`."""
+    return np.asarray([log.episode_id if log.episode_id >= 0 else n
+                       for n, log in enumerate(logs)], dtype=np.int64)
+
+
+def split_logs(logs: Sequence[EpisodeLog], every: int = HOLDOUT_EVERY
+               ) -> tuple[list[EpisodeLog], list[EpisodeLog]]:
+    """`(training, held out)` logs by episode id, the rule of `Windows.split`."""
+    held = (episode_ids(logs) % int(every)) == int(every) - 1
+    return ([log for log, h in zip(logs, held) if not h],
+            [log for log, h in zip(logs, held) if h])
+
+
 # ------------------------------------------------------------------------------- windows ---
 
 
@@ -217,13 +238,17 @@ class Windows:
     """Multi-step open-loop rollout windows, slots in the order of the window's first tick."""
 
     rows: np.ndarray
-    """`[M, H+1, K, W]`: `z_t` and the rows of the same slot ids at `t+1..t+H` (zeros if absent)."""
+    """`[M, H+1, K, W]`: `z_t` as logged (every slot), then the rows of the same slot ids at
+    `t+1..t+H` (objects of `t` only; zeros if absent)."""
     depth: np.ndarray
-    """`[M, H+1, K]` (0.5 if absent)."""
+    """`[M, H+1, K]` (as logged at `t`; 0.5 if absent later)."""
     present: np.ndarray
-    """`[M, H+1, K]`: an object at `t` (valid, slot id >= 0) observed with the same id at `t+h`."""
+    """`[M, H+1, K]`: an object at `t` (valid, slot id >= 0) observed with the same id at `t+h`;
+    `present[:, 0]` is `F`'s slot set."""
     valid0: np.ndarray
     """`[M, K]` valid at `t` (background included)."""
+    ids0: np.ndarray
+    """`[M, K]` slot ids at `t` (background -1)."""
     ctx: np.ndarray
     """`[M, H, 43]` contexts `c_t..c_{t+H-1}`."""
     action: np.ndarray
@@ -250,9 +275,10 @@ class Windows:
         H = int(horizon)
         if H < 1:
             raise ValueError("horizon must be at least 1")
-        parts: dict[str, list] = {k: [] for k in ("rows", "depth", "present", "valid0", "ctx",
-                                                  "action", "q_next", "episode", "start")}
-        K = W = None
+        parts: dict[str, list] = {k: [] for k in ("rows", "depth", "present", "valid0", "ids0",
+                                                  "ctx", "action", "q_next", "episode",
+                                                  "start")}
+        eids = episode_ids(logs)
         for n, log in enumerate(logs):
             N = log.n_ticks
             K, W = log.z.shape[1], log.z.shape[2]
@@ -263,7 +289,10 @@ class Windows:
             al_rows = np.zeros((n_win, H + 1, K, W), dtype=np.float32)
             al_depth = np.full((n_win, H + 1, K), 0.5, dtype=np.float32)
             present = np.zeros((n_win, H + 1, K), dtype=bool)
-            for h in range(H + 1):
+            al_rows[:, 0] = log.z[:n_win]
+            al_depth[:, 0] = log.depth[:n_win]
+            present[:, 0] = obj[:n_win]
+            for h in range(1, H + 1):
                 ia, ib = log.slot_ids[:N - h], log.slot_ids[h:]
                 eq = ((ia[:, :, None] == ib[:, None, :]) & obj[:N - h, :, None]
                       & log.valid[h:, None, :])
@@ -281,11 +310,12 @@ class Windows:
             ctx, act, q = call[idx], aall[idx], qall[idx]
             ok = (np.all(np.isfinite(act), axis=(1, 2)) & np.all(np.isfinite(ctx), axis=(1, 2))
                   & np.all(np.isfinite(al_rows), axis=(1, 2, 3)))
-            eid = log.episode_id if log.episode_id >= 0 else n
+            eid = int(eids[n])
             parts["rows"].append(al_rows[ok])
             parts["depth"].append(al_depth[ok])
             parts["present"].append(present[ok])
             parts["valid0"].append(log.valid[:n_win][ok])
+            parts["ids0"].append(log.slot_ids[:n_win][ok])
             parts["ctx"].append(ctx[ok].astype(np.float32))
             parts["action"].append(act[ok].astype(np.float32))
             parts["q_next"].append(q[ok].astype(np.float32))
@@ -298,9 +328,13 @@ class Windows:
     def subset(self, idx) -> "Windows":
         idx = np.asarray(idx)
         return Windows(rows=self.rows[idx], depth=self.depth[idx], present=self.present[idx],
-                       valid0=self.valid0[idx], ctx=self.ctx[idx], action=self.action[idx],
-                       q_next=self.q_next[idx], episode=self.episode[idx], start=self.start[idx],
-                       horizon=self.horizon)
+                       valid0=self.valid0[idx], ids0=self.ids0[idx], ctx=self.ctx[idx],
+                       action=self.action[idx], q_next=self.q_next[idx],
+                       episode=self.episode[idx], start=self.start[idx], horizon=self.horizon)
+
+    def frame(self, i: int) -> SlotFrame:
+        """The first tick of window `i` as logged (background included)."""
+        return SlotFrame(self.rows[i, 0], self.depth[i, 0], self.valid0[i], self.ids0[i])
 
     def held_out(self, every: int = HOLDOUT_EVERY) -> np.ndarray:
         """`[M]` bool: the window's episode is held out (`id % every == every - 1`)."""
@@ -315,8 +349,8 @@ class Windows:
         """sha256 over every array and the horizon."""
         h = hashlib.sha256()
         h.update(f"H={self.horizon}".encode())
-        for name in ("rows", "depth", "present", "valid0", "ctx", "action", "q_next", "episode",
-                     "start"):
+        for name in ("rows", "depth", "present", "valid0", "ids0", "ctx", "action", "q_next",
+                     "episode", "start"):
             a = np.ascontiguousarray(getattr(self, name))
             h.update(name.encode())
             h.update(str(a.shape).encode())
@@ -330,6 +364,7 @@ class Windows:
                 "depth": torch.from_numpy(np.ascontiguousarray(self.depth)),
                 "present": torch.from_numpy(np.ascontiguousarray(self.present)),
                 "valid0": torch.from_numpy(np.ascontiguousarray(self.valid0)),
+                "ids0": torch.from_numpy(np.ascontiguousarray(self.ids0)),
                 "ctx": torch.from_numpy(np.ascontiguousarray(self.ctx)),
                 "action": torch.from_numpy(np.ascontiguousarray(self.action)),
                 "q_next": torch.from_numpy(np.ascontiguousarray(self.q_next))}

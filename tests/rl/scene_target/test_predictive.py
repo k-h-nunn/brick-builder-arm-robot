@@ -19,8 +19,8 @@ from brick_builder.rl.scene_target.model import (  # noqa: E402
     ScenePredictor, SlotLayout, context_vector,
 )
 from brick_builder.rl.scene_target.predictive import (  # noqa: E402
-    SOURCE_NAME, PredictiveSceneModel, ScoringPredictor, gains, sigma_f_from_validation,
-    sigma_obs_static,
+    SOURCE_NAME, PredictiveSceneModel, ScoringPredictor, SlotIdTracker, gains,
+    sigma_f_from_validation, sigma_obs_static,
 )
 
 K, W = 8, S.W
@@ -268,11 +268,48 @@ def test_scoring_predictor_uses_the_feedforward_and_the_stage_scale():
                      "progress": np.zeros(12), "feedforward": ff}}
     a = sp.action(obs, [0.5, -1.0, 2.0])
     assert a == pytest.approx([0.002, -0.004, 0.0005, 0.01 + math.radians(1.5)])
-    rows = sp(obs, [0.5, -1.0, 2.0])
+    # the observation has no slot ids: without them the background cannot be told apart
+    with pytest.raises(ValueError):
+        sp(obs, [0.5, -1.0, 2.0])
+    rows = sp(obs, [0.5, -1.0, 2.0], slot_ids=fr.slot_ids)
     assert rows.shape == (K, W)
-    want = F.predict(SlotFrame(fr.rows, fr.depth, fr.valid, np.where(fr.valid, np.arange(K), -1)),
-                     context_vector(obs["actor"]["mech"], obs["actor"]["tool"]), a).rows
+    want = F.predict(fr, context_vector(obs["actor"]["mech"], obs["actor"]["tool"]), a).rows
     assert np.array_equal(rows, want)
+    assert np.array_equal(rows[3], fr.rows[3])  # background copied, not moved
+    sp.slot_ids = fr.slot_ids
+    assert np.array_equal(sp(obs, [0.5, -1.0, 2.0]), want)
+    with pytest.raises(ValueError):
+        sp(obs, [0.5, -1.0, 2.0], slot_ids=np.arange(3))
+
+
+def test_slot_id_tracker_follows_reset_and_step():
+    import gymnasium as gym
+
+    class Stub(gym.Env):
+        observation_space = gym.spaces.Box(-1.0, 1.0, (1,))
+        action_space = gym.spaces.Box(-1.0, 1.0, (1,))
+
+        def __init__(self):
+            self.t = 0
+
+        def reset(self, *, seed=None, options=None):
+            self.t = 0
+            return np.zeros(1, np.float32), {"slot_ids": np.array([4, -1, 2])}
+
+        def step(self, action):
+            self.t += 1
+            ids = np.array([2, 4, -1]) + 10 * self.t
+            return np.zeros(1, np.float32), 0.0, False, False, {"slot_ids": ids}
+
+    class Receiver:
+        slot_ids = None
+
+    receiver = Receiver()
+    env = SlotIdTracker(Stub(), receiver)
+    env.reset()
+    assert list(receiver.slot_ids) == [4, -1, 2]
+    env.step(np.zeros(1, np.float32))
+    assert list(receiver.slot_ids) == [12, 14, 9]
 
 
 @pytest.mark.slow
@@ -286,14 +323,19 @@ def test_prediction_scoring_runs_with_the_learned_predictor(tmp_path):
     env = gym.make(st.ENV_ID, cache_dir=str(tmp_path))
     stage = env.unwrapped.cfg.stage
     sp = ScoringPredictor(F, dims=stage.action_dims, scale=env.unwrapped.cfg.resolved_scale())
-    env = PredictionScoring(env, sp)
+    env = sp.wrap(env)
+    assert isinstance(env, PredictionScoring)
     try:
-        obs, _ = env.reset(seed=0, options={"world_seed": 0})
+        obs, info = env.reset(seed=0, options={"world_seed": 0})
+        assert np.array_equal(sp.slot_ids, info["slot_ids"])
         rng = np.random.default_rng(0)
         for _ in range(4):
             u = rng.uniform(-1, 1, env.action_space.shape).astype(np.float32)
             expected = sp.action(obs, u)
+            fr = sp.frame(obs)
+            assert np.array_equal(fr.objects, fr.valid & (np.asarray(info["slot_ids"]) >= 0))
             obs, _, term, trunc, info = env.step(u)
+            assert np.array_equal(sp.slot_ids, info["slot_ids"])
             assert np.isfinite(info["pred_err_mm"]) and np.isfinite(info["copy_last_err_mm"])
             # feed-forward off on L0a, offset inside the ceiling: the executed change is scale * u
             assert np.allclose(info["exec_action"], expected, atol=1e-12)

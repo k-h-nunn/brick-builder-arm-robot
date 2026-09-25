@@ -20,7 +20,9 @@ Logged every tick: `last_prediction`, `last_observation`, `innovation` (`z_obs -
 `predictive`, with keyword arguments `base` (`ideal`, `learned`, ...), `predictor` (checkpoint
 path), `gain`, `weights` and `threads` (for `learned`), `base_kwargs`, `K`.
 
-`ScoringPredictor` adapts `F` to `wrappers.PredictionScoring` (`predictor(obs, u) -> rows`).
+`ScoringPredictor` adapts `F` to `wrappers.PredictionScoring` (`predictor(obs, u) -> rows`);
+`ScoringPredictor.wrap(env)` builds the scoring wrapper with the slot ids tracked from
+`info["slot_ids"]`, so the background slot stays out of `F`'s slot set.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ import math
 from pathlib import Path
 from typing import Sequence
 
+import gymnasium as gym
 import numpy as np
 
 from ...perception.scene_model import SceneState
@@ -38,7 +41,7 @@ from .executor import DIM_INDEX
 from .model import ACTION_W, CONTEXT_W, ScenePredictor, context_from_obs
 
 __all__ = [
-    "PredictiveSceneModel", "SOURCE_NAME", "ScoringPredictor", "build", "gains",
+    "PredictiveSceneModel", "SOURCE_NAME", "ScoringPredictor", "SlotIdTracker", "build", "gains",
     "register_source", "sigma_f_from_validation", "sigma_obs_static",
 ]
 
@@ -247,8 +250,12 @@ class ScoringPredictor:
     """`F` as `wrappers.PredictionScoring`'s `predictor(obs, u) -> rows [K, W]`.
 
     Action: the first feed-forward row (an advancing tick) plus `scale * u` on the stage's
-    dimensions; the offset ceiling is not applied. Slot ids are not in the observation, so every
-    valid slot is moved (the scoring pairs slots by id and skips the background)."""
+    dimensions; the offset ceiling is not applied.
+
+    Slot ids are not in the actor observation. They come from `slot_ids` (the observation's
+    `info["slot_ids"]`), kept current by the wrapper `wrap(env)` builds; without them the call
+    is refused, because treating the background slot as an object would put it in `F`'s slot
+    set."""
 
     def __init__(self, model: ScenePredictor, *, dims: Sequence[str], scale: Sequence[float],
                  compliance=(1.0, 1.0)) -> None:
@@ -258,6 +265,14 @@ class ScoringPredictor:
         self.dims = tuple(dims)
         self.scale = tuple(float(s) for s in scale)
         self.compliance = tuple(float(c) for c in compliance)
+        self.slot_ids: np.ndarray | None = None
+        """`[K]` slot ids of the observation the next call predicts from."""
+
+    def wrap(self, env):
+        """`PredictionScoring(env, self)`, with `slot_ids` set from every `reset` and `step`."""
+        from .wrappers import PredictionScoring
+
+        return PredictionScoring(SlotIdTracker(env, self), self)
 
     def action(self, obs: dict, u) -> np.ndarray:
         """`[4]` expected executed tool-target change [m, rad]."""
@@ -267,11 +282,38 @@ class ScoringPredictor:
             a[DIM_INDEX[name]] += self.scale[i] * float(u[i])
         return a
 
-    def __call__(self, obs: dict, u) -> np.ndarray:
+    def frame(self, obs: dict, slot_ids=None) -> SlotFrame:
+        """The observation's slot frame with its slot ids (`slot_ids`, else the tracked ones)."""
         actor = obs["actor"]
+        ids = self.slot_ids if slot_ids is None else slot_ids
+        if ids is None:
+            raise ValueError("ScoringPredictor needs the observation's slot ids "
+                             "(info['slot_ids']): use ScoringPredictor.wrap(env) or pass slot_ids")
         valid = np.asarray(actor["z_valid"]) > 0.5
-        frame = SlotFrame(np.asarray(actor["z"], dtype=np.float32),
-                          np.asarray(actor["z_depth"], dtype=np.float32), valid,
-                          np.where(valid, np.arange(valid.shape[0]), -1))
-        ctx = context_from_obs(actor, self.compliance)
-        return self.model.predict(frame, ctx, self.action(obs, u)).rows
+        ids = np.asarray(ids, dtype=np.int64).reshape(-1)
+        if ids.shape != valid.shape:
+            raise ValueError(f"slot ids must be [{valid.shape[0]}]; got {ids.shape}")
+        return SlotFrame(np.asarray(actor["z"], dtype=np.float32),
+                         np.asarray(actor["z_depth"], dtype=np.float32), valid, ids)
+
+    def __call__(self, obs: dict, u, slot_ids=None) -> np.ndarray:
+        ctx = context_from_obs(obs["actor"], self.compliance)
+        return self.model.predict(self.frame(obs, slot_ids), ctx, self.action(obs, u)).rows
+
+
+class SlotIdTracker(gym.Wrapper):
+    """Copies `info["slot_ids"]` of every `reset` and `step` to `receiver.slot_ids`."""
+
+    def __init__(self, env: gym.Env, receiver) -> None:
+        super().__init__(env)
+        self.receiver = receiver
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        self.receiver.slot_ids = np.asarray(info["slot_ids"]).copy()
+        return obs, info
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        self.receiver.slot_ids = np.asarray(info["slot_ids"]).copy()
+        return obs, reward, terminated, truncated, info

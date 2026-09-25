@@ -13,8 +13,13 @@
 `a` enters only through `B`, so `dz'/da = B(z, c)` at any action size. Nothing in the
 differentiable path clamps or clips.
 
+**Slot set.** `F`'s set is the objects: valid slots with slot id >= 0 (`SlotFrame.objects`).
+The background slot (valid, id -1) and empty slots are neither network inputs nor predicted;
+they are copied. Training (`train_model`) and every numpy entry point (`predict`, `affine`,
+`rollout`, `action_jacobian`) use the same set, so no background row reaches the network.
+
 **Body (M1).** Permutation-equivariant slot-set MLP: `h_i = MLP1([phi(z_i), c])` (64), masked
-mean and max pool over valid slots (128), `g_i = MLP2([h_i, pool, c])` (64). Heads per slot:
+mean and max pool over the objects (128), `g_i = MLP2([h_i, pool, c])` (64). Heads per slot:
 `f_i [D]`, `B_i [D, 4]`, validity logit. Head on the pool: next joint positions [6].
 
 **Units.** Heads are in scaled units: dynamic component d changes by
@@ -232,18 +237,19 @@ def _std(x: np.ndarray) -> np.ndarray:
     return np.where(s > STD_FLOOR, s, 1.0)
 
 
-def fit_input_norm(layout: SlotLayout, rows: np.ndarray, depth: np.ndarray, valid: np.ndarray,
+def fit_input_norm(layout: SlotLayout, rows: np.ndarray, depth: np.ndarray, objects: np.ndarray,
                    ctx: np.ndarray) -> InputNorm:
-    """Mean and std of the per-slot inputs over valid slots and of the context over ticks.
+    """Mean and std of the per-slot inputs over objects (`F`'s slot set) and of the context
+    over ticks.
 
     A component with std below 1e-6 keeps unit scale."""
     rows = np.asarray(rows, dtype=np.float64).reshape(-1, layout.W)
     depth = np.asarray(depth, dtype=np.float64).reshape(-1)
-    valid = np.asarray(valid, dtype=bool).reshape(-1)
+    objects = np.asarray(objects, dtype=bool).reshape(-1)
     ctx = np.asarray(ctx, dtype=np.float64).reshape(-1, np.asarray(ctx).shape[-1])
-    x = np.concatenate([layout.dyn(rows, depth), layout.app(rows)], axis=-1)[valid]
+    x = np.concatenate([layout.dyn(rows, depth), layout.app(rows)], axis=-1)[objects]
     if x.shape[0] == 0:
-        raise ValueError("no valid slot to fit the input normalization on")
+        raise ValueError("no object slot to fit the input normalization on")
     return InputNorm(slot_mean=x.mean(0), slot_std=_std(x), ctx_mean=ctx.mean(0),
                      ctx_std=_std(ctx))
 
@@ -288,14 +294,14 @@ class SlotSetNet(nn.Module):
         self.q_head = nn.Linear(2 * hidden + n_ctx, n_q)
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor, c: torch.Tensor):
-        """`x [B, K, n_slot]`, `mask [B, K]` bool, `c [B, n_ctx]` ->
+        """`x [B, K, n_slot]`, `mask [B, K]` bool (the pooled set), `c [B, n_ctx]` ->
         `f [B, K, D]`, `B [B, K, D, n_a]`, validity logit `[B, K]`, `q [B, n_q]`."""
         nb, K, _ = x.shape
         ck = c[:, None, :].expand(nb, K, c.shape[-1])
         h = self.mlp1(torch.cat([x, ck], dim=-1))
-        m = mask.to(h.dtype)[..., None]
-        n = m.sum(dim=1)
-        mean = (h * m).sum(dim=1) / (n + (n == 0).to(h.dtype))
+        n = mask.to(h.dtype)[..., None].sum(dim=1)
+        mean = torch.where(mask[..., None], h, torch.zeros_like(h)).sum(dim=1) / (
+            n + (n == 0).to(h.dtype))
         mx = h.masked_fill(~mask[..., None], float("-inf")).amax(dim=1)
         mx = torch.where(n > 0, mx, torch.zeros_like(mx))
         pool = torch.cat([mean, mx], dim=-1)
@@ -371,46 +377,51 @@ class ScenePredictor(nn.Module):
 
     # -- tensor path ---------------------------------------------------------------------------
 
-    def _inputs(self, rows, depth, valid, ctx):
+    def _inputs(self, rows, depth, objects, ctx):
+        """Per-slot inputs (zero outside `objects`, whatever the row holds) and the context."""
         L = self.layout
         x = torch.cat([L.dyn(rows, depth), L.app(rows)], dim=-1)
         x = (x - self.slot_mean) / self.slot_std
-        vf = valid.to(rows.dtype)
-        x = torch.cat([x, vf[..., None], (1.0 - L.border(rows))[..., None]], dim=-1) * vf[..., None]
+        of = objects.to(rows.dtype)
+        x = torch.cat([x, of[..., None], (1.0 - L.border(rows))[..., None]], dim=-1)
+        x = torch.where(objects[..., None], x, torch.zeros_like(x))
         c = (ctx - self.ctx_mean) / self.ctx_std
         return x, c
 
-    def heads(self, rows: torch.Tensor, depth: torch.Tensor, valid: torch.Tensor,
+    def heads(self, rows: torch.Tensor, depth: torch.Tensor, objects: torch.Tensor,
               ctx: torch.Tensor):
-        """`f [B, K, D]`, `B [B, K, D, n_a]` (scaled units), validity logit, normalized `q`."""
-        x, c = self._inputs(rows, depth, valid, ctx)
-        return self.net(x, valid, c)
+        """`f [B, K, D]`, `B [B, K, D, n_a]` (scaled units), validity logit, normalized `q`.
 
-    def affine_t(self, rows, depth, valid, ctx):
+        `objects [B, K]` bool: `F`'s slot set (valid, slot id >= 0; `SlotFrame.objects`). Other
+        slots, the background included, are not inputs."""
+        x, c = self._inputs(rows, depth, objects, ctx)
+        return self.net(x, objects, c)
+
+    def affine_t(self, rows, depth, objects, ctx):
         """`f [B, K, D]` and `B [B, K, D, n_a]` in physical units (row units per tick; per m or rad)."""
-        f, Bm, _, _ = self.heads(rows, depth, valid, ctx)
+        f, Bm, _, _ = self.heads(rows, depth, objects, ctx)
         return f * self.dyn_scale, Bm * self.dyn_scale[:, None] / self.act_scale
 
-    def step_t(self, rows, depth, valid, ctx, action, movable=None) -> Step:
-        """One tick: `z + s (f + B a / s_a)` on `movable` slots (default `valid`); others copied."""
-        movable = valid if movable is None else movable
-        f, Bm, v, q = self.heads(rows, depth, valid, ctx)
+    def step_t(self, rows, depth, objects, ctx, action) -> Step:
+        """One tick: `z + s (f + B a / s_a)` on `objects`; other slots copied."""
+        f, Bm, v, q = self.heads(rows, depth, objects, ctx)
         a = action / self.act_scale
         delta = self.dyn_scale * (f + torch.einsum("bkdj,bj->bkd", Bm, a))
         dyn0 = self.layout.dyn(rows, depth)
-        dyn = torch.where(movable[..., None], dyn0 + delta, dyn0)
+        dyn = torch.where(objects[..., None], dyn0 + delta, dyn0)
         new_rows, new_depth = self.layout.with_dyn(rows, dyn)
         return Step(rows=new_rows, depth=new_depth, dyn=dyn, valid_logit=v, q_norm=q)
 
-    def rollout_t(self, rows, depth, valid, ctxs, actions, movable=None, *, teacher=None) -> list[Step]:
-        """Open-loop rollout over `H = ctxs.shape[1]` ticks from `(rows, depth)`.
+    def rollout_t(self, rows, depth, objects, ctxs, actions, *, teacher=None) -> list[Step]:
+        """Open-loop rollout over `H = ctxs.shape[1]` ticks from `(rows, depth)`; the slot set
+        stays `objects` (the first tick's).
 
         `teacher = (rows [B, H, K, W], depth [B, H, K], present [B, H, K])`: the observed state
         at t+h replaces the prediction as the input of tick h+1 where present (teacher forcing)."""
         out = []
         r, d = rows, depth
         for h in range(ctxs.shape[1]):
-            s = self.step_t(r, d, valid, ctxs[:, h], actions[:, h], movable)
+            s = self.step_t(r, d, objects, ctxs[:, h], actions[:, h])
             out.append(s)
             r, d = s.rows, s.depth
             if teacher is not None and h + 1 < ctxs.shape[1]:
@@ -422,11 +433,13 @@ class ScenePredictor(nn.Module):
     # -- numpy path ----------------------------------------------------------------------------
 
     def _frame_tensors(self, frame: SlotFrame):
+        """`rows`, `depth` and the slot set (`frame.objects`) as batch-of-one tensors."""
+        if frame.W != self.layout.W:
+            raise ValueError(f"frame is W={frame.W}; the predictor is for W={self.layout.W}")
         rows = torch.as_tensor(np.asarray(frame.rows, dtype=np.float32))[None]
         depth = torch.as_tensor(np.asarray(frame.depth, dtype=np.float32))[None]
-        valid = torch.as_tensor(np.asarray(frame.valid, dtype=bool))[None]
-        movable = torch.as_tensor(np.asarray(frame.objects, dtype=bool))[None]
-        return rows, depth, valid, movable
+        objects = torch.as_tensor(np.asarray(frame.objects, dtype=bool))[None]
+        return rows, depth, objects
 
     @staticmethod
     def _vec(x, n: int, name: str) -> torch.Tensor:
@@ -437,11 +450,12 @@ class ScenePredictor(nn.Module):
 
     @torch.no_grad()
     def predict(self, frame: SlotFrame, context, action) -> SlotFrame:
-        """`z_{t+1}` for one frame: same slot order and ids; background and empty slots copied."""
-        rows, depth, valid, movable = self._frame_tensors(frame)
+        """`z_{t+1}` for one frame: same slot order and ids; background and empty slots copied
+        (and never network inputs)."""
+        rows, depth, objects = self._frame_tensors(frame)
         c = self._vec(context, self.cfg.context_w, "context")
         a = self._vec(action, self.cfg.n_a, "action")
-        s = self.step_t(rows, depth, valid, c, a, movable)
+        s = self.step_t(rows, depth, objects, c, a)
         return SlotFrame(s.rows[0].numpy(), s.depth[0].numpy(), frame.valid.copy(),
                          frame.slot_ids.copy())
 
@@ -449,32 +463,33 @@ class ScenePredictor(nn.Module):
     def affine(self, frame: SlotFrame, context) -> tuple[np.ndarray, np.ndarray]:
         """`f [K, D]` [row units per tick] and `B [K, D, n_a]` [row units per m or rad] at `frame`;
         zero on background and empty slots."""
-        rows, depth, valid, movable = self._frame_tensors(frame)
-        f, Bm = self.affine_t(rows, depth, valid, self._vec(context, self.cfg.context_w, "context"))
-        m = movable[0].numpy()
+        rows, depth, objects = self._frame_tensors(frame)
+        f, Bm = self.affine_t(rows, depth, objects,
+                              self._vec(context, self.cfg.context_w, "context"))
+        m = objects[0].numpy()
         f, Bm = f[0].numpy() * m[:, None], Bm[0].numpy() * m[:, None, None]
         return f.astype(np.float64), Bm.astype(np.float64)
 
     @torch.no_grad()
     def rollout(self, frame: SlotFrame, contexts, actions) -> list[SlotFrame]:
         """Open-loop `z_{t+1..t+H}` from `contexts [H, C]` and `actions [H, n_a]`."""
-        rows, depth, valid, movable = self._frame_tensors(frame)
+        rows, depth, objects = self._frame_tensors(frame)
         ctxs = torch.as_tensor(np.asarray(contexts, dtype=np.float32))[None]
         acts = torch.as_tensor(np.asarray(actions, dtype=np.float32))[None]
         if ctxs.shape[1] != acts.shape[1]:
             raise ValueError("contexts and actions must have the same number of ticks")
-        steps = self.rollout_t(rows, depth, valid, ctxs, acts, movable)
+        steps = self.rollout_t(rows, depth, objects, ctxs, acts)
         return [SlotFrame(s.rows[0].numpy(), s.depth[0].numpy(), frame.valid.copy(),
                           frame.slot_ids.copy()) for s in steps]
 
     def action_jacobian(self, frame: SlotFrame, context, action) -> np.ndarray:
         """`d dyn' / d a` `[K, D, n_a]` by automatic differentiation at `action`."""
-        rows, depth, valid, movable = self._frame_tensors(frame)
+        rows, depth, objects = self._frame_tensors(frame)
         c = self._vec(context, self.cfg.context_w, "context")
         a0 = self._vec(action, self.cfg.n_a, "action")
 
         def fn(a):
-            return self.step_t(rows, depth, valid, c, a[None], movable).dyn[0]
+            return self.step_t(rows, depth, objects, c, a[None]).dyn[0]
 
         J = torch.autograd.functional.jacobian(fn, a0[0])
         return J.detach().numpy().astype(np.float64)

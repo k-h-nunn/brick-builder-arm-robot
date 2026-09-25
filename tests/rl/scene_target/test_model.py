@@ -14,14 +14,14 @@ from brick_builder.perception.scene_model import PLACEHOLDER_SLOT_SCHEMA as S
 from brick_builder.perception.scene_model import opaque_schema
 from brick_builder.rl.scene_target.codec import NAMED_SCALES, OTHER_WEIGHT, SlotFrame
 from brick_builder.rl.scene_target.dataset import (
-    EpisodeLog, ToyConfig, Windows, load_episodes, synthetic_logs,
+    EpisodeLog, ToyConfig, Windows, load_episodes, split_logs, synthetic_logs,
 )
 from brick_builder.rl.scene_target.model import (
-    ACTION_SCALE, CONTEXT_W, MECH_W, STEP_W, TOOL_W, ModelConfig, ScenePredictor, SlotLayout,
+    CONTEXT_W, MECH_W, STEP_W, TOOL_W, ModelConfig, ScenePredictor, SlotLayout,
     context_from_obs, context_vector, fit_input_norm,
 )
 from brick_builder.rl.scene_target.train_model import (
-    TrainConfig, action_response, b_cosine, prediction_report, train,
+    TrainConfig, action_response, b_cosine, one_step_report, prediction_report, train,
 )
 
 PKG = Path(__file__).resolve().parents[3] / "brick_builder" / "rl" / "scene_target"
@@ -105,9 +105,9 @@ def test_slots_are_permutation_equivariant():
     ctx = torch.as_tensor(_random_context(rng))[None]
     perm = rng.permutation(8)
     t = lambda x, dt=torch.float32: torch.as_tensor(np.asarray(x))[None].to(dt)  # noqa: E731
-    f1, B1, v1, q1 = model.heads(t(fr.rows), t(fr.depth), t(fr.valid, torch.bool), ctx)
+    f1, B1, v1, q1 = model.heads(t(fr.rows), t(fr.depth), t(fr.objects, torch.bool), ctx)
     f2, B2, v2, q2 = model.heads(t(fr.rows[perm]), t(fr.depth[perm]),
-                                 t(fr.valid[perm], torch.bool), ctx)
+                                 t(fr.objects[perm], torch.bool), ctx)
     assert torch.allclose(f1[0, perm], f2[0], atol=1e-6)
     assert torch.allclose(B1[0, perm], B2[0], atol=1e-6)
     assert torch.allclose(v1[0, perm], v2[0], atol=1e-6)
@@ -143,6 +143,72 @@ def test_prediction_is_affine_in_the_action_at_any_size():
     assert np.array_equal(p.rows[~obj], fr.rows[~obj]) and np.array_equal(p.depth[~obj], fr.depth[~obj])
 
 
+def _fitted_model(seed=0):
+    """An untrained `F` with the input normalization fitted on toy data (non-trivial scales)."""
+    logs, toy = synthetic_logs(300, seed=seed)
+    w = Windows.from_logs(logs, horizon=1)
+    norm = fit_input_norm(toy.layout, w.rows[:, 0], w.depth[:, 0], w.present[:, 0], w.ctx[:, 0])
+    return ScenePredictor.create(toy.layout, seed=seed, norm=norm), logs
+
+
+def test_background_and_empty_rows_are_not_inputs():
+    model, logs = _fitted_model(seed=11)
+    log = logs[0]
+    ctx, a = log.contexts()[4], log.exec_action[5]
+    fr = log.frame(4)
+    bg, obj = fr.background, fr.objects
+    assert bg.sum() == 1 and obj.sum() >= 2
+    p0 = model.predict(fr, ctx, a)
+    f0, B0 = model.affine(fr, ctx)
+    # any background row, NaN included, or no background at all: objects unchanged
+    for fill in (1e3, -7.0, np.nan):
+        rows = fr.rows.copy()
+        rows[bg] = fill
+        depth = fr.depth.copy()
+        depth[bg] = fill
+        empty = ~fr.valid
+        rows[empty], depth[empty] = fill, fill
+        for other in (SlotFrame(rows, depth, fr.valid, fr.slot_ids),
+                      SlotFrame(rows, depth, fr.valid & ~bg, fr.slot_ids)):
+            p = model.predict(other, ctx, a)
+            f, B = model.affine(other, ctx)
+            assert np.array_equal(p.rows[obj], p0.rows[obj]), fill
+            assert np.array_equal(p.depth[obj], p0.depth[obj]), fill
+            assert np.array_equal(f, f0) and np.array_equal(B, B0), fill
+            assert np.array_equal(model.action_jacobian(other, ctx, a)[obj],
+                                  model.action_jacobian(fr, ctx, a)[obj])
+
+
+def test_window_path_equals_the_public_api_on_logged_frames():
+    """The training path (window tensors) and `rollout` / `predict` on the logged frames agree,
+    background slot included."""
+    model, logs = _fitted_model(seed=12)
+    w = Windows.from_logs(logs, horizon=3)
+    T = w.tensors()
+    idx = np.arange(0, len(w), max(len(w) // 40, 1))
+    ti = torch.from_numpy(idx)
+    with torch.no_grad():
+        steps = model.rollout_t(T["rows"][ti, 0], T["depth"][ti, 0], T["present"][ti, 0],
+                                T["ctx"][ti], T["action"][ti])
+    by_id = {log.episode_id: log for log in logs}
+    n_bg = 0
+    for n, i in enumerate(idx):
+        log, t = by_id[int(w.episode[i])], int(w.start[i])
+        fr = log.frame(t)
+        wf = w.frame(i)
+        for k in ("rows", "depth", "valid", "slot_ids"):
+            assert np.array_equal(getattr(wf, k), getattr(fr, k)), k
+        n_bg += int(fr.background.sum())
+        ctxs = log.contexts()[t:t + 3]
+        acts = log.exec_action[t + 1:t + 4]
+        pub = model.rollout(fr, ctxs, acts)
+        for h in range(3):
+            assert np.allclose(pub[h].rows, steps[h].rows[n].numpy(), atol=1e-6)
+        one = model.predict(fr, ctxs[0], acts[0])
+        assert np.allclose(one.rows, steps[0].rows[n].numpy(), atol=1e-6)
+    assert n_bg == len(idx)  # every toy frame has its background slot
+
+
 def test_no_clamp_or_clip_in_the_predictor():
     banned = {"clamp", "clamp_", "clip", "clip_", "clamp_min", "clamp_max", "hardtanh",
               "nan_to_num", "Hardtanh"}
@@ -162,8 +228,7 @@ def test_opaque_width_32_trains_and_predicts():
     layout = SlotLayout.for_schema(opaque_schema(32), feature_std=np.full(32, 0.01))
     res = train(w, TrainConfig(epochs=1, batch=64), layout=layout, log=None,
                 meta={"source": "opaque", "weights_sha256": "", "W": 32})
-    fr = SlotFrame(w.rows[0, 0], w.depth[0, 0], w.valid0[0], np.where(w.present[0, 0], 1, -1))
-    p = res.model.predict(fr, w.ctx[0, 0], w.action[0, 0])
+    p = res.model.predict(w.frame(0), w.ctx[0, 0], w.action[0, 0])
     assert p.rows.shape == (8, 32) and np.all(np.isfinite(p.rows))
 
 
@@ -210,6 +275,11 @@ def test_windows_pair_slots_by_id_and_align_contexts():
     assert w.depth[1, 2, 1] == 0.5
     assert list(w.present[1, 0]) == [True, True, False]  # background never an object
     assert list(w.valid0[1]) == [True, True, True]
+    # the first tick is the logged frame, background row and slot ids included
+    assert w.rows[1, 0, 2, 0] == pytest.approx(0.5) and list(w.ids0[1]) == [7, 9, -1]
+    assert np.all(w.rows[1, 1:, 2] == 0.0) and not w.present[1, 1:, 2].any()
+    fr = w.frame(1)
+    assert np.array_equal(fr.rows, _tiny_log().z[1]) and list(fr.background) == [False, False, True]
     # context of tick t -> t+1: mech_t, tool_t, then compliance and grip of row t+1
     assert np.allclose(w.ctx[1, 0, :18], 1.0) and np.allclose(w.ctx[1, 0, 18:31], 10.0)
     assert np.allclose(w.ctx[1, 0, 40:], [2.0, -2.0, 1.0])
@@ -303,13 +373,17 @@ def toy_run():
     w = Windows.from_logs(logs, horizon=3)
     tr, va = w.split()
     res = train(tr, TrainConfig(seed=0, epochs=30), layout=toy.layout, log=None, meta=META)
-    return res, tr, va, toy
+    _, held_logs = split_logs(logs)
+    return res, tr, va, toy, held_logs
 
 
 def test_synthetic_toy_recovers_B(toy_run):
-    res, _, va, toy = toy_run
+    """`B` through `ScenePredictor.affine` on the held-out logged frames, background included."""
+    res, _, _, toy, held_logs = toy_run
     assert res.completed
-    stats = b_cosine(res.model, va, toy.affine)
+    assert held_logs and all(log.episode_id % 7 == 6 for log in held_logs)
+    assert all(log.frame(t).background.any() for log in held_logs for t in (0, 10))
+    stats = b_cosine(res.model, held_logs, toy.affine)
     assert stats["all"]["n"] > 1000
     assert stats["all"]["cos_median"] >= 0.99, stats
     assert stats["all"]["cos_mean"] >= 0.99, stats
@@ -318,25 +392,26 @@ def test_synthetic_toy_recovers_B(toy_run):
 
 
 def test_action_response_is_B_at_ten_times_the_training_range(toy_run):
-    res, _, va, toy = toy_run
+    res, _, _, toy, held_logs = toy_run
     model = res.model
-    rep = action_response(model, va, TOY.action_range, factor=10.0, n=32)
+    rep = action_response(model, held_logs, TOY.action_range, factor=10.0, n=32,
+                          truth=toy.affine)
+    assert rep["n"] == 32
     assert rep["jacobian_over_B_min"] == pytest.approx(1.0, abs=1e-5)
     assert rep["nonlinearity_max_scaled"] < 1e-3
-    scale = np.asarray(model.layout.dyn_scale)[:, None] / np.asarray(ACTION_SCALE)[None, :]
-    big = 10.0 * np.asarray(TOY.action_range)
-    ratios = []
-    for i in range(32):
-        obj = va.present[i, 0]
-        fr = SlotFrame(va.rows[i, 0], va.depth[i, 0], va.valid0[i], np.where(obj, 1, -1))
-        J = model.action_jacobian(fr, va.ctx[i, 0], big)
-        _, Bt = toy.affine(va.rows[i, 0], va.depth[i, 0], va.ctx[i, 0])
-        ratios.append(np.linalg.norm(J[obj] / scale) / np.linalg.norm(Bt[obj] / scale))
-    assert 0.9 <= min(ratios) and max(ratios) <= 1.1, ratios
+    assert 0.9 <= rep["jacobian_over_true_B_min"] and rep["jacobian_over_true_B_max"] <= 1.1, rep
+
+
+def test_one_step_prediction_on_logged_frames_beats_copy_last(toy_run):
+    """`ScenePredictor.predict` on the held-out logged frames, background included."""
+    res, _, _, _, held_logs = toy_run
+    rep = one_step_report(res.model, held_logs)
+    assert rep["n_ticks"] > 1000
+    assert rep["centre_rmse_mm"][0] < 0.2 * rep["centre_rmse_copy_last_mm"][0], rep
 
 
 def test_prediction_beats_copy_last_on_held_out_episodes(toy_run):
-    res, _, va, _ = toy_run
+    res, _, va, _, _ = toy_run
     rep = prediction_report(res.model, va)
     for h in range(3):
         assert rep["centre_rmse_mm"][h] < 0.5 * rep["centre_rmse_copy_last_mm"][h], rep
@@ -437,12 +512,13 @@ def test_input_normalization_is_affine_and_never_clipped():
     fr = _random_frame(rng)
     big = 1000.0 * _random_context(rng)
     x, c = model._inputs(torch.as_tensor(fr.rows)[None], torch.as_tensor(fr.depth)[None],
-                         torch.as_tensor(fr.valid)[None], torch.as_tensor(big)[None])
+                         torch.as_tensor(fr.objects)[None], torch.as_tensor(big)[None])
     want = (big - norm.ctx_mean) / norm.ctx_std
     assert np.allclose(c[0].numpy(), want, rtol=1e-5)
     assert float(torch.max(torch.abs(c))) > 100.0
     dyn = L.dyn(fr.rows.astype(np.float64), fr.depth.astype(np.float64))
     want_x = (dyn - norm.slot_mean[:L.D]) / norm.slot_std[:L.D]
-    obj = fr.valid
+    obj = fr.objects
+    assert fr.background.any()
     assert np.allclose(x[0, obj, :L.D].numpy(), want_x[obj], rtol=1e-4, atol=1e-5)
-    assert np.all(x[0, ~obj].numpy() == 0.0)
+    assert np.all(x[0, ~obj].numpy() == 0.0)  # background and empty slots

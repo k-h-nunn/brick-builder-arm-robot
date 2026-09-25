@@ -5,12 +5,18 @@
 
 - `s`, `w_field`: the layout's scales and weights (centre 1, other dynamic components 0.25).
 - `w_slot = 1 - border` of the observed row, over objects of tick t still present at t+h.
+- `F`'s slot set is the objects of tick t (valid, slot id >= 0), the set every numpy entry
+  point of `ScenePredictor` uses; the background slot is never an input.
 - Teacher forcing for the first 20 % of epochs (the observed state at t+h is the input of tick
   h+1 where present), open loop afterwards. Contexts come from the log at every tick.
 - AdamW, lr 1e-3, batch 256. Initialization and batch order depend on the seed alone.
 - State file after every epoch: parameters, optimizer, batch-order generator, epoch, history.
   A run started again with the same data and configuration continues from it and ends
   bit-identical to an uninterrupted run (same torch thread count).
+
+Reports: `b_cosine`, `one_step_report` and `action_response` run through the numpy entry points
+(`ScenePredictor.affine`, `predict`, `action_jacobian`) on the logged frames, background
+included; `prediction_report` is the multi-step open-loop error on windows.
 
 Command line:
 
@@ -38,12 +44,12 @@ import torch
 from torch.nn import functional as Fn
 
 from .codec import MM_PER_WINDOW_UNIT
-from .dataset import ToyConfig, Windows, load_episodes, synthetic_logs
+from .dataset import ToyConfig, Windows, load_episodes, split_logs, synthetic_logs
 from .model import Q_W, ModelConfig, ScenePredictor, SlotLayout, fit_input_norm
 
 __all__ = [
     "TrainConfig", "TrainResult", "action_response", "b_cosine", "evaluate_loss",
-    "prediction_report", "rollout_loss", "train",
+    "one_step_report", "prediction_report", "rollout_loss", "train",
 ]
 
 
@@ -93,7 +99,7 @@ def rollout_loss(model: ScenePredictor, b: dict, cfg: TrainConfig, *, teacher: b
     rows0, depth0 = b["rows"][:, 0], b["depth"][:, 0]
     obj0 = b["present"][:, 0]
     tf = (b["rows"][:, 1:], b["depth"][:, 1:], b["present"][:, 1:]) if teacher else None
-    steps = model.rollout_t(rows0, depth0, b["valid0"], b["ctx"], b["action"], obj0, teacher=tf)
+    steps = model.rollout_t(rows0, depth0, obj0, b["ctx"], b["action"], teacher=tf)
     total = torch.zeros((), dtype=rows0.dtype)
     m0 = obj0.to(rows0.dtype)
     n0 = m0.sum() + 1e-8
@@ -186,8 +192,8 @@ def train(train_w: Windows, cfg: TrainConfig = TrainConfig(), *, layout: SlotLay
         model.meta = dict(meta or base.meta)
         init_hash = _param_hash(base)
     else:
-        norm = fit_input_norm(layout, train_w.rows[:, 0], train_w.depth[:, 0], train_w.valid0,
-                              train_w.ctx[:, 0])
+        norm = fit_input_norm(layout, train_w.rows[:, 0], train_w.depth[:, 0],
+                              train_w.present[:, 0], train_w.ctx[:, 0])
         model = ScenePredictor.create(layout, model_cfg, seed=cfg.seed, norm=norm, meta=meta)
         init_hash = ""
     key = {"train": fp, "val": val_w.fingerprint() if val_w is not None else "",
@@ -274,7 +280,8 @@ def prediction_report(model: ScenePredictor, windows: Windows, *,
     """Open-loop error per horizon step on `windows`, against copy-last.
 
     Centre RMSE [mm-eq] (named schema): RMS over present objects weighted by `1 - border`,
-    times `mm_scale`. Per-component RMSE in scaled units (`s`)."""
+    times `mm_scale`. Per-component RMSE in scaled units (`s`). The windows' first tick is the
+    logged frame, so this is the error of `ScenePredictor.rollout` on those frames."""
     L = model.layout
     T = windows.tensors()
     H = windows.horizon
@@ -284,8 +291,7 @@ def prediction_report(model: ScenePredictor, windows: Windows, *,
     for s in range(0, len(windows), batch):
         b = {k: v[s:s + batch] for k, v in T.items()}
         obj0 = b["present"][:, 0]
-        steps = model.rollout_t(b["rows"][:, 0], b["depth"][:, 0], b["valid0"], b["ctx"],
-                                b["action"], obj0)
+        steps = model.rollout_t(b["rows"][:, 0], b["depth"][:, 0], obj0, b["ctx"], b["action"])
         z0 = L.dyn(b["rows"][:, 0], b["depth"][:, 0])
         for h, st in enumerate(steps, start=1):
             tr = b["rows"][:, h]
@@ -294,9 +300,14 @@ def prediction_report(model: ScenePredictor, windows: Windows, *,
             num[h - 1] += ((((st.dyn - tgt) / model.dyn_scale) ** 2) * w).sum(dim=(0, 1)).numpy()
             num_copy[h - 1] += ((((z0 - tgt) / model.dyn_scale) ** 2) * w).sum(dim=(0, 1)).numpy()
             den[h - 1] += float(w.sum())
+    return _error_report(L, num, num_copy, den, mm_scale,
+                         {"horizon": H, "n_windows": len(windows)})
+
+
+def _error_report(L: SlotLayout, num, num_copy, den, mm_scale: float, head: dict) -> dict:
     rmse = np.sqrt(num / np.maximum(den, 1e-12)[:, None])
     rmse_copy = np.sqrt(num_copy / np.maximum(den, 1e-12)[:, None])
-    out = {"horizon": H, "n_windows": len(windows), "slot_weight": den.tolist(),
+    out = {**head, "slot_weight": den.tolist(),
            "field_rmse": {n: rmse[:, i].tolist() for i, n in enumerate(L.dyn_names)},
            "field_rmse_copy_last": {n: rmse_copy[:, i].tolist() for i, n in enumerate(L.dyn_names)}}
     if L.centre:
@@ -312,6 +323,50 @@ def prediction_report(model: ScenePredictor, windows: Windows, *,
     return out
 
 
+def _log_ticks(logs, stride: int):
+    """`(log, t, frame, context, action)` for every `stride`-th transition of every log."""
+    for log in logs:
+        if log.n_ticks < 2:
+            continue
+        ctxs = log.contexts()
+        for t in range(0, log.n_ticks - 1, max(int(stride), 1)):
+            a = log.exec_action[t + 1]
+            if not (np.all(np.isfinite(a)) and np.all(np.isfinite(ctxs[t]))):
+                continue
+            yield log, t, log.frame(t), ctxs[t], a
+
+
+def one_step_report(model: ScenePredictor, logs, *, mm_scale: float = MM_PER_WINDOW_UNIT,
+                    stride: int = 1) -> dict:
+    """One-tick error of `ScenePredictor.predict` on the logged frames (background included),
+    against copy-last.
+
+    Objects of tick t paired by slot id at t+1, weighted by `1 - border` of the observed row.
+    Centre RMSE [mm-eq] and per-component RMSE in scaled units, as in `prediction_report`."""
+    L = model.layout
+    s = np.asarray(L.dyn_scale)
+    num, num_copy, den = np.zeros((1, L.D)), np.zeros((1, L.D)), np.zeros(1)
+    n_ticks = 0
+    for log, t, fr, ctx, a in _log_ticks(logs, stride):
+        pred = model.predict(fr, ctx, a)
+        nxt = log.frame(t + 1)
+        dp = L.dyn(pred.rows.astype(np.float64), pred.depth.astype(np.float64))
+        d0 = L.dyn(fr.rows.astype(np.float64), fr.depth.astype(np.float64))
+        dn = L.dyn(nxt.rows.astype(np.float64), nxt.depth.astype(np.float64))
+        n_ticks += 1
+        for i in np.nonzero(fr.objects)[0]:
+            j = np.nonzero(nxt.objects & (nxt.slot_ids == fr.slot_ids[i]))[0]
+            if not j.size:
+                continue
+            j = int(j[0])
+            w = 1.0 - float(L.border(nxt.rows[j].astype(np.float64)))
+            num[0] += w * ((dp[i] - dn[j]) / s) ** 2
+            num_copy[0] += w * ((d0[i] - dn[j]) / s) ** 2
+            den[0] += w
+    return _error_report(L, num, num_copy, den, mm_scale,
+                         {"horizon": 1, "n_ticks": n_ticks, "path": "predict on logged frames"})
+
+
 def _cos_stats(a: np.ndarray, b: np.ndarray) -> dict:
     na = np.linalg.norm(a, axis=1)
     nb = np.linalg.norm(b, axis=1)
@@ -323,9 +378,9 @@ def _cos_stats(a: np.ndarray, b: np.ndarray) -> dict:
             "gain_p10": float(np.percentile(gain, 10)), "gain_p90": float(np.percentile(gain, 90))}
 
 
-@torch.no_grad()
-def b_cosine(model: ScenePredictor, windows: Windows, truth, *, batch: int = 2048) -> dict:
-    """Cosine and gain ratio between `F`'s `B` and a known `B` at the first tick of each window.
+def b_cosine(model: ScenePredictor, logs, truth, *, stride: int = 1) -> dict:
+    """Cosine and gain ratio between `ScenePredictor.affine`'s `B` and a known `B`, on the logged
+    frames (background included) of `logs`, every `stride`-th tick.
 
     `truth(rows [K, W], depth [K], ctx [43]) -> (f [K, D], B [K, D, n_a])` in physical units.
     Per object: `B` flattened in scaled units (`B_dj s_a,j / s_d`). Also reported for the
@@ -333,47 +388,50 @@ def b_cosine(model: ScenePredictor, windows: Windows, truth, *, batch: int = 204
     scale = np.asarray(model.layout.dyn_scale)[:, None] / np.asarray(model.cfg.action_scale)[None, :]
     ci = list(model.layout.centre)
     Bm_all, Bt_all = [], []
-    T = windows.tensors()
-    for s in range(0, len(windows), batch):
-        rows, depth = T["rows"][s:s + batch, 0], T["depth"][s:s + batch, 0]
-        valid, obj = T["valid0"][s:s + batch], T["present"][s:s + batch, 0]
-        _, Bm = model.affine_t(rows, depth, valid, T["ctx"][s:s + batch, 0])
-        Bm = Bm.numpy().astype(np.float64)
-        for i in range(rows.shape[0]):
-            _, Bt = truth(rows[i].numpy(), depth[i].numpy(), T["ctx"][s + i, 0].numpy())
-            o = obj[i].numpy()
-            Bm_all.append(Bm[i][o] / scale)
-            Bt_all.append(Bt[o] / scale)
+    for _, _, fr, ctx, _ in _log_ticks(logs, stride):
+        o = fr.objects
+        if not o.any():
+            continue
+        _, Bm = model.affine(fr, ctx)
+        _, Bt = truth(fr.rows, fr.depth, ctx)
+        Bm_all.append(Bm[o] / scale)
+        Bt_all.append(np.asarray(Bt)[o] / scale)
     Bm_all = np.concatenate(Bm_all)
     Bt_all = np.concatenate(Bt_all)
-    out = {"all": _cos_stats(Bm_all.reshape(len(Bm_all), -1), Bt_all.reshape(len(Bt_all), -1))}
+    out = {"path": "affine on logged frames",
+           "all": _cos_stats(Bm_all.reshape(len(Bm_all), -1), Bt_all.reshape(len(Bt_all), -1))}
     if ci:
         out["centre"] = _cos_stats(Bm_all[:, ci].reshape(len(Bm_all), -1),
                                    Bt_all[:, ci].reshape(len(Bt_all), -1))
     return out
 
 
-def action_response(model: ScenePredictor, windows: Windows, action_range, *, factor: float = 10.0,
-                    n: int = 64) -> dict:
-    """Autograd `d z' / d a` at `factor` x the training action range against `B`.
+def action_response(model: ScenePredictor, logs, action_range, *, factor: float = 10.0,
+                    n: int = 64, truth=None) -> dict:
+    """Autograd `d z' / d a` at `factor` x the training action range against `B`, on the first
+    `n` logged frames (background included) of `logs`.
 
-    Returns the smallest ratio `|J| / |B|` and the largest `|J - B|` over the first `n`
-    windows' objects, plus the prediction's deviation from linearity in `a`."""
-    from .codec import SlotFrame
-
+    Returns the smallest ratio `|J| / |B|` and the largest `|J - B|` over the objects, the
+    prediction's deviation from linearity in `a`, and with `truth` (as in `b_cosine`) the
+    range of `|J| / |B_true|` in scaled units."""
     a_big = factor * np.asarray(action_range, dtype=np.float64)
-    ratios, diffs, lin = [], [], []
-    for i in range(min(n, len(windows))):
-        obj = windows.present[i, 0]
-        frame = SlotFrame(windows.rows[i, 0], windows.depth[i, 0], windows.valid0[i],
-                          np.where(obj, np.arange(windows.K), -1))
-        ctx = windows.ctx[i, 0]
+    L = model.layout
+    scale = np.asarray(L.dyn_scale)[:, None] / np.asarray(model.cfg.action_scale)[None, :]
+    ratios, diffs, lin, true_ratios = [], [], [], []
+    for _, _, frame, ctx, _ in _log_ticks(logs, 1):
+        if len(ratios) >= n:
+            break
+        obj = frame.objects
+        if not obj.any():
+            continue
         J = model.action_jacobian(frame, ctx, a_big)
         _, Bm = model.affine(frame, ctx)
-        nb = np.linalg.norm(Bm[obj])
-        ratios.append(float(np.linalg.norm(J[obj]) / max(nb, 1e-30)))
-        diffs.append(float(np.max(np.abs(J[obj] - Bm[obj]))) if obj.any() else 0.0)
-        L = model.layout
+        ratios.append(float(np.linalg.norm(J[obj]) / max(np.linalg.norm(Bm[obj]), 1e-30)))
+        diffs.append(float(np.max(np.abs(J[obj] - Bm[obj]))))
+        if truth is not None:
+            _, Bt = truth(frame.rows, frame.depth, ctx)
+            true_ratios.append(float(np.linalg.norm(J[obj] / scale)
+                                     / max(np.linalg.norm(np.asarray(Bt)[obj] / scale), 1e-30)))
 
         def dyn(a):
             p = model.predict(frame, ctx, a)
@@ -381,10 +439,15 @@ def action_response(model: ScenePredictor, windows: Windows, action_range, *, fa
 
         z0, z1, zb = dyn(np.zeros_like(a_big)), dyn(a_big / factor), dyn(a_big)
         dev = np.abs((zb - z0) - factor * (z1 - z0))[obj] / np.asarray(L.dyn_scale)
-        lin.append(float(dev.max()) if obj.any() else 0.0)
-    return {"factor": factor, "action": a_big.tolist(), "n": len(ratios),
-            "jacobian_over_B_min": float(min(ratios)), "jacobian_minus_B_max": float(max(diffs)),
-            "nonlinearity_max_scaled": float(max(lin))}
+        lin.append(float(dev.max()))
+    out = {"path": "action_jacobian on logged frames", "factor": factor,
+           "action": a_big.tolist(), "n": len(ratios),
+           "jacobian_over_B_min": float(min(ratios)), "jacobian_minus_B_max": float(max(diffs)),
+           "nonlinearity_max_scaled": float(max(lin))}
+    if true_ratios:
+        out["jacobian_over_true_B_min"] = float(min(true_ratios))
+        out["jacobian_over_true_B_max"] = float(max(true_ratios))
+    return out
 
 
 # ---------------------------------------------------------------------------------- CLI ---
@@ -403,6 +466,7 @@ def _main_synthetic(args) -> dict:
     logs, toy = synthetic_logs(args.transitions, seed=args.seed, cfg=toy_cfg)
     windows = Windows.from_logs(logs, horizon=args.horizon)
     tr, va = windows.split()
+    _, held_logs = split_logs(logs)
     t_data = time.perf_counter() - t0
     cfg = TrainConfig(seed=args.seed, epochs=args.epochs, batch=args.batch)
     out = Path(args.out)
@@ -425,8 +489,11 @@ def _main_synthetic(args) -> dict:
         "final": res.history[-1] if res.history else {},
     }
     if res.completed:
-        report["b_cosine_held_out"] = b_cosine(res.model, va, toy.affine)
-        report["action_response_10x"] = action_response(res.model, va, toy_cfg.action_range)
+        report["b_cosine_held_out"] = b_cosine(res.model, held_logs, toy.affine)
+        report["action_response_10x"] = action_response(res.model, held_logs,
+                                                        toy_cfg.action_range, truth=toy.affine)
+        report["one_step_held_out"] = one_step_report(res.model, held_logs,
+                                                      mm_scale=args.mm_scale)
         report["prediction_held_out"] = prediction_report(res.model, va, mm_scale=args.mm_scale)
     return report
 
@@ -467,6 +534,9 @@ def _main_episodes(args) -> dict:
               "torch_threads": torch.get_num_threads(),
               "final": res.history[-1] if res.history else {}}
     if res.completed and len(va):
+        _, held_logs = split_logs(logs)
+        report["one_step_held_out"] = one_step_report(res.model, held_logs,
+                                                      mm_scale=args.mm_scale)
         report["prediction_held_out"] = prediction_report(res.model, va, mm_scale=args.mm_scale)
     return report
 
