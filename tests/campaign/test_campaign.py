@@ -175,8 +175,76 @@ def test_would_ship_reads_the_seated_key_the_scores_actually_carry(tmp_path) -> 
     assert ship["tasks"]["placement"]["meets"] is False
     assert ship["ship"] is False
 
-    ahead = summarize_records(_records("placement", "learned", 9, predictor="learned",
+    ahead = summarize_records(_records("placement", "learned", 10, predictor="learned",
                                        round_index=1))
     ship = campaign.would_ship(1, ahead)
+    assert ship["tasks"]["placement"]["learned"] != ship["tasks"]["placement"]["analytic"]
     assert ship["tasks"]["placement"]["meets"] is True
     assert ship["ship"] is True
+
+
+def test_would_ship_carries_the_round_s_own_version_before_the_record_is_saved(tmp_path) -> None:
+    """`would_ship` used to read `self._round(index).version` -- the round's own record, not yet
+    written when `score_round` calls it -- and got back the empty default. `score_round` now
+    passes the version it already has in hand."""
+    campaign = Campaign(_cfg(tmp_path, rounds=1), log=lambda line: None)
+    baseline = summarize_records(_records("placement", "analytic", 9))
+    campaign._put_round(RoundRecord(index=0, version="shipped", scores=baseline))
+
+    scores = summarize_records(_records("placement", "learned", 9, predictor="learned",
+                                        round_index=1))
+    assert campaign.would_ship(1, scores)["version"] == ""
+    assert campaign.would_ship(1, scores, version="r1")["version"] == "r1"
+
+
+def test_redeploy_returns_the_round_s_own_version_not_the_shared_pointer(tmp_path) -> None:
+    """A later round's redeploy moves the campaign's shared `deployed.json` pointer onto its own
+    version; an earlier round whose own redeploy already finished must not read that shared
+    pointer back and relabel itself with it."""
+    campaign = Campaign(_cfg(tmp_path, rounds=2), log=lambda line: None)
+    campaign._finish("r1.deploy", version="r1")
+    campaign.weights.mkdir(parents=True, exist_ok=True)
+    (campaign.weights / "deployed.json").write_text(json.dumps({"version": "r5"}))
+
+    class _Result:
+        version = "r5"
+
+    assert campaign.redeploy(1, _Result()) == "r1"
+
+
+# ------------------------------------------------------------------------- offline action error ---
+
+
+def test_offline_action_error_only_reads_data_through_its_own_round(tmp_path, monkeypatch) -> None:
+    """A resumed campaign's later rounds leave their `data/r*` directories on disk; an earlier
+    round's offline metric must not be scored against ticks logged after it."""
+    campaign = Campaign(_cfg(tmp_path, rounds=3), log=lambda line: None)
+    for index in (1, 2, 3):
+        directory = campaign.data / f"r{index}"
+        directory.mkdir(parents=True)
+        (directory / "ep_0.npz").write_bytes(b"")
+
+    seen: dict = {}
+
+    def fake_load(dirs):
+        seen["dirs"] = sorted(dirs)
+        return "the loaded data"
+
+    def fake_metrics(data, inverse, predictor, *, seed):
+        assert data == "the loaded data"
+        return {"action_rmse": (0.1, 0.2, 0.3), "analytic_rms": (0.4, 0.5, 0.6),
+                "n_held_out": 7}
+
+    monkeypatch.setattr("brick_builder.action.learn.dataset.load", fake_load)
+    monkeypatch.setattr("brick_builder.action.learn.evaluate.inverse_metrics", fake_metrics)
+    monkeypatch.setattr("brick_builder.action.models.mlp.Mlp.load",
+                        classmethod(lambda cls, path: path))
+
+    class _Result:
+        ticks = 1000
+        inverse = "inverse.npz"
+        predictor = "predictor.npz"
+
+    out = campaign._offline_action_error(2, _Result())
+    assert seen["dirs"] == [str(campaign.data / "r1"), str(campaign.data / "r2")]
+    assert out["action_held_out_ticks"] == 7

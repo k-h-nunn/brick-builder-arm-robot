@@ -469,7 +469,7 @@ class Campaign:
         for key, entry in self.state["phases"].items():
             if key.startswith(f"r{index}.") and "wall_s" in entry:
                 record.wall_s[key.split(".", 1)[1]] = float(entry["wall_s"])
-        record.would_ship = self.would_ship(index, record.scores)
+        record.would_ship = self.would_ship(index, record.scores, version=record.version)
         self._put_round(record)
         for name, row in sorted(record.scores.items()):
             self.log(f"  {name:44s} {row['seated_on_target']:>7s}  "
@@ -513,17 +513,23 @@ class Campaign:
                 "analytic_rms_deg": metrics["analytic_rms"][2],
                 "action_held_out_ticks": metrics["n_held_out"]}
 
-    def would_ship(self, index: int, scores: dict) -> dict:
+    def would_ship(self, index: int, scores: dict, version: str | None = None) -> dict:
         """What `rounds.deploy_if_better` would have decided, on the tasks this round measured.
 
         The gate the shipped pair is behind: the learned inverse has to match the analytic one on
         every task, not win on one and lose on another. The analytic baseline is the fixed one
         from round 0, whatever round the learned column comes from.
+
+        `version` is the round's own version, as `score_round` has it in hand before the record is
+        saved; without it, the stored round record has not been written yet and reads back as the
+        empty default.
         """
         from ..action.learn.rounds import seated_fraction
 
+        if version is None:
+            version = self._round(index).version
         baseline = self._round(0).scores
-        out: dict = {"tasks": {}, "ship": True, "version": self._round(index).version}
+        out: dict = {"tasks": {}, "ship": True, "version": version}
         for key, row in scores.items():
             if row["inverse"] != "learned" or row["predictor"] == "analytic":
                 continue
