@@ -380,18 +380,26 @@ was not committed until after these shards were written (shards: 2026-09-21, 05:
 of `data.py`: `078bebb`, later that same day), and the rendering code has moved on since. The
 shipped `episode` frames use `tray_brick_0`/`tray_brick_1` bricks and a `to_tray` phase; today's
 `_episode_scene` instead draws from the loose supply and calls them `supply_brick_0`/`supply_brick_1`
-(`2aec008`, `62a603a`). `settle()`, joint dry friction/printed-part colour, and the wrist
-`CameraConfig` changed too (`a7d93a1`, `e77e1ff`, `9f338bb`) -- all affecting every scene kind's
-physics or appearance, not just `episode`. `data_cache/vision_model/train` is the only copy there is.
+(`2aec008`, `62a603a` -- the same pair also rewrote `_supply_scene`/`_approach_scene` to build the
+loose supply by default, so a render that reached those kinds would not reproduce them either,
+though this one never got that far). Three other same-week commits (`a7d93a1`, `e77e1ff`, `9f338bb`)
+touch `settle()`'s reporting, joint friction, print colour and the wrist camera, but each one's new
+default reproduces the prior hard-coded behaviour exactly, and the dataset generator always builds a
+default config -- so none of them changes a rendered frame. `data_cache/vision_model/train` is the
+only copy there is.
 
 At most: run the `generate` command above, kill it once
 `data_cache/vision_model/train_b/shard_0028.json` exists on disk -- not the `.npz`: `write_shard`
-writes the `.npz` first and the `.json` after, so triggering on the `.npz` can catch a shard
-mid-write, or let `merge_split` carry a shard into `train` with no `.json` at all, which then breaks
-`dataset_size`/`np.load` on it during training -- and before `shard_0029.npz` appears (there is no
-flag that stops it there -- watch the directory, not the clock), then run the `merge_split` command
-unchanged. That reproduces the shipped `train_b` portion's *size* (1 856 frames, 29 shards) and
-*rough kind mix* (`plate`/`held`/`episode` only) -- not the shipped frames themselves.
+writes the `.npz` first and the `.json` after, so triggering on the `.npz` risks catching a shard
+mid-write -- a half-written `.npz` breaks `np.load` outright. Triggering on the `.json` instead also
+guarantees `merge_split` has real per-frame metadata to carry over: skip it and `merge_split` still
+folds the shard's `.npz` into `train` untouched (`dataset_size` reads only the `.npz`), but every
+frame in that shard silently loses its `kind` label (`read_shard` fills in `{}` per frame when the
+`.json` is missing, and training then records that frame's kind as `?`) -- and before
+`shard_0029.npz` appears (there is no flag that stops it there -- watch the directory, not the
+clock), then run the `merge_split` command unchanged. That reproduces the shipped `train_b`
+portion's *size* (1 856 frames, 29 shards) and *rough kind mix* (`plate`/`held`/`episode` only) --
+not the shipped frames themselves.
 
 Outputs land in `results/vision_model/` (git-ignored): `checkpoint.pt` for resuming,
 `training_log.csv`, `loss_curves.png`, `train_summary.json`. The best held-out checkpoint is
