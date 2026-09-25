@@ -598,8 +598,10 @@ def _bias_table_bright(scene, rng: np.random.Generator) -> tuple[float, float, f
 
 
 def _brighten_lights(scene, rng: np.random.Generator, boost_range=(1.0, 1.45)) -> None:
-    """An extra brightness pass on top of `randomize_lights`, for the glare a pale table under a
-    strong light shows in the failure frames (docs/guide/06b, "White bricks on a bright table")."""
+    """An extra brightness pass on top of `randomize_lights`, part of this scene kind's bias
+    towards the pale-table case (docs/guide/06b, "White bricks on a bright table"). The inspected
+    failure frames were not themselves unusually bright; this boost widens lighting coverage
+    around the targeted case, it does not reproduce a brightness pattern seen in those frames."""
     model = scene.model
     for i in range(model.nlight):
         boost = float(rng.uniform(*boost_range))
@@ -609,7 +611,7 @@ def _brighten_lights(scene, rng: np.random.Generator, boost_range=(1.0, 1.45)) -
 
 def _repaint_bright_light(scene, rng: np.random.Generator, forced: dict[str, str]) -> dict:
     """A fresh appearance draw biased towards this scene kind's target case: a pale table, a
-    forced light-coloured brick, and boosted lighting."""
+    forced light-coloured brick, and an added lighting-brightness boost."""
     meta = randomize_appearance(scene, rng)
     meta["table_rgb"] = _bias_table_bright(scene, rng)
     if forced:
@@ -619,14 +621,15 @@ def _repaint_bright_light(scene, rng: np.random.Generator, forced: dict[str, str
 
 
 def _bright_light_plate_scene(rng: np.random.Generator, frames: int) -> Iterator[Sample]:
-    """The baseplate with at least one light-coloured brick, on a pale table under boosted
-    lighting.
+    """The baseplate with at least one light-coloured brick, on a pale table, with an added
+    lighting-brightness boost.
 
     Targeted coverage for the failure documented in the guide ("White bricks on a bright
-    table"): a light-coloured brick loses contrast against a pale, brightly lit table, worst
-    where its apparent size is smallest. Not part of `DEFAULT_MIX`; generated on its own into a
-    separate split and mixed into training as extra data, so the general-purpose split stays
-    exactly what it was.
+    table"): a light-coloured brick loses contrast against a pale table, worst where its
+    apparent size is smallest; the lighting boost adds coverage rather than reproducing a
+    brightness pattern the guide's inspected failure frames actually showed. Not part of
+    `DEFAULT_MIX`; generated on its own into a separate split and mixed into training as extra
+    data, so the general-purpose split stays exactly what it was.
     """
     from ...bricks.structures import Placement
     from ...render.renderer import SceneRenderer
