@@ -8,10 +8,15 @@ same three tests, the same fit.  What it identifies:
     gravity torque is known from the arm model, and the steady-state position error is read back
     over the bus; ``1/kp`` is the slope of error against torque and ``tau_friction/kp`` is the
     intercept.  The identified law predicts ``kp = (kt/R) * Vin * 0.166 * ratio * P``, so the fit
-    is also a check on the firmware's ``0.166`` factor (guide 03).
+    is also a check on the firmware's ``0.166`` factor (guide 03).  **Only identifiable on a joint
+    whose own axis carries meaningful gravity torque** -- ``shoulder_lift``, ``elbow_flex`` and
+    ``wrist_flex`` (see ``MIN_GRAVITY_TORQUE_RANGE_NM`` below).  ``shoulder_pan`` (a vertical axis:
+    exactly zero gravity torque at every angle) and ``wrist_roll`` (gravity acts on the wrist mass
+    through a lever under a millimetre) do not sag enough for this method, whatever it returns; the
+    self-test's own P-register read is where those two joints' ``kp`` comes from instead.
 ``friction`` [N*m]
     Dry friction in the gear train, from half the difference between a hold approached from
-    below and the same hold approached from above.
+    below and the same hold approached from above.  Same joint restriction as ``kp``.
 ``peak_speed`` [rad/s]
     Fastest the joint moves during a step.  A *lower* bound on the firmware's target slew, not an
     estimate of it: the link's own inertia keeps it below the slew rate at these amplitudes.
@@ -24,13 +29,19 @@ same three tests, the same fit.  What it identifies:
     inside the firmware's dead band (registers 26/27) the firmware commands nothing at all, so the
     duty cycle should read exactly zero while the position does not move, which free play carries
     no such tell for (duty stays driven the whole time the output lags the motor).  ``--validate``
-    shows the pocket is shorter than one 20 ms control tick at these gains, so a sync-read almost
-    never lands inside it: the split is close to 100 % wrong on every randomized draw, even though
-    ``dead_band + play`` (combined, not split) recovers well.  Kept and reported rather than
-    deleted, because a validated negative result is still the answer to "which parameters are not
-    identifiable from the bus and why" -- see the guide.  Fill the dead band from the self-test's
-    direct register read (26/27) instead, and get free play by subtracting that from the combined
-    figure.
+    shows this finds nothing on the three joints ``kp`` is identifiable on: their gravity droop
+    against a nonzero dead band is many times the dead band's own width at every point on the ramp
+    (``servo_model.py``'s ``_update_overload`` sets duty to exactly zero only while the position
+    error sits inside the dead band, and on a gravity-loaded joint the steady-state error never
+    does), so there is no zero-load pocket there to find -- not because the pocket is too brief to
+    sample, but because it does not exist on these joints. It exists (roughly 100 ticks wide) on a
+    joint with no gravity torque, which is exactly the joint set this method cannot fit ``kp`` on
+    either. Kept and reported rather than deleted, because a validated negative result is still the
+    answer to "which parameters are not identifiable from the bus and why" -- see the guide. Fill
+    the dead band from the self-test's direct register read (26/27) instead: on a gravity-loaded
+    joint the ramp's raw combined figure is free play alone (nothing to subtract, since the dead
+    band never contributed to it); off one, subtract the registered dead band from the combined
+    figure as before, unvalidated.
 
 Against the virtual bus every one of these has a known answer, so the script prints the recovered
 value beside it and the error.  Guide 08 records what the recovery measured.
@@ -66,6 +77,13 @@ from brick_builder.robot.patch_so101 import ArmConfig, BAM_FRICTION_BASE, servo_
 
 HOLD_TICKS = 60
 """Control ticks per static hold -- 1.2 s, which is past the 0.5 s settling time of guide 03."""
+
+MIN_GRAVITY_TORQUE_RANGE_NM = 0.02
+"""Below this span of gravity torque over the swept angles, the droop line's signal is smaller
+than is worth trusting a fit from: ``shoulder_pan`` measures 0 N*m at every angle (a vertical,
+gravity-neutral axis) and ``wrist_roll`` about 0.003 N*m (the wrist mass sits a lever arm under a
+millimetre from the roll axis), both well below it; ``wrist_flex``, the smallest of the three
+joints this kit does identify ``kp`` on, measures about 0.066 N*m."""
 
 SETTLE_TICKS = 20
 """Ticks at the end of a hold that the steady-state error is averaged over."""
@@ -110,8 +128,11 @@ class ServoFit:
         for name, unit, value, truth in rows:
             if truth is None:
                 lines.append(f"| {name} | {unit} | {value:.4g} | - | - |")
+            elif truth == 0.0:
+                err_str = "0.0 %" if value == 0.0 else "n/a (true = 0)"
+                lines.append(f"| {name} | {unit} | {value:.4g} | {truth:.4g} | {err_str} |")
             else:
-                err = 100.0 * abs(value - truth) / max(abs(truth), 1e-9)
+                err = 100.0 * abs(value - truth) / abs(truth)
                 lines.append(f"| {name} | {unit} | {value:.4g} | {truth:.4g} | {err:.1f} % |")
         lines.append("")
         lines.append(f"droop line: {self.droop_points} points, "
@@ -235,11 +256,15 @@ def fit_dead_band_ticks(command: np.ndarray, load: np.ndarray, *,
     Inside registers 26/27 the firmware commands nothing at all (``servo_model.py``'s
     ``_update_overload`` sets ``duty = 0.0`` exactly), so in principle ``Present_Load`` reads zero
     for as long as the position error stays inside the dead band, which free play does not share
-    (a joint taking up mechanical slack is still driven at the ordinary gain).  In practice
-    (``--validate``) the pocket is shorter than one 20 ms control tick at the gains this arm runs
-    at, so a sync-read almost never lands inside it and this comes back 0 far more often than the
-    dead band actually is.  Kept for what it demonstrates -- read the module docstring's
-    ``dead_band``/``backlash`` section before trusting a number out of it.
+    (a joint taking up mechanical slack is still driven at the ordinary gain). In practice
+    (``--validate``) this finds nothing on the three joints ``identify`` can fit ``kp`` on at all:
+    their gravity droop keeps the ramp's steady-state position error outside the dead band at every
+    point, so there is no pocket to find there, not because it passes between samples too quickly.
+    A joint with negligible gravity torque does show a pocket (tens of ticks wide, easily sampled
+    at 50 Hz) -- but that is exactly the joint set the droop line cannot identify ``kp``/friction
+    on either, so this method has no joint where both halves of this kit work together. Kept for
+    what it demonstrates -- read the module docstring's ``dead_band``/``backlash`` section before
+    trusting a number out of it.
 
     Returns 0.0 when no pocket is found in this ramp's samples.
     """
@@ -256,7 +281,14 @@ def fit_dead_band_ticks(command: np.ndarray, load: np.ndarray, *,
 
 def identify(bus: Bus, joint: str = "shoulder_lift", *, kin=None, amplitude: float = 0.35,
              angles: np.ndarray | None = None) -> ServoFit:
-    """Run all three tests on one joint and fit the servo law to them."""
+    """Run all three tests on one joint and fit the servo law to them.
+
+    Raises :class:`ValueError` on a joint whose own axis does not carry enough gravity torque for
+    the droop line to see (``MIN_GRAVITY_TORQUE_RANGE_NM``): ``shoulder_pan`` (a vertical axis,
+    exactly zero at every angle) and ``wrist_roll`` (a residual few mN*m from the wrist mass's own
+    small offset from the roll axis) both fail this way, deliberately, rather than returning a
+    number a noise-dominated fit happened to produce.
+    """
     if kin is None:
         _, _, kin = kinematic_arm()
     index = JOINT_NAMES.index(joint)
@@ -285,6 +317,12 @@ def identify(bus: Bus, joint: str = "shoulder_lift", *, kin=None, amplitude: flo
         halves.append(0.5 * abs(both[0] - both[1]))
     torques = np.asarray(torques)
     errors = np.asarray(errors)
+    torque_range = float(np.ptp(torques))
+    if torque_range < MIN_GRAVITY_TORQUE_RANGE_NM:
+        raise ValueError(
+            f"gravity torque range {torque_range:.4f} N*m over the swept angles is below "
+            f"{MIN_GRAVITY_TORQUE_RANGE_NM} N*m: joint {joint!r}'s own axis does not carry enough "
+            f"gravity load for a droop line to identify kp or friction from bus readings alone")
     sign = np.sign(np.mean(torques)) or 1.0
     kp, _, residual = fit_droop(sign * torques, sign * errors)
     friction = kp * float(np.mean(halves))
@@ -358,10 +396,19 @@ def validate_recovery(joint: str = "shoulder_lift", n: int = 5, *, seed0: int = 
     its own truth by simulator noise could not say whether a recovery error came from the fit or
     from the noise), and runs :func:`identify` on it.  Returns a markdown table (one row per
     draw x parameter) and the raw per-draw records.
+
+    ``identify`` runs with the **nominal** kinematic model (:func:`kinematic_arm`'s default
+    ``ArmConfig``, built once, outside the draw loop), not the randomized scene's own kinematics:
+    that is what identification on real hardware would use too (there is no ground truth to read
+    live link masses from there), so this validation does not hide the confound between
+    ``dynamics.link_mass_scale`` (0.9-1.1, randomized independently of ``kp``) and the droop line's
+    own gravity-torque calculation. A draw whose mass scale lands away from 1.0 carries some of
+    that error into the fitted ``kp`` -- see guide 08's identifiability table for the size of it.
     """
     from brick_builder.robot.servo_model import ServoConfig
     from brick_builder.scene.randomize import sample_command, sample_dynamics
 
+    _, _, nominal_kin = kinematic_arm()
     records: list[dict] = []
     for k in range(int(n)):
         rng = np.random.default_rng(seed0 + k)
@@ -387,7 +434,7 @@ def validate_recovery(joint: str = "shoulder_lift", n: int = 5, *, seed0: int = 
             bus = Bus(vbus.port, BusSettings(timeout_s=0.5))
             try:
                 bus.enable_torque(check=False)
-                fit = identify(bus, joint, kin=scene.kin)
+                fit = identify(bus, joint, kin=nominal_kin)
             finally:
                 bus.close()
             record["fitted"] = {
@@ -428,15 +475,11 @@ def validate_recovery(joint: str = "shoulder_lift", n: int = 5, *, seed0: int = 
                              f"over {len(errs)} of {n} draws")
     lines.append(f"failed draws: {n - len(ok)} of {n}")
     lines.append("")
-    lines.append(
-        "note: `dead band` and `free play (total)` are one bus-behavioural attempt to split "
-        "`dead band + play` in two (the zero-`Present_Load` pocket at the ramp's turning point, "
-        "fit_dead_band_ticks) -- validated here to fail (the pocket is shorter than one 20 ms "
-        "control tick at these gains, so the sync-read almost never lands inside it). `dead band "
-        "+ play` (combined) is the quantity this kit actually recovers from bus behaviour; fill "
-        "`arm.servo_dead_band_counts` from the self-test's direct register read (26/27) instead, "
-        "and get free play by subtracting that from the combined figure -- see guide 08."
-    )
+    lines.append("Identifiability: kp and friction, yes, on a gravity-loaded joint. Dead band, "
+                 "no -- the split (fit_dead_band_ticks) finds no zero-load pocket on this joint, "
+                 "because gravity droop keeps its ramp's position error outside the dead band at "
+                 "every point (not a sampling-rate limit). Fill arm.servo_dead_band_counts from "
+                 "the self-test's register read instead; see guide 08.")
     return "\n".join(lines) + "\n", records
 
 
