@@ -520,7 +520,10 @@ class Campaign:
                             if r["task"] == task and r["inverse"] == "analytic"), None)
             if against is None:
                 continue
-            learned, analytic = seated_fraction(row), seated_fraction(against)
+            # `summarize_records` names the count `seated_on_target`; the deployment gate reads
+            # `seated_on_target_cell`.
+            learned = seated_fraction({"seated_on_target_cell": row["seated_on_target"]})
+            analytic = seated_fraction({"seated_on_target_cell": against["seated_on_target"]})
             out["tasks"][task] = {"learned": row["seated_on_target"],
                                   "analytic": against["seated_on_target"],
                                   "meets": learned >= analytic}
@@ -534,7 +537,9 @@ class Campaign:
         rows = []
         for index in sorted(int(k) for k in self.state["rounds"]):
             record = self._round(index)
-            ship = record.would_ship or {}
+            # Recomputed from the stored scores, so a round scored before a gate fix reads right.
+            ship = self.would_ship(index, record.scores)
+            self.state["rounds"][str(index)]["would_ship"] = ship
             for name, row in sorted(record.scores.items()):
                 would = ""
                 if row["inverse"] == "learned":

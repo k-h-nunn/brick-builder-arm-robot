@@ -86,6 +86,56 @@ def test_a_build_needs_every_brick_on_its_cell() -> None:
     assert row["bricks_on_target"] == "1/2"
 
 
+# ---------------------------------------------------------------------------------- would ship ---
+
+
+def _baseline_round(campaign: Campaign) -> None:
+    """Round 0: analytic 10/10 on placement and 9/10 on pick and place."""
+    campaign.score_round(0, "shipped",
+                         _records("placement", "analytic", 10)
+                         + _records("pick_and_place", "analytic", 9))
+
+
+def test_a_round_below_the_analytic_baseline_on_one_task_would_not_ship(tmp_path) -> None:
+    campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
+    _baseline_round(campaign)
+    record = campaign.score_round(
+        1, "r1", _records("placement", "learned", 10, predictor="learned", round_index=1)
+        + _records("pick_and_place", "learned", 7, predictor="learned", round_index=1))
+    ship = record.would_ship
+    assert ship["tasks"]["placement"] == {"learned": "10/10", "analytic": "10/10",
+                                          "meets": True}
+    assert ship["tasks"]["pick_and_place"] == {"learned": "7/10", "analytic": "9/10",
+                                               "meets": False}
+    assert ship["ship"] is False
+
+
+def test_a_round_matching_the_analytic_baseline_on_every_task_would_ship(tmp_path) -> None:
+    campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
+    _baseline_round(campaign)
+    record = campaign.score_round(
+        1, "r1", _records("placement", "learned", 10, predictor="learned", round_index=1)
+        + _records("pick_and_place", "learned", 9, predictor="learned", round_index=1))
+    assert record.would_ship["ship"] is True
+
+
+def test_the_summary_recomputes_a_stored_would_ship_verdict(tmp_path) -> None:
+    """A round scored with the old key mismatch stored `ship: true`; the CSV reads it afresh."""
+    campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
+    _baseline_round(campaign)
+    campaign.score_round(
+        1, "r1", _records("placement", "learned", 10, predictor="learned", round_index=1)
+        + _records("pick_and_place", "learned", 7, predictor="learned", round_index=1))
+    stale = {"ship": True, "version": "r1",
+             "tasks": {t: {"learned": "", "analytic": "", "meets": True}
+                       for t in ("placement", "pick_and_place")}}
+    campaign.state["rounds"]["1"]["would_ship"] = stale
+    with campaign.summarize().open() as fh:
+        rows = [r for r in csv.DictReader(fh) if r["round"] == "1"]
+    assert {r["task"]: r["would_ship"] for r in rows} == {"placement": "meets",
+                                                          "pick_and_place": "no"}
+
+
 # ------------------------------------------------------------------------------------ the files ---
 
 
