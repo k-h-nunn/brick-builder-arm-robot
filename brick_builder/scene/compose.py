@@ -61,8 +61,9 @@ from brick_builder.bricks.generator import (
     add_brick,
     material_contact,
 )
+from brick_builder.bricks.materials import ARM_GRIP_FORCE_N
 from brick_builder.bricks.snap import ColletSnap
-from brick_builder.bricks.snap_api import SnapParams
+from brick_builder.bricks.snap_api import Connection, SnapParams, equality_forces
 from brick_builder.bricks.snap_detent import DetentSnap
 from brick_builder.bricks.spec import DUPLO, BrickSpec
 from brick_builder.bricks.structures import Placement, build_structure, validate_structure
@@ -349,11 +350,21 @@ class SceneConfig:
     weld_solref: tuple[float, float] = (0.008, 1.0)
     weld_solimp: tuple[float, float, float, float, float] = (0.99, 0.999, 0.001, 0.5, 2.0)
     weld_torquescale: float = 1.0
-    """Soft-weld compliance.  ``solref`` is (time constant, damping ratio): 20 ms is about ten
+    """Soft-weld compliance.  ``solref`` is (time constant, damping ratio): 8 ms is about four
     physics steps, soft enough that the brick can be pushed out of line by a millimetre under a
     few newtons instead of being bolted to the jaw.  ``torquescale`` weights the angular rows
     against the positional ones; small means the grip yields in angle before it yields in
     position, which is what a real pinch grip does."""
+
+    weld_slip_force: float | None = None
+    """Load [N] above which the soft weld releases (``eq_active`` -> 0), the one failure mode a
+    MuJoCo weld equality does not have on its own: held hard enough, it simply keeps transmitting
+    whatever force it takes, which is not what the stock jaws' friction grip does.  ``None`` (the
+    default) keeps that unlimited hold, because `envs/press_env.py` reads its own press force
+    through this exact weld and no press strategy has been re-specified yet for a grip that can
+    slip; turning a ceiling on by default would silently change what every existing weld-mode
+    scene reports.  :func:`weld_slip_ceiling` gives the physically grounded value to pass
+    instead."""
 
     brick_friction: float = 0.35
     """Sliding friction between bricks and between a brick and the plate.
@@ -471,7 +482,10 @@ class Scene:
 
     # -- written by `randomize.apply`, read by `reset_scene` -------------------------------
     randomization: dict = field(default_factory=dict)
-    """The last sample `randomize.apply` wrote, verbatim.  Goes into `EpisodeResult.params`."""
+    """The merged record of every sample `randomize.apply` has written so far, not just the last
+    one: a key a call does not mention keeps whatever value an earlier call gave it, because that
+    is still the value live in the model (see `randomize.apply`).  Goes into
+    `EpisodeResult.params`."""
 
     in_hand_override: np.ndarray | None = None
     """In-hand error chosen by randomization; overrides the held brick's own offset/jitter."""
@@ -523,12 +537,18 @@ class Scene:
         return out
 
     def step(self, n: int = 1) -> None:
-        """``n`` physics steps with the snap bookkeeping run at its configured rate."""
+        """``n`` physics steps with the snap bookkeeping run at its configured rate.
+
+        Also checks the soft weld against ``cfg.weld_slip_force`` every step (a cheap
+        ``is None`` check when it is off, which is the default) -- see
+        :func:`_release_overloaded_weld`.
+        """
         every = max(int(self.snap.params.snap_every), 1)
         for k in range(n):
             if k % every == 0:
                 self.snap.update(self.model, self.data)
             mujoco.mj_step(self.model, self.data)
+            _release_overloaded_weld(self)
 
 
 # ---------------------------------------------------------------------------------- building ---
@@ -1102,6 +1122,37 @@ def _write_weld(model: mujoco.MjModel, data: mujoco.MjData, eq: int, body1: int,
     model.eq_data[eq, 10] = torquescale
 
 
+def weld_slip_ceiling(cfg: SceneConfig) -> float:
+    """Load [N] the stock jaws' friction grip can hold before it slips, for `weld_slip_force`.
+
+    Two contacts (fixed jaw, moving jaw), each pressed at the arm's measured grip force
+    (`ARM_GRIP_FORCE_N`, docs/guide/02c) and carrying `cfg.brick_friction` -- the same ABS-on-ABS
+    number that pair uses everywhere else in this scene: ``2 * grip_force * friction``, about
+    11.9 N at the defaults (17 N x 0.35 x 2).
+    """
+
+    return 2.0 * ARM_GRIP_FORCE_N * cfg.brick_friction
+
+
+def _release_overloaded_weld(scene: Scene) -> bool:
+    """Deactivate the soft weld once its transmitted load passes `cfg.weld_slip_force`.
+
+    A no-op whenever that ceiling is `None` (the default), the weld is absent, or it is already
+    inactive (``friction`` grasp mode).  Mimics the stock jaws' friction grip slipping -- the one
+    failure mode a MuJoCo weld equality does not have on its own.  Returns whether it just
+    released, so a caller can report it.
+    """
+
+    limit = scene.cfg.weld_slip_force
+    if limit is None or scene.weld_eq < 0 or not scene.data.eq_active[scene.weld_eq]:
+        return False
+    force = equality_forces(scene.model, scene.data, n_rows=6)[scene.weld_eq, :3]
+    if float(np.linalg.norm(force)) <= limit:
+        return False
+    scene.data.eq_active[scene.weld_eq] = 0
+    return True
+
+
 def brick_bodies(scene: Scene, name: str) -> list[str]:
     """Every body that makes up one brick: just ``name``, or the roof plus all of its pieces.
 
@@ -1237,6 +1288,29 @@ class SettleReport:
     connected_placed: int
 
 
+def _connected_from_baseplate(plate_name: str, conns: list[Connection]) -> set[str]:
+    """Body names reachable from the baseplate by walking snap connections, layer by layer.
+
+    A stack is a graph with an edge from every `Connection.lower` to its `Connection.upper` (the
+    body a stud belongs to, to the body whose socket it is in). Counting only the connections
+    whose `lower` is the plate itself -- what this used to do -- answers "does this brick touch
+    the plate directly", so a correctly built two-layer stack reports its top brick as
+    unconnected (1 of 2): that brick's own connection has the *first* brick as `lower`, not the
+    plate. A breadth-first walk from the plate answers the question this module actually means by
+    "connected": reachable from the plate through any number of intermediate bricks.
+    """
+
+    by_lower: dict[str, list[str]] = {}
+    for c in conns:
+        by_lower.setdefault(c.lower, []).append(c.upper)
+    reached = {plate_name}
+    frontier = [plate_name]
+    while frontier:
+        frontier = [u for lower in frontier for u in by_lower.get(lower, ()) if u not in reached]
+        reached.update(frontier)
+    return reached
+
+
 def settle(scene: Scene, seconds: float = 2.0) -> SettleReport:
     """Hold the commanded pose for ``seconds`` and report what moved."""
 
@@ -1255,14 +1329,14 @@ def settle(scene: Scene, seconds: float = 2.0) -> SettleReport:
         dof = int(model.jnt_dofadr[jid])
         speeds.append(float(np.linalg.norm(data.qvel[dof:dof + 3])))
     conns = scene.snap.connections()
-    connected = {c.upper for c in conns if c.lower == scene.plate.name}
+    reached = _connected_from_baseplate(scene.plate.name, conns)
     return SettleReport(
         seconds=seconds,
         warnings=scene.warnings(),
         max_speed=max(speeds) if speeds else 0.0,
         drift=drift,
         connections=conns,
-        connected_placed=sum(1 for n in scene.placed_names if n in connected),
+        connected_placed=sum(1 for n in scene.placed_names if n in reached),
     )
 
 
@@ -1274,6 +1348,10 @@ def push_held_brick(
     The acceptance test for a grasp is a 5 N downward load held for 5 s with less than 1 mm of
     slip.  Slip is measured in the *TCP frame*, because the arm itself bends under the load: what
     matters is whether the brick moved relative to the gripper, not whether the tool moved.
+
+    In ``weld`` grasp mode with ``cfg.weld_slip_force`` set, this also checks the weld against
+    that ceiling every step (:func:`_release_overloaded_weld`), so a pull past it releases the
+    weld the same way it would during any other stepping of the scene, and the report says so.
     """
 
     model, data = scene.model, scene.data
@@ -1293,6 +1371,7 @@ def push_held_brick(
         if k % max(int(scene.snap.params.snap_every), 1) == 0:
             scene.snap.update(model, data)
         mujoco.mj_step(model, data)
+        _release_overloaded_weld(scene)
         peak = max(peak, float(np.linalg.norm(in_hand() - before)))
     data.xfrc_applied[bid, :3] = 0.0
     slip = float(np.linalg.norm(in_hand() - before))
@@ -1303,6 +1382,7 @@ def push_held_brick(
         "peak_slip_m": peak,
         "warnings": scene.warnings(),
         "grasp_mode": _grasp_mode(scene.cfg),
+        "weld_released": bool(scene.weld_eq >= 0 and not scene.data.eq_active[scene.weld_eq]),
     }
 
 

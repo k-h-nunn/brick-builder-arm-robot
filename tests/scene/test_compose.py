@@ -13,6 +13,7 @@ import mujoco
 import numpy as np
 import pytest
 
+from brick_builder.bricks.snap_api import Connection
 from brick_builder.bricks.spec import DUPLO
 from brick_builder.bricks.structures import Placement
 from brick_builder.robot.patch_so101 import (
@@ -29,6 +30,7 @@ from brick_builder.scene.compose import (
     HeldBrick,
     Scene,
     SceneConfig,
+    _connected_from_baseplate,
     build_scene,
     grasp_pose,
     home_tcp_target,
@@ -38,8 +40,10 @@ from brick_builder.scene.compose import (
     measure_step_rate,
     push_held_brick,
     reset_scene,
+    set_brick_pose,
     settle,
     tool_down_ik,
+    weld_slip_ceiling,
 )
 
 TWO_BRICKS = [Placement(2, 4, 1, 2, 0, "blue"), Placement(2, 2, 5, 3, 0, "yellow")]
@@ -81,6 +85,133 @@ def test_scene_settles_for_two_seconds_with_no_warnings_and_every_brick_connecte
     assert report.max_speed < 5e-3, f"still moving at {report.max_speed * 1e3:.3f} mm/s"
     for name in built.placed_names:
         assert report.drift[name] < 1e-3, f"{name} drifted {report.drift[name] * 1e3:.3f} mm"
+
+
+# ------------------------------------------------------------------------ multi-layer counting ---
+
+
+def test_connected_from_baseplate_walks_more_than_one_layer():
+    """The pure graph walk `settle()` counts with: connections chain lower -> upper, so a brick
+    two hops from the plate (its own connection's `lower` is another brick, not the plate) still
+    has to come out reachable, and a sibling with no connection at all must not."""
+
+    two_layer = [Connection("B", "plate", 8, True), Connection("C", "B", 8, True)]
+    assert _connected_from_baseplate("plate", two_layer) == {"plate", "B", "C"}
+
+    three_layer = [
+        Connection("B", "plate", 8, True),
+        Connection("C", "B", 8, True),
+        Connection("D", "C", 8, True),
+    ]
+    assert _connected_from_baseplate("plate", three_layer) == {"plate", "B", "C", "D"}
+
+    # "E" is not connected to anything: resting on "B" (say) is not the same as being in this
+    # list at all, since `connections()` only reports captured stud/socket pairs.
+    with_a_stranger = two_layer + [Connection("F", "G", 4, False)]
+    assert _connected_from_baseplate("plate", with_a_stranger) == {"plate", "B", "C"}
+
+
+def test_settle_reports_a_two_layer_stack_as_fully_connected():
+    """A brick stacked on a brick stacked on the plate: reachable in two hops, so this has to
+    report 2 of 2, the case the direct-connections-only count used to answer 1 of 2 on."""
+
+    stack = [Placement(2, 4, 2, 2, 0, "blue"), Placement(2, 4, 2, 2, 1, "yellow")]
+    scene = build_scene(SceneConfig(placed=stack, held=None))
+    report = settle(scene, 1.0)
+    assert report.warnings == {}, report.warnings
+    assert report.connected_placed == len(stack), report.connections
+    assert any(c.upper == "struct_1" and c.lower == "struct_0" for c in report.connections), (
+        report.connections
+    )
+
+
+def test_settle_reports_a_three_layer_stack_as_fully_connected():
+    """Three hops from the plate: the same walk has to keep going past the first one."""
+
+    stack = [
+        Placement(2, 4, 2, 2, 0, "blue"),
+        Placement(2, 4, 2, 2, 1, "yellow"),
+        Placement(2, 4, 2, 2, 2, "red"),
+    ]
+    # A hover the arm can actually reach over a three-tall stack at this plate radius; the
+    # scene's own home-pose search puts the tool above the arm's reach here (see
+    # `home_tcp_target`), which is a kinematics question, not what this test is about.
+    scene = build_scene(SceneConfig(placed=stack, held=None, home_tcp=(0.17, 0.0, 0.07)))
+    report = settle(scene, 1.0)
+    assert report.warnings == {}, report.warnings
+    assert report.connected_placed == len(stack), report.connections
+    assert report.max_speed < 5e-3, f"still moving at {report.max_speed * 1e3:.3f} mm/s"
+
+
+def test_a_brick_resting_on_stud_tops_without_capture_is_not_counted_connected():
+    """A brick lowered half a stud pitch off-grid rests on top of the stud tops instead of
+    seating (`tests/bricks/test_generator.py`'s misaligned-insertion case) and never engages a
+    socket, so it must not count as connected even though it is plainly resting there."""
+
+    base = [Placement(2, 4, 2, 2, 0, "blue")]
+    scene = build_scene(SceneConfig(placed=base, supply=((2, 4, "yellow"),), held=None))
+    base_name = scene.placed_names[0]
+    rider_name = "supply_brick_0"
+
+    base_pos, base_quat = scene.body_pose(base_name)
+    spec = scene.cfg.spec
+    rider_start = np.array([base_pos[0] + 0.5 * spec.pitch, base_pos[1], base_pos[2] + spec.height + 0.001])
+    set_brick_pose(scene, rider_name, rider_start, base_quat)
+    mujoco.mj_forward(scene.model, scene.data)
+
+    report = settle(scene, 1.0)
+    assert report.warnings == {}, report.warnings
+    assert report.connected_placed == 1, report.connections
+    assert all(c.upper != rider_name for c in report.connections), report.connections
+
+    rider_pos, _ = scene.body_pose(rider_name)
+    # Resting on the stud tops sits it one stud height above the flush-seated position, not
+    # falling through and not sliding off.
+    seated_z = base_pos[2] + spec.height
+    assert seated_z + 0.6 * spec.stud_h < rider_pos[2] < seated_z + 1.4 * spec.stud_h, rider_pos
+    assert abs(rider_pos[0] - rider_start[0]) < 0.001, "the rider drifted sideways off its offset"
+
+
+# -------------------------------------------------------------------------- the weld's ceiling ---
+
+
+def test_the_weld_grip_slips_above_its_force_ceiling():
+    """The soft weld holds at any force by construction; `weld_slip_force` gives it the same
+    ceiling the stock jaws' friction grip has, and a load past it must let go."""
+
+    ceiling = weld_slip_ceiling(SceneConfig())
+    scene = build_scene(SceneConfig(weld_slip_force=ceiling))
+    scene.step(200)
+    assert scene.data.eq_active[scene.weld_eq] == 1
+
+    report = push_held_brick(scene, force=2.0 * ceiling, seconds=1.0)
+    assert report["weld_released"], report
+    assert scene.data.eq_active[scene.weld_eq] == 0
+
+
+def test_the_weld_grip_holds_below_its_force_ceiling():
+    """The same ceiling must not trip on the ordinary 5 N acceptance load."""
+
+    ceiling = weld_slip_ceiling(SceneConfig())
+    scene = build_scene(SceneConfig(weld_slip_force=ceiling))
+    scene.step(200)
+
+    report = push_held_brick(scene, force=5.0, seconds=1.0)
+    assert not report["weld_released"], report
+    assert scene.data.eq_active[scene.weld_eq] == 1
+
+
+def test_the_weld_grip_never_slips_when_no_ceiling_is_set():
+    """`weld_slip_force` defaults to `None`: the weld has to keep holding at a load far past any
+    physically grounded ceiling, which is the behaviour every default weld-mode scene still gets."""
+
+    scene = build_scene(SceneConfig())
+    assert scene.cfg.weld_slip_force is None
+    scene.step(200)
+
+    report = push_held_brick(scene, force=150.0, seconds=1.0)
+    assert not report["weld_released"], report
+    assert scene.data.eq_active[scene.weld_eq] == 1
 
 
 def test_the_world_has_the_frame_the_spec_fixes(built):
