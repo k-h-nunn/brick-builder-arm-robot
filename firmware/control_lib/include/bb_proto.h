@@ -37,6 +37,7 @@
 #define BB_MSG_ERROR         0x09
 #define BB_MSG_TICK_BEGIN    0x0A
 #define BB_MSG_RESET         0x0B
+#define BB_MSG_START         0x0C   /* host -> controller: the joint angles the arm starts at */
 
 /* Error codes carried by BB_MSG_ERROR. */
 #define BB_PROTO_ERR_CRC      1
@@ -48,7 +49,7 @@
 typedef struct {
     uint8_t buf[BB_FRAME_MAX];
     uint32_t have;
-    uint32_t want;        /* total frame bytes once the header is in */
+    uint32_t consumed;    /* bytes of the frame last returned, dropped on the next call */
     uint32_t bad_crc;
     uint32_t resyncs;
     /* The decoded frame, valid only on the call that returned 1. */
@@ -63,6 +64,11 @@ void bb_decoder_init(bb_decoder *d);
 
 /* Feed one byte. Returns 1 when a whole, CRC-valid frame is ready in `d`. */
 int bb_decoder_feed(bb_decoder *d, uint8_t byte);
+
+/* Return 1 when a whole frame is already buffered without another byte. After a damaged frame
+ * the bytes behind it are rescanned, and they can hold more than one frame; a caller loops on
+ * this after every frame `bb_decoder_feed` returned. */
+int bb_decoder_next(bb_decoder *d);
 
 /* Write a frame into `out` (at least BB_FRAME_MAX bytes). Returns the number of bytes written,
  * or 0 when the payload is too long. */

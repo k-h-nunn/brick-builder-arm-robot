@@ -23,10 +23,15 @@ from ..action.servo import VisualServo
 from .plan import Plan
 
 MAGIC = 0x42425442
-VERSION = 1
+VERSION = 2
 K = 8
 W = 14
 HEADER = struct.Struct("<16I")
+
+HELD_NONE = -1
+"""Placed-brick id when the task places nothing; relative mode then checks nothing."""
+HELD_UNLISTED = -2
+"""Placed-brick id when this frame does not list the placed brick; never matched."""
 
 #: Order of the doubles in `bb_cfg`, then of its int32s. Changing either changes VERSION.
 CFG_DOUBLES = (
@@ -161,7 +166,31 @@ def pack_state(state) -> bytes:
     return slots.tobytes() + depth.tobytes() + ids.tobytes()
 
 
-def _pack_ref(ref) -> bytes:
+def name_table(ideal: IdealSequence, plan: Plan) -> dict[str, int]:
+    """Reference title ids.
+
+    One integer per title, so a frame can name the placed brick's reference and the controller can
+    find it among whichever step's references are active at the time."""
+    names: dict[str, int] = {}
+    for fp in plan.frames:
+        if fp.step is not None:
+            for ref in list(fp.step.refs) + ([fp.step.brick_ref] if fp.step.brick_ref else []):
+                names.setdefault(ref.name, len(names))
+    for frame in ideal.frames:
+        for title in (frame.bodies or {}):
+            names.setdefault(title, len(names))
+    return names
+
+
+def held_title(ideal: IdealSequence, frame) -> str | None:
+    """Placed brick's title in one frame, as `TrackingEpisode._feedback` looks it up."""
+    if ideal.held_body is None:
+        return None
+    titles = [t for t, body in (frame.bodies or {}).items() if body == ideal.held_body]
+    return titles[0] if titles else None
+
+
+def _pack_ref(ref, name_id: int) -> bytes:
     size = ref.size if ref.size is not None else (0.0, 0.0)
     out = struct.pack(
         "<9d",
@@ -172,11 +201,11 @@ def _pack_ref(ref) -> bytes:
         float(ref.max_border),
     )
     out += struct.pack("<4i", int(ref.size is not None), int(ref.min_mass is not None),
-                       int(ref.require_inside), 0)
+                       int(ref.require_inside), int(name_id))
     return out
 
 
-def _pack_step(plan_frame) -> bytes:
+def _pack_step(plan_frame, name_ids: dict[str, int]) -> bytes:
     step = plan_frame.step
     if step is None:
         return struct.pack("<12i", 0, 0, 0, 0, 0, 0, -1, 1, 0, 0, 0, 0) + struct.pack("<6d", *[0.0] * 6)
@@ -219,9 +248,9 @@ def _pack_step(plan_frame) -> bytes:
         out += np.ascontiguousarray(np.asarray(step.J_brick, dtype=float), dtype="<f8").tobytes()
         out += np.ascontiguousarray(np.asarray(step.b_star, dtype=float), dtype="<f8").tobytes()
     for ref in step.refs:
-        out += _pack_ref(ref)
+        out += _pack_ref(ref, name_ids[ref.name])
     if step.brick_ref is not None:
-        out += _pack_ref(step.brick_ref)
+        out += _pack_ref(step.brick_ref, name_ids[step.brick_ref.name])
     return out
 
 
@@ -246,11 +275,17 @@ def write_bundle(ideal: IdealSequence, plan: Plan, cfg: PlaceConfig, arm: dict, 
     body.write(_pack_arm(arm))
 
     frames = ideal.frames
+    names = name_table(ideal, plan)
     commands: list[bytes] = []
     frame_recs: list[bytes] = []
     cmd_index = 0
     for i, frame in enumerate(frames):
         fp = plan.frames[i]
+        title = held_title(ideal, frame)
+        if ideal.held_body is None:
+            held_name = HELD_NONE
+        else:
+            held_name = names[title] if title is not None else HELD_UNLISTED
         for command in frame.commands:
             commands.append(struct.pack(
                 "<8d", float(command.pos[0]), float(command.pos[1]), float(command.pos[2]),
@@ -258,7 +293,7 @@ def write_bundle(ideal: IdealSequence, plan: Plan, cfg: PlaceConfig, arm: dict, 
                 float(command.c_lat), 0.0))
         frame_recs.append(struct.pack(
             "<8i", int(frame.k), int(frame.step_index), int(fp.step_id), len(frame.commands),
-            cmd_index, int(fp.held), int(fp.is_freeze_step), int(fp.held_ref))
+            cmd_index, int(fp.held), int(fp.is_freeze_step), held_name)
             + struct.pack("<2d", float(frame.travel), 0.0))
         cmd_index += len(frame.commands)
 
@@ -269,7 +304,7 @@ def write_bundle(ideal: IdealSequence, plan: Plan, cfg: PlaceConfig, arm: dict, 
     off_states = body.align()
     body.write(b"".join(pack_state(f.state) for f in frames))
 
-    step_blobs = [_pack_step(fp) for fp in plan.frames]
+    step_blobs = [_pack_step(fp, names) for fp in plan.frames]
     off_step_off = body.align()
     body.write(b"\0" * (4 * len(step_blobs)))
     offsets = []

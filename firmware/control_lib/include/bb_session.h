@@ -35,8 +35,16 @@ typedef struct {
     int finished;
     uint16_t seq;
     uint32_t ticks;
+    /* Controller time per vision tick, `bb_tick_begin` plus `bb_tick_end`, transport excluded. */
+    uint64_t begin_us;
     uint64_t tick_us_total;
     uint64_t tick_us_max;
+
+    /* The 50 Hz servo-bus writer's own counters, filled in by the application that paces the
+     * bus (the ESP-IDF one); zero where nothing does. Reported in STATUS. */
+    uint32_t bus_writes;
+    uint32_t bus_dropped;
+    uint32_t bus_period_us_max;
 
     bb_bus_readings bus_state;
     bb_tick_out out;

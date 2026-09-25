@@ -12,6 +12,7 @@ library for its own `sizeof` of each and compares, rather than trusting that the
 from __future__ import annotations
 
 import ctypes
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +24,9 @@ LIB_DIR = REPO_ROOT / "firmware" / "control_lib"
 SRC_DIR = LIB_DIR / "src"
 INC_DIR = LIB_DIR / "include"
 RUNNER_SRC = REPO_ROOT / "firmware" / "host_runner" / "main.c"
-DEFAULT_BUILD_DIR = LIB_DIR / "_build"
+DEFAULT_BUILD_DIR = Path(os.environ.get("BB_CONTROL_BUILD_DIR", LIB_DIR / "_build"))
+"""Build directory of the library and the runner. `BB_CONTROL_BUILD_DIR` moves it, so a test
+run does not rebuild a library another process has loaded."""
 
 CFLAGS = ["-O2", "-std=c99", "-ffp-contract=off", "-Wall", "-Wextra"]
 
@@ -77,7 +80,7 @@ class CCommandRec(ctypes.Structure):
 
 class CFrameRec(ctypes.Structure):
     _fields_ = [("k", _I), ("step_index", _I), ("step_id", _I), ("n_commands", _I),
-                ("cmd_offset", _I), ("held", _I), ("is_freeze_step", _I), ("held_ref", _I),
+                ("cmd_offset", _I), ("held", _I), ("is_freeze_step", _I), ("held_name", _I),
                 ("travel", _D), ("pad", _D)]
 
 
@@ -89,7 +92,7 @@ class CSlots(ctypes.Structure):
 class CRefRec(ctypes.Structure):
     _fields_ = [("colour", _D * 3), ("size", _D * 2), ("colour_tol", _D), ("size_tol", _D),
                 ("min_mass", _D), ("max_border", _D), ("has_size", _I), ("has_min_mass", _I),
-                ("require_inside", _I), ("pad", _I)]
+                ("require_inside", _I), ("name", _I)]
 
 
 class CStepHdr(ctypes.Structure):
@@ -98,6 +101,19 @@ class CStepHdr(ctypes.Structure):
                 ("trusted", _I), ("j_cols", _I), ("has_spin", _I), ("has_brick_ref", _I),
                 ("tol", _D), ("gain", _D), ("spin_gain", _D), ("spin_star_re", _D),
                 ("spin_star_im", _D), ("pad", _D)]
+
+
+FRAME_MAX = 8 + 2048 + 4
+
+
+class CDecoder(ctypes.Structure):
+    """`bb_decoder` mirror, for feeding the C frame decoder from Python."""
+
+    _fields_ = [("buf", ctypes.c_uint8 * FRAME_MAX), ("have", ctypes.c_uint32),
+                ("consumed", ctypes.c_uint32), ("bad_crc", ctypes.c_uint32),
+                ("resyncs", ctypes.c_uint32), ("type", ctypes.c_uint8),
+                ("flags", ctypes.c_uint8), ("seq", ctypes.c_uint16), ("len", ctypes.c_uint16),
+                ("payload", ctypes.c_void_p)]
 
 
 class CBusReadings(ctypes.Structure):
@@ -121,13 +137,13 @@ class CTickOut(ctypes.Structure):
 #: Struct indices `bb_struct_size` answers to, in its own order.
 _SIZE_NAMES = ("bb_cfg", "bb_arm", "bb_frame_rec", "bb_command_rec", "bb_state_rec",
                "bb_ref_rec", "bb_step_hdr", "bb_controller", "bb_tick_out", "bb_command",
-               "bb_bus_readings", "bb_slots", "bb_joint_correction")
+               "bb_bus_readings", "bb_slots", "bb_joint_correction", "bb_decoder")
 
 _PY_SIZES = {
     "bb_cfg": CCfg, "bb_arm": CArm, "bb_frame_rec": CFrameRec, "bb_command_rec": CCommandRec,
     "bb_state_rec": CSlots, "bb_ref_rec": CRefRec, "bb_step_hdr": CStepHdr,
     "bb_tick_out": CTickOut, "bb_command": CCommand, "bb_bus_readings": CBusReadings,
-    "bb_slots": CSlots,
+    "bb_slots": CSlots, "bb_decoder": CDecoder,
 }
 
 FAILURES = {0: None, 1: "stalled: nothing to line up on", 2: "stalled: error not coming down",
@@ -212,6 +228,12 @@ class ControlLib:
         lib.bb_jc_update.argtypes = [ctypes.c_void_p, ctypes.POINTER(_D), ctypes.POINTER(_D),
                                      ctypes.c_int]
         lib.bb_jc_update.restype = None
+        lib.bb_decoder_init.argtypes = [ctypes.POINTER(CDecoder)]
+        lib.bb_decoder_init.restype = None
+        lib.bb_decoder_feed.argtypes = [ctypes.POINTER(CDecoder), ctypes.c_uint8]
+        lib.bb_decoder_feed.restype = ctypes.c_int
+        lib.bb_decoder_next.argtypes = [ctypes.POINTER(CDecoder)]
+        lib.bb_decoder_next.restype = ctypes.c_int
         self.check_layout()
 
     def sizeof(self, name: str) -> int:
@@ -227,6 +249,22 @@ class ControlLib:
                 bad.append(f"{name}: C {want} B, Python {got} B")
         if bad:
             raise RuntimeError("control_lib struct layout does not match: " + "; ".join(bad))
+
+    def decode(self, data: bytes) -> tuple[list[tuple[int, int, bytes]], int, int]:
+        """C frame decoder output for `data`, fed one byte at a time as `bb_session_run` does.
+
+        Returns the frames as (type, seq, payload), the bad-CRC count and the resynchronisation
+        count."""
+        dec = CDecoder()
+        self._lib.bb_decoder_init(ctypes.byref(dec))
+        frames = []
+        for byte in data:
+            ready = self._lib.bb_decoder_feed(ctypes.byref(dec), byte)
+            while ready:
+                frames.append((int(dec.type), int(dec.seq),
+                               ctypes.string_at(dec.payload, dec.len) if dec.len else b""))
+                ready = self._lib.bb_decoder_next(ctypes.byref(dec))
+        return frames, int(dec.bad_crc), int(dec.resyncs)
 
     def crc32(self, data: bytes) -> int:
         return int(self._lib.bb_crc32(data, len(data)))

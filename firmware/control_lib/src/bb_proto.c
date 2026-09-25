@@ -16,7 +16,7 @@ static uint32_t rd_u32(const uint8_t *p)
 void bb_decoder_init(bb_decoder *d)
 {
     d->have = 0;
-    d->want = 0;
+    d->consumed = 0;
     d->bad_crc = 0;
     d->resyncs = 0;
     d->type = 0;
@@ -26,84 +26,90 @@ void bb_decoder_init(bb_decoder *d)
     d->payload = 0;
 }
 
-/* Drop the first byte and rescan: a frame whose header was corrupted must not swallow the next
- * good one. */
-static void resync(bb_decoder *d)
+static void drop(bb_decoder *d, uint32_t n)
 {
-    uint32_t i;
-    d->resyncs += 1;
-    if (d->have <= 1) {
+    if (n >= d->have) {
         d->have = 0;
-        d->want = 0;
         return;
     }
-    for (i = 1; i < d->have; ++i) {
-        d->buf[i - 1] = d->buf[i];
-    }
-    d->have -= 1;
-    d->want = 0;
-    /* Re-align on the next sync pair inside what is left. */
-    while (d->have > 0 && d->buf[0] != BB_SYNC0) {
-        for (i = 1; i < d->have; ++i) {
-            d->buf[i - 1] = d->buf[i];
-        }
-        d->have -= 1;
-    }
-    if (d->have >= 2 && d->buf[1] != BB_SYNC1) {
-        resync(d);
-    }
+    memmove(d->buf, d->buf + n, d->have - n);
+    d->have -= n;
 }
 
-int bb_decoder_feed(bb_decoder *d, uint8_t byte)
+/* The same scan `protocol.Decoder` runs: align on the next sync pair, wait for the header and
+ * the whole frame, and on a bad length or a bad CRC drop the sync pair and scan again from the
+ * byte after it -- so a damaged frame never swallows a good one that starts inside it. */
+static int scan(bb_decoder *d)
 {
-    if (d->have == 0) {
-        if (byte != BB_SYNC0) {
+    if (d->consumed) {
+        drop(d, d->consumed);
+        d->consumed = 0;
+    }
+    for (;;) {
+        uint32_t at = 0, want;
+        uint16_t len;
+        while (at + 1 < d->have && !(d->buf[at] == BB_SYNC0 && d->buf[at + 1] == BB_SYNC1)) {
+            ++at;
+        }
+        if (at + 1 >= d->have) {
+            /* No pair: keep the last byte, it may be the first half of one. */
+            if (d->have > 1) {
+                drop(d, d->have - 1);
+            }
             return 0;
         }
-        d->buf[d->have++] = byte;
-        return 0;
-    }
-    if (d->have == 1) {
-        if (byte != BB_SYNC1) {
-            d->have = (byte == BB_SYNC0) ? 1 : 0;
-            d->buf[0] = byte;
+        if (at > 0) {
+            drop(d, at);
+            d->resyncs += 1;
+        }
+        if (d->have < BB_HDR_BYTES) {
             return 0;
         }
-        d->buf[d->have++] = byte;
-        return 0;
-    }
-    if (d->have >= BB_FRAME_MAX) {
-        resync(d);
-        return 0;
-    }
-    d->buf[d->have++] = byte;
-    if (d->have == BB_HDR_BYTES) {
-        uint16_t len = rd_u16(&d->buf[4]);
+        len = rd_u16(&d->buf[4]);
         if (len > BB_MAX_PAYLOAD) {
-            resync(d);
+            drop(d, 2);
+            d->resyncs += 1;
+            continue;
+        }
+        want = (uint32_t)BB_HDR_BYTES + len + BB_CRC_BYTES;
+        if (d->have < want) {
             return 0;
         }
-        d->want = (uint32_t)BB_HDR_BYTES + len + BB_CRC_BYTES;
-    }
-    if (d->want != 0 && d->have == d->want) {
-        uint16_t len = rd_u16(&d->buf[4]);
-        uint32_t want_crc = rd_u32(&d->buf[BB_HDR_BYTES + len]);
-        uint32_t got_crc = bb_crc32(&d->buf[2], (uint32_t)(BB_HDR_BYTES - 2) + len);
-        if (want_crc != got_crc) {
+        if (rd_u32(&d->buf[BB_HDR_BYTES + len])
+            != bb_crc32(&d->buf[2], (uint32_t)(BB_HDR_BYTES - 2) + len)) {
             d->bad_crc += 1;
-            resync(d);
-            return 0;
+            drop(d, 2);
+            d->resyncs += 1;
+            continue;
         }
         d->type = d->buf[2];
         d->flags = d->buf[3];
         d->len = len;
         d->seq = rd_u16(&d->buf[6]);
         d->payload = &d->buf[BB_HDR_BYTES];
-        d->have = 0;
-        d->want = 0;
+        d->consumed = want;
         return 1;
     }
-    return 0;
+}
+
+int bb_decoder_feed(bb_decoder *d, uint8_t byte)
+{
+    if (d->consumed) {
+        drop(d, d->consumed);
+        d->consumed = 0;
+    }
+    if (d->have >= BB_FRAME_MAX) {
+        /* Cannot happen with a length check on every header; kept as a bound. */
+        drop(d, 2);
+        d->resyncs += 1;
+    }
+    d->buf[d->have++] = byte;
+    return scan(d);
+}
+
+int bb_decoder_next(bb_decoder *d)
+{
+    return scan(d);
 }
 
 uint32_t bb_frame(uint8_t *out, uint8_t type, uint8_t flags, uint16_t seq,

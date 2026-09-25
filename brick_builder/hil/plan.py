@@ -26,7 +26,7 @@ from ..scene.compose import HeldBrick
 
 @dataclass
 class FramePlan:
-    """What the controller needs to know about one reference frame beyond its own record."""
+    """Per-frame controller plan, beyond the frame's own record."""
 
     step: object | None
     """The `TwinStep` measured at this frame, or `None` when there is nothing to line up on."""
@@ -34,8 +34,6 @@ class FramePlan:
     gain: float
     held: bool
     is_freeze_step: bool
-    held_ref: int
-    """Index into the step's references of the body that is in the hand, or -1."""
     step_id: int
 
 
@@ -52,8 +50,9 @@ class Plan:
         self.n_frames = len(self.frames)
 
     def step_for(self, k: int):
-        """What `TrackingEpisode._build` returns for frame `k`; raises `BlindStep` when there is
-        no usable step, which is how the live twin reports the same thing."""
+        """Twin step of frame `k`, as `TrackingEpisode._build` returns it.
+
+        Raises `BlindStep` when there is no usable step, as the live twin does."""
         plan = self.frames[k]
         if plan.step is None:
             raise BlindStep(f"frame {k}: the twin has no step to measure an inverse from")
@@ -105,7 +104,7 @@ def _frame_plan(ideal: IdealSequence, cfg: PlaceConfig, twins, frame) -> FramePl
         held = twin.scene.held_name
     bodies = {k: v for k, v in bodies.items() if v in twin.scene.instance_ids}
     blank = FramePlan(step=None, trusted=False, gain=0.0, held=held is not None,
-                      is_freeze_step=frame.step == cfg.freeze_after, held_ref=-1,
+                      is_freeze_step=frame.step == cfg.freeze_after,
                       step_id=STEP_TITLES.index(frame.step))
     if not bodies:
         return blank
@@ -125,15 +124,8 @@ def _frame_plan(ideal: IdealSequence, cfg: PlaceConfig, twins, frame) -> FramePl
     alone = cfg.pick and frame.step in ("Approach", "Grasp")
     trusted = bool(gain >= cfg.min_gain and (len(bodies) >= 2 or alone))
 
-    held_ref = -1
-    if ideal.held_body is not None:
-        titles = [t for t, body in (frame.bodies or {}).items() if body == ideal.held_body]
-        if titles:
-            names = [r.name for r in step.refs]
-            if titles[0] in names:
-                held_ref = names.index(titles[0])
     return FramePlan(step=step, trusted=trusted, gain=gain, held=held is not None,
-                     is_freeze_step=frame.step == cfg.freeze_after, held_ref=held_ref,
+                     is_freeze_step=frame.step == cfg.freeze_after,
                      step_id=STEP_TITLES.index(frame.step))
 
 

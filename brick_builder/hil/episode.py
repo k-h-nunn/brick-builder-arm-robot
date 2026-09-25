@@ -20,7 +20,7 @@ from .library import FAILURES
 
 @dataclass
 class RunLog:
-    """What one run through a C controller produced, beside the tick records."""
+    """C controller run log, beside the tick records."""
 
     targets: list = field(default_factory=list)
     """Per 50 Hz tick: the six joint targets the controller published."""

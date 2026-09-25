@@ -1,8 +1,8 @@
 # Export and firmware
 
-**Status: policy export (`brick_builder/export/`) is done; the firmware tree is planned.** The export
-section below is current. The firmware sections will gain build instructions and frame-time
-measurements once that code lands.
+**Status: policy export (`brick_builder/export/`) is done. The controller firmware
+(`firmware/p4_control`) builds for the ESP32-P4 with ESP-IDF 5.5.5; it has not been flashed or run
+on a board.** Frame-time measurements on the board wait for that.
 
 ## Purpose
 
@@ -92,8 +92,70 @@ firmware uses (float vs. table) is a build-time choice, `-DPOLICY_TANH_TABLE`.
 
 ![parity and speed of the exported C actor, float tanhf vs. lookup-table tanh](../media/export/parity_and_speed.png)
 
+## Controller firmware (`firmware/p4_control`)
+
+An ESP-IDF application (target `esp32p4`) that runs the run-time controller, `firmware/control_lib`,
+the same C99 sources the host builds into `control_lib.so` and `control_runner`
+([Hardware in the loop](13-hardware-in-the-loop.md)). The component
+`components/control_lib` compiles them in place; nothing is copied.
+
+| Part | Implementation |
+|---|---|
+| Session | `bb_session_run`, the same lock-step loop as the native runner; a new session after every RESET |
+| Transport | the wire protocol on UART0 (the board's USB-UART), 921600 baud, 8N1, default pins; console and log output off so the line carries frames only |
+| Servo bus | `bb_bus` seam: joint targets, with the compliance scalars as per-joint torque limits (vertical on shoulder lift, elbow flex, wrist flex; lateral on shoulder pan, wrist roll), are queued and written one per 20 ms period by a task woken by an `esp_timer`; the device behind it is `bb_bus_loopback` until the STS3215 driver exists |
+| Tick timing | STATUS: mean and worst microseconds per vision tick (`bb_tick_begin` plus `bb_tick_end`), bus writes, bus targets dropped, longest bus period |
+| Target bundle | 4 MB in PSRAM when present (`CONFIG_SPIRAM_IGNORE_NOTFOUND`), otherwise up to 448 kB of internal RAM; HELLO reports the capacity |
+| Cores | session task on core 1, bus task on core 0 |
+| Arithmetic | `-O2`, `-ffp-contract=off` as on the host; the P4's FPU is single precision, so the controller's doubles run in software floating point |
+
+### Build
+
+```bash
+export IDF_TOOLS_PATH=<where the ESP-IDF tools are installed>   # default ~/.espressif
+. <esp-idf>/export.sh
+cd firmware/p4_control
+idf.py set-target esp32p4
+idf.py build
+idf.py size
+```
+
+Measured build, ESP-IDF v5.5.5, default configuration plus `sdkconfig.defaults`:
+
+| Quantity | Value [bytes] |
+|---|---|
+| Application image `p4_control.bin` | 257 776 (0x3eef0), 25 % of the 1 MB app partition |
+| Flash code `.text` | 144 274 |
+| Flash read-only data `.rodata` | 33 476 |
+| Internal RAM used (DIRAM: `.text` 69 608, `.data` 9 216, `.bss` 14 680) | 93 504 of 655 360 (14.3 %) |
+| Bootloader | 16 224 (0x3f60) |
+
+Heap is not included: the bundle buffer, the UART driver's 16 kB receive and 8 kB transmit
+buffers, the 16 kB session stack and the 4 kB bus stack are allocated at start.
+
+The default configuration targets chip revision v3.1 or later (`CONFIG_ESP32P4_REV_MIN_301`).
+A board with an earlier revision needs `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` in
+`sdkconfig.defaults` and a rebuild.
+
+### Flash and run
+
+```bash
+export IDF_TOOLS_PATH=<where the ESP-IDF tools are installed>   # the same as for the build
+. <esp-idf>/export.sh
+cd firmware/p4_control
+idf.py set-target esp32p4         # once per checkout; builds nothing yet
+idf.py -p <port> flash            # builds if needed; <port>: the board's USB-UART device
+```
+
+`export.sh` looks for the ESP-IDF Python environment under `IDF_TOOLS_PATH`; without the export
+line it looks under `~/.espressif` and stops with "ESP-IDF Python virtual environment ... not
+found" when the tools were installed elsewhere.
+
+There is no `idf.py monitor` step: UART0 carries protocol frames only. The processor-in-the-loop
+commands are in [Hardware in the loop](13-hardware-in-the-loop.md#processor-in-the-loop).
+
 ## Not yet written
 
-Firmware build (ESP-IDF setup, chip revision, core assignment), the perception C kernel, parity
-fixtures against real hardware, and a measured frame-time matrix (perception and control loop
-timing across float vs. lookup-table tanh, one core vs. two).
+The perception C kernel, parity fixtures against real hardware, and a measured frame-time matrix
+(perception and control loop timing across float vs. lookup-table tanh, one core vs. two). The
+controller firmware's timing on the board waits for the first flash.

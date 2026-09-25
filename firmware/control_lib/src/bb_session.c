@@ -59,7 +59,11 @@ static void send_status(bb_session *s)
     put_i32(&p[20], s->ctrl.ik_failures);
     put_f64(&p[24], s->ticks ? (double)s->tick_us_total / (double)s->ticks : 0.0);
     put_f64(&p[32], (double)s->tick_us_max);
-    send(s, BB_MSG_STATUS, p, 40);
+    put_u32(&p[40], s->bus_writes);
+    put_u32(&p[44], s->bus_dropped);
+    put_u32(&p[48], s->bus_period_us_max);
+    put_u32(&p[52], 0u);
+    send(s, BB_MSG_STATUS, p, 56);
 }
 
 void bb_session_init(bb_session *s, const bb_transport *io, uint8_t *bundle_buf,
@@ -116,6 +120,37 @@ static void on_bundle_chunk(bb_session *s, const uint8_t *p, uint16_t len)
     }
 }
 
+/* START: the joint angles the arm is at, which seed the inverse kinematics. The controller is
+ * put back at the start of the sequence with them; without a START it runs from a fixed seed. */
+static void on_start(bb_session *s, const uint8_t *p, uint16_t len)
+{
+    double q_home[BB_NJ];
+    uint8_t ack[8];
+    int32_t status;
+    int i;
+
+    if (len < 8u * (uint32_t)BB_NJ) {
+        send_error(s, BB_PROTO_ERR_LENGTH, len);
+        return;
+    }
+    if (s->bundle_bytes == 0 || s->bundle_have != s->bundle_bytes) {
+        send_error(s, BB_PROTO_ERR_STATE, BB_MSG_START);
+        return;
+    }
+    for (i = 0; i < BB_NJ; ++i) {
+        q_home[i] = get_f64(&p[8 * i]);
+    }
+    status = bb_control_init(&s->ctrl, s->bundle_buf, s->bundle_bytes, q_home);
+    s->ready = (status == BB_OK);
+    s->finished = 0;
+    s->ticks = 0;
+    s->tick_us_total = 0;
+    s->tick_us_max = 0;
+    put_i32(&ack[0], status);
+    put_u32(&ack[4], s->bundle_have);
+    send(s, BB_MSG_BUNDLE_ACK, ack, 8);
+}
+
 static void on_tick_begin(bb_session *s)
 {
     uint8_t *p = s->payload;
@@ -128,13 +163,7 @@ static void on_tick_begin(bb_session *s)
         return;
     }
     n = bb_tick_begin(&s->ctrl, &s->out);
-    if (s->io.now_us) {
-        uint64_t dt = s->io.now_us(s->io.ctx) - t0;
-        s->tick_us_total += dt;
-        if (dt > s->tick_us_max) {
-            s->tick_us_max = dt;
-        }
-    }
+    s->begin_us = s->io.now_us ? s->io.now_us(s->io.ctx) - t0 : 0;
 
     put_i32(&p[0], n);
     put_i32(&p[4], s->out.k);
@@ -161,13 +190,13 @@ static void on_tick_begin(bb_session *s)
     /* When the bus is real the controller drives it here and reports what came back as
      * telemetry; when the plant is simulated the host writes these targets itself. */
     if (s->bus != 0 && n > 0) {
-        double torque[BB_NJOINT];
-        int j;
-        for (j = 0; j < BB_NJOINT; ++j) {
-            torque[j] = 1.0;
-        }
         for (i = 0; i < n; ++i) {
-            s->bus->write(s->bus->ctx, s->out.cmd[i].q, torque, BB_NJOINT);
+            /* The compliance scalars as per-joint torque limits, as `ArmDriver.step` sets them:
+             * the vertical one on shoulder lift, elbow flex and wrist flex, the lateral one on
+             * shoulder pan and wrist roll, the gripper at its full limit. */
+            const bb_command *c = &s->out.cmd[i];
+            double torque[BB_NJOINT] = {c->c_lat, c->c_vert, c->c_vert, c->c_vert, c->c_lat, 1.0};
+            s->bus->write(s->bus->ctx, c->q, torque, BB_NJOINT);
         }
         s->bus->read(s->bus->ctx, s->bus_state.position, s->bus_state.speed,
                      s->bus_state.load, BB_NJOINT);
@@ -203,12 +232,13 @@ static void on_scene_state(bb_session *s, const uint8_t *p, uint16_t len)
     t0 = s->io.now_us ? s->io.now_us(s->io.ctx) : 0;
     s->finished = bb_tick_end(&s->ctrl, &slots, &s->bus_state, &s->out);
     if (s->io.now_us) {
-        uint64_t dt = s->io.now_us(s->io.ctx) - t0;
+        uint64_t dt = s->io.now_us(s->io.ctx) - t0 + s->begin_us;
         s->tick_us_total += dt;
         if (dt > s->tick_us_max) {
             s->tick_us_max = dt;
         }
     }
+    s->begin_us = 0;
     s->ticks += 1;
 
     put_i32(&q[0], s->out.k);
@@ -246,14 +276,55 @@ static void on_bus_readings(bb_session *s, const uint8_t *p, uint16_t len)
     }
 }
 
-int bb_session_run(bb_session *s)
+static void send_hello(bb_session *s)
 {
-    uint8_t chunk[256];
     uint8_t hello[8];
-
     put_u32(&hello[0], BB_BUNDLE_VERSION);
     put_u32(&hello[4], (uint32_t)s->bundle_cap);
     send(s, BB_MSG_HELLO, hello, 8);
+}
+
+/* Act on the frame the decoder holds. Returns 1 when the session is over. */
+static int dispatch(bb_session *s)
+{
+    switch (s->dec.type) {
+    case BB_MSG_HELLO:
+        /* A host that opened the line after the greeting went out asks for it again. */
+        send_hello(s);
+        break;
+    case BB_MSG_TARGET_BUNDLE:
+        on_bundle_chunk(s, s->dec.payload, s->dec.len);
+        break;
+    case BB_MSG_START:
+        on_start(s, s->dec.payload, s->dec.len);
+        break;
+    case BB_MSG_TICK_BEGIN:
+        on_tick_begin(s);
+        break;
+    case BB_MSG_BUS_READINGS:
+        on_bus_readings(s, s->dec.payload, s->dec.len);
+        break;
+    case BB_MSG_SCENE_STATE:
+        on_scene_state(s, s->dec.payload, s->dec.len);
+        break;
+    case BB_MSG_STATUS:
+        send_status(s);
+        break;
+    case BB_MSG_RESET:
+        send_status(s);
+        return 1;
+    default:
+        send_error(s, BB_PROTO_ERR_STATE, s->dec.type);
+        break;
+    }
+    return 0;
+}
+
+int bb_session_run(bb_session *s)
+{
+    uint8_t chunk[256];
+
+    send_hello(s);
 
     for (;;) {
         int got = s->io.read(s->io.ctx, chunk, (uint32_t)sizeof(chunk));
@@ -262,31 +333,12 @@ int bb_session_run(bb_session *s)
             return got < 0 ? -1 : 0;
         }
         for (i = 0; i < got; ++i) {
-            if (!bb_decoder_feed(&s->dec, chunk[i])) {
-                continue;
-            }
-            switch (s->dec.type) {
-            case BB_MSG_TARGET_BUNDLE:
-                on_bundle_chunk(s, s->dec.payload, s->dec.len);
-                break;
-            case BB_MSG_TICK_BEGIN:
-                on_tick_begin(s);
-                break;
-            case BB_MSG_BUS_READINGS:
-                on_bus_readings(s, s->dec.payload, s->dec.len);
-                break;
-            case BB_MSG_SCENE_STATE:
-                on_scene_state(s, s->dec.payload, s->dec.len);
-                break;
-            case BB_MSG_STATUS:
-                send_status(s);
-                break;
-            case BB_MSG_RESET:
-                send_status(s);
-                return 0;
-            default:
-                send_error(s, BB_PROTO_ERR_STATE, s->dec.type);
-                break;
+            int ready = bb_decoder_feed(&s->dec, chunk[i]);
+            while (ready) {
+                if (dispatch(s)) {
+                    return 0;
+                }
+                ready = bb_decoder_next(&s->dec);
             }
         }
     }

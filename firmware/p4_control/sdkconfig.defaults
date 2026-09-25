@@ -1,0 +1,14 @@
+CONFIG_IDF_TARGET="esp32p4"
+
+# UART0 carries the wire protocol and nothing else: no console, no log output.
+CONFIG_ESP_CONSOLE_NONE=y
+CONFIG_LOG_DEFAULT_LEVEL_NONE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_NONE=y
+
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_FREERTOS_HZ=1000
+
+# The target bundle (240-390 kB for one placement or pick) goes to PSRAM when the board has it,
+# otherwise to the largest internal block.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y

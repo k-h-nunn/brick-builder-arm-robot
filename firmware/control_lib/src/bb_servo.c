@@ -11,6 +11,7 @@ void bb_servo_init(bb_servo *s, const bb_cfg *cfg)
     s->max_spin = cfg->use_yaw ? cfg->servo_max_spin : 0.0;
     s->max_in_hand = cfg->servo_max_in_hand;
     s->require_brick = 1;
+    s->brick = 0;
     s->hold_in_hand = 0;
     s->hits = 0;
     s->has_d_b = 0;
@@ -144,13 +145,15 @@ void bb_servo_update(bb_servo *s, const bb_cfg *cfg, const bb_step *step,
     double err_vec[3], err_m, dead, n_xy;
 
     reference_features(actual, step, &out->found);
-    if (h->has_brick_ref && h->brick_dim > 0) {
+    out->found.slot[brick_index] = -1;
+    if (s->brick && h->brick_dim > 0) {
         add_brick(actual, step, &out->found, 0);
     }
     out->have_want = 0;
     if (reference != 0) {
         reference_features(reference, step, &out->want);
-        if (h->has_brick_ref && h->brick_dim > 0) {
+        out->want.slot[brick_index] = -1;
+        if (s->brick && h->brick_dim > 0) {
             add_brick(reference, step, &out->want, 1);
         }
         out->have_want = 1;
@@ -166,7 +169,7 @@ void bb_servo_update(bb_servo *s, const bb_cfg *cfg, const bb_step *step,
         blind_out(out, n_names);
         return;
     }
-    if (h->has_brick_ref && s->require_brick && out->found.slot[brick_index] < 0) {
+    if (s->brick && s->require_brick && out->found.slot[brick_index] < 0) {
         blind_out(out, n_names);
         return;
     }
@@ -261,8 +264,8 @@ void bb_servo_update(bb_servo *s, const bb_cfg *cfg, const bb_step *step,
 
     out->d_b[0] = 0.0;
     out->d_b[1] = 0.0;
-    if (h->has_brick_ref && h->brick_dim > 0 && out->found.slot[brick_index] >= 0) {
-        double b[BB_MAX_BROW], full[BB_MAX_BDOF];
+    if (s->brick && h->brick_dof > 0 && out->found.slot[brick_index] >= 0) {
+        double b[BB_MAX_BROW], full[BB_MAX_BDOF] = {0.0, 0.0, 0.0};
         double inv_b[BB_MAX_BDOF * BB_MAX_BROW], sv_b[3];
         double d_b[2], n_b;
 
