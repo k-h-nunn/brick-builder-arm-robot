@@ -1,4 +1,4 @@
-"""Video panels and layout helpers for the scene-target environment (WP8).
+"""Video panels and layout helpers for the scene-target environment.
 
 `scripts/make_scene_target_video.py` is the program that drives a world and writes a file;
 this module is the picture and text it draws, plus the pieces small enough to unit-test without
@@ -15,10 +15,13 @@ and the convolutional model's instance map alike), not just the CNN. A producer 
 `build_decode=False`, or one that never builds a decode at all, gets `slot_row_panel` instead: a
 schematic strip of its rows, honestly labelled as "no decode" rather than faked.
 
-**Predicted panel.** No predictor exists yet (WP4/WP5 land later): `Panels` shows copy-last --
-the previous tick's *observed* decode -- which is exactly what a copy-last predictor's estimate
-of the next state looks like. `scripts/make_scene_target_video.py`'s spec line says so on screen
-("Predictor: copy-last").
+**Predicted panel.** No predictor exists yet: `Panels` shows copy-last -- this tick's own
+*observed* decode, held up as the prediction of the next tick's state. That is what a copy-last
+predictor's estimate looks like (the change it predicts is zero, so its prediction of tick k+1
+equals the observation at tick k) and is shown at the tick it is made, one tick before the frame
+it predicts. A real predictor's already-warped picture, once one exists, replaces it through
+`Panels.update`'s `predicted_rgb` argument. `scripts/make_scene_target_video.py`'s spec line says
+so on screen ("Predictor: copy-last").
 
 **Reused, not rebuilt:** `demo.video.Recorder` (the camera, the encode, the frame-rate match)
 and `demo.video_panels.Overlay`/`check_layout` (every text box, and the check that none of them
@@ -59,7 +62,7 @@ __all__ = [
 
 PANEL_TITLES = ("Arm camera POV", "Observed scene state", "Target scene state",
                 "Predicted next scene state")
-"""The four panel titles, exact (A5, WP8's own acceptance test)."""
+"""The four panel titles, exact."""
 
 PROJECT_TITLE = "Brick Builder Arm Robot"
 """The title card's project name -- the same one `scripts/make_demo_video.py` and
@@ -73,7 +76,7 @@ FALLBACK_PALETTE = (
     (233, 196, 57), (140, 140, 231), (224, 110, 110), (116, 201, 201),
 )
 """Eight distinct slot colours, used only when a schema has no `colour` field to read (an opaque
-producer, WP10) -- the dense decode still colours by slot, it just cannot use the object's own
+producer) -- the dense decode still colours by slot, it just cannot use the object's own
 measured colour."""
 
 DEFAULT_READOUTS = (
@@ -85,12 +88,12 @@ DEFAULT_READOUTS = (
                fmt="{:.2f}"),
 )
 """The data strip: scene-state distance (the reward and success signal, plotted), the copy-last
-prediction error, and the ground-truth tool position error (A5, section 5.2)."""
+prediction error, and the ground-truth tool position error."""
 
 
 def spec_line(*, controller: str, predictor: str, scene_model: str, level: str,
              offset_mm: float, offset_deg: float) -> str:
-    """The one line under the title card: titles and values, no sentences (5.2).
+    """The one line under the title card: titles and values, no sentences.
 
     Kept short on purpose: at 1920x1080 the title block has 922 px to the panel column, which
     is three lines of the spec-line face (`video_panels.MAX_SPEC_LINES`) -- a field's own value
@@ -130,7 +133,7 @@ def dense_decode_rgb(state, *, res: int, background=DARK) -> np.ndarray:
 
     Every pixel's slot comes from `state.decode` (argmax over the per-pixel logits), so this
     works for any producer that built one -- the ideal source's ground-truth label map and the
-    convolutional model's instance map alike (2.6, 5.2). A producer with no decode function
+    convolutional model's instance map alike. A producer with no decode function
     (`state.has_decode` false) falls back to `slot_row_panel`.
     """
     if not getattr(state, "has_decode", False):
@@ -172,7 +175,7 @@ def slot_row_panel(rows: np.ndarray, schema: SlotSchema, *, res: int, background
     the slot's own colour if the schema has one, sized by its mass if the schema has that too.
 
     Honest about what it is showing -- rows, not pixels -- rather than fabricating a decode a
-    source never built (the owner ruling in 5.2 is against ovals standing in for a real decode;
+    source never built (a rendered oval standing in for a real decode was ruled out;
     this is not a decode at all, and is only reached when one does not exist).
     """
     rows = np.asarray(rows)
@@ -207,15 +210,16 @@ class Panels:
     """The four panel pictures, rebuilt on every vision tick and held between them.
 
     `update` takes this tick's wrist camera image and the two decode pictures (observed,
-    target); the fourth, predicted, is last tick's observed decode -- copy-last (module
-    docstring). `entries()` is what `demo.video.Recorder(panel_images=...)` wants: `n_panels`
-    pairs of `(title, rgb)`, each exactly `size`.
+    target); the fourth, predicted, defaults to copy-last -- this same tick's own observed
+    picture, shown one tick before the frame it predicts (module docstring). A real predictor's
+    already-warped picture, once one exists, comes in through `predicted_rgb`. `entries()` is
+    what `demo.video.Recorder(panel_images=...)` wants: `n_panels` pairs of `(title, rgb)`, each
+    exactly `size`.
     """
 
     size: tuple[int, int]
     background: tuple[int, int, int] = DARK
     images: list = field(init=False, repr=False)
-    _last_observed: np.ndarray | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         w, h = int(self.size[0]), int(self.size[1])
@@ -225,8 +229,8 @@ class Panels:
         self.images = [blank.copy() for _ in PANEL_TITLES]
 
     def reset(self) -> None:
-        """New episode: no earlier observation to copy-last from."""
-        self._last_observed = None
+        """New episode. Copy-last carries no state across ticks, so this is a no-op today; kept
+        as the hook a stateful predictor (once one lands) resets between episodes."""
 
     def _fit(self, img: np.ndarray, *, nearest: bool) -> np.ndarray:
         import cv2
@@ -240,16 +244,17 @@ class Panels:
         return cv2.resize(arr, self.size, interpolation=mode)
 
     def update(self, *, wrist_rgb: np.ndarray, observed_rgb: np.ndarray,
-              target_rgb: np.ndarray) -> None:
-        """`wrist_rgb` is a photo (smoothed resize); `observed_rgb`/`target_rgb` are decode
-        pictures (nearest-neighbour, so slot boundaries stay sharp instead of blurring into a
-        colour that names no slot)."""
+              target_rgb: np.ndarray, predicted_rgb: np.ndarray | None = None) -> None:
+        """`wrist_rgb` is a photo (smoothed resize); `observed_rgb`/`target_rgb`/`predicted_rgb`
+        are decode pictures (nearest-neighbour, so slot boundaries stay sharp instead of
+        blurring into a colour that names no slot). `predicted_rgb` defaults to copy-last: this
+        tick's own `observed_rgb`, which is what a copy-last predictor's estimate of the *next*
+        tick's state looks like, shown at the tick it is made rather than the tick it predicts."""
         self.images[0] = self._fit(wrist_rgb, nearest=False)
         observed = self._fit(observed_rgb, nearest=True)
         self.images[1] = observed
         self.images[2] = self._fit(target_rgb, nearest=True)
-        self.images[3] = observed if self._last_observed is None else self._last_observed
-        self._last_observed = observed
+        self.images[3] = observed if predicted_rgb is None else self._fit(predicted_rgb, nearest=True)
 
     def entries(self) -> list[tuple[str, np.ndarray]]:
         return list(zip(PANEL_TITLES, self.images))
@@ -401,7 +406,7 @@ def check_stills_layout(rects: dict[str, Rect], safe: Rect) -> None:
     """No two drawn elements intersect and none leaves the safe area (raises `LayoutError`).
 
     A thin, named wrapper around `video_panels.check_layout` so a caller (and a test) can name
-    the exact requirement WP8's acceptance test asks for, "a programmatic layout check", without
+    the exact requirement, "a programmatic layout check", without
     reaching past this module into `demo.video_panels` for it."""
     check_layout(rects, safe)
 
@@ -414,7 +419,7 @@ def target_decode_cache_path(cache_dir, family: str, seed: int, source: str, wei
     """`<cache_dir>/decode/<family>/seed<seed>_<source>_<sha8>[_<variant>].npz`.
 
     A cache of its own, next to `targets.py`'s own `<cache_dir>/targets/...`: the target cache
-    stores no per-pixel picture (2.6 -- `TargetSequence` is arrays only, no pickled state, so a
+    stores no per-pixel picture (`TargetSequence` is arrays only, no pickled state, so a
     source's decode closure cannot round-trip through it), and generating one is a video-only
     cost nothing else in this package pays."""
     sha8 = weights_sha256[:8] if weights_sha256 else "none"
@@ -423,14 +428,21 @@ def target_decode_cache_path(cache_dir, family: str, seed: int, source: str, wei
 
 
 def render_target_decode(seq, *, source_name: str, source_kwargs: dict | None = None,
-                         res: int = 256) -> np.ndarray:
+                         res: int = 256, prepare=None) -> np.ndarray:
     """Replays the exact drawn viewing-pose path recorded in `seq.meta` through a fresh,
     decode-enabled source, and returns every frame's dense decode: `uint8 [T, res, res, 3]`.
 
     Same replay as `targets.viewing_pose_sequence` (the recorded start pose, target pose, `T`
     and draw number, not a re-drawn one), through a source built with `build_decode=True` --
-    the target cache's own source is built without it (2.6, `world.build_source`'s default),
+    the target cache's own source is built without it (`world.build_source`'s default),
     since nothing else needs the picture.
+
+    `prepare`, when given, is called on the twin's compiled model right after it is built and
+    before the first render (a `model -> None` callable, e.g. `demo.video.studio_look` bound to
+    a `Quality`). The caller that also renders the observed world through the same look must
+    pass the same callable here, or the two renders read the same objects' colours differently
+    and the observed and target panels stop matching (each rendered from its own separate
+    MuJoCo model).
     """
     from .targets import ViewingPoseDraw
     from .world import NominalTwin, build_source, observe, reset_source
@@ -444,6 +456,8 @@ def render_target_decode(seq, *, source_name: str, source_kwargs: dict | None = 
     poses = draw.frame_poses()
     source, _ = build_source(source_name, source_kwargs, build_decode=True)
     twin = NominalTwin()
+    if prepare is not None:
+        prepare(twin.scene.model)
     out = np.empty((seq.T, res, res, 3), dtype=np.uint8)
     try:
         reset_source(source)
@@ -458,8 +472,13 @@ def render_target_decode(seq, *, source_name: str, source_kwargs: dict | None = 
 
 
 def load_or_render_target_decode(seq, *, source_name: str, source_kwargs: dict | None = None,
-                                 cache_dir, variant: str = "") -> np.ndarray:
-    """`render_target_decode`, cached to `target_decode_cache_path`."""
+                                 cache_dir, variant: str = "", prepare=None) -> np.ndarray:
+    """`render_target_decode`, cached to `target_decode_cache_path`.
+
+    `variant` must change whenever `prepare` does (a cached file carries no record of which look
+    rendered it): the caller that also renders the observed world through a look owns picking a
+    `variant` string that names it, so a cache from a different look is never reused silently.
+    """
     meta = seq.meta
     family = str(meta.get("family", "viewing_pose"))
     seed = int(meta.get("seed", -1))
@@ -469,7 +488,8 @@ def load_or_render_target_decode(seq, *, source_name: str, source_kwargs: dict |
         with np.load(path) as z:
             if int(z["T"]) == seq.T:
                 return z["images"]
-    images = render_target_decode(seq, source_name=source_name, source_kwargs=source_kwargs)
+    images = render_target_decode(seq, source_name=source_name, source_kwargs=source_kwargs,
+                                  prepare=prepare)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp.npz")
     np.savez(tmp, images=images, T=np.asarray(seq.T, dtype=np.int64))

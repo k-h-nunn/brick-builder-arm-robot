@@ -1,4 +1,4 @@
-"""WP8's own pieces, on synthetic data: no renderer, no MuJoCo, no CNN weights.
+"""This package's own pieces, on synthetic data: no renderer, no MuJoCo, no CNN weights.
 
 The one thing this file cannot check without a real render -- whether a drawn text box actually
 falls on the arm's own pixels in a live take -- is exercised on a synthetic instance map instead
@@ -41,34 +41,41 @@ def test_panel_titles_are_the_four_exact_strings():
                               "Predicted next scene state")
 
 
-def test_panels_predicted_is_copy_last_of_the_previous_observed():
+def test_panels_predicted_defaults_to_this_ticks_own_observed():
+    # Copy-last predicts no change, so its prediction of the *next* tick is this tick's own
+    # observed picture, shown at the tick it is made (one tick before the frame it predicts) --
+    # not the previous tick's observed picture (that would be a one-tick lag the other way).
     panels = V.Panels(size=(16, 16))
     wrist = np.full((16, 16, 3), 40, dtype=np.uint8)
     first_obs = np.full((16, 16, 3), 10, dtype=np.uint8)
     target = np.full((16, 16, 3), 200, dtype=np.uint8)
     panels.update(wrist_rgb=wrist, observed_rgb=first_obs, target_rgb=target)
     entries = dict(panels.entries())
-    # No earlier observation yet: predicted falls back to this tick's own observed picture.
     np.testing.assert_array_equal(entries["Predicted next scene state"], first_obs)
 
     second_obs = np.full((16, 16, 3), 90, dtype=np.uint8)
     panels.update(wrist_rgb=wrist, observed_rgb=second_obs, target_rgb=target)
     entries = dict(panels.entries())
-    # Now predicted is the *previous* tick's observed picture, not this tick's.
-    np.testing.assert_array_equal(entries["Predicted next scene state"], first_obs)
+    np.testing.assert_array_equal(entries["Predicted next scene state"], second_obs)
     np.testing.assert_array_equal(entries["Observed scene state"], second_obs)
 
 
-def test_panels_reset_clears_the_copy_last_history():
+def test_panels_update_takes_a_real_predicted_picture_when_given():
     panels = V.Panels(size=(8, 8))
     blank = np.zeros((8, 8, 3), dtype=np.uint8)
     obs = np.full((8, 8, 3), 55, dtype=np.uint8)
-    panels.update(wrist_rgb=blank, observed_rgb=obs, target_rgb=blank)
-    panels.reset()
-    obs2 = np.full((8, 8, 3), 77, dtype=np.uint8)
-    panels.update(wrist_rgb=blank, observed_rgb=obs2, target_rgb=blank)
+    predicted = np.full((8, 8, 3), 199, dtype=np.uint8)
+    panels.update(wrist_rgb=blank, observed_rgb=obs, target_rgb=blank, predicted_rgb=predicted)
     entries = dict(panels.entries())
-    np.testing.assert_array_equal(entries["Predicted next scene state"], obs2)
+    np.testing.assert_array_equal(entries["Predicted next scene state"], predicted)
+    np.testing.assert_array_equal(entries["Observed scene state"], obs)
+
+
+def test_panels_reset_does_not_raise():
+    panels = V.Panels(size=(8, 8))
+    blank = np.zeros((8, 8, 3), dtype=np.uint8)
+    panels.update(wrist_rgb=blank, observed_rgb=blank, target_rgb=blank)
+    panels.reset()  # no state to clear today; the hook must still be callable
 
 
 def test_panels_resizes_every_picture_to_the_panel_size():
@@ -236,7 +243,8 @@ def test_load_or_render_target_decode_caches_after_the_first_call(tmp_path, monk
 
     calls = {"n": 0}
 
-    def fake_render(seq, *, source_name, source_kwargs=None, res=256):
+    def fake_render(seq, *, source_name, source_kwargs=None, res=256, prepare=None):
+        del prepare  # accepted for signature compatibility; exercised by the test below
         calls["n"] += 1
         return np.full((seq.T, 4, 4, 3), calls["n"], dtype=np.uint8)
 
@@ -251,6 +259,28 @@ def test_load_or_render_target_decode_caches_after_the_first_call(tmp_path, monk
     second = V.load_or_render_target_decode(seq, source_name="ideal", cache_dir=tmp_path)
     assert calls["n"] == 1
     np.testing.assert_array_equal(second, first)
+
+
+def test_load_or_render_target_decode_passes_prepare_through_and_variant_picks_a_new_cache_slot(
+        tmp_path, monkeypatch):
+    class FakeSeq:
+        T = 2
+        meta = {"family": "viewing_pose", "seed": 9, "weights_sha256": "", "source": "ideal"}
+
+    def fake_render(seq, *, source_name, source_kwargs=None, res=256, prepare=None):
+        if prepare is not None:
+            prepare("the model")
+        return np.zeros((seq.T, 4, 4, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(V, "render_target_decode", fake_render)
+    prepared = []
+    V.load_or_render_target_decode(seq=FakeSeq(), source_name="ideal", cache_dir=tmp_path,
+                                   variant="studio", prepare=prepared.append)
+    assert prepared == ["the model"]
+    plain_path = V.target_decode_cache_path(tmp_path, "viewing_pose", 9, "ideal", "")
+    studio_path = V.target_decode_cache_path(tmp_path, "viewing_pose", 9, "ideal", "", "studio")
+    assert studio_path != plain_path
+    assert studio_path.exists() and not plain_path.exists()
 
 
 def test_spec_line_is_titles_and_values_with_no_sentence_punctuation():

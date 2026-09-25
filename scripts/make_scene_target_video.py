@@ -4,16 +4,16 @@
     python scripts/make_scene_target_video.py --seed 1000 --source ideal
     python scripts/make_scene_target_video.py --qa-only --out media_out/hd/scene_target_l0a_gt_1080p.mp4
 
-This wave's first video (5.2, A5): the arm plays back a cached L0a (viewing-pose) target
-sequence open loop, `u = 0` on the recording clock -- there is no controller or predictor yet
-(WP4/WP5), so what this take shows is the *environment*: the arm reproducing the recorded path,
-the scene model's own dense decode of what it sees, and the target sequence it is being scored
-against. Four panels, titled exactly "Arm camera POV", "Observed scene state", "Target scene
-state" and "Predicted next scene state" (the last one copy-last, honestly labelled as a
-placeholder in the spec line); a data strip of scene-state distance, prediction error and
-ground-truth tool position error, all in mm-eq/mm; a title card naming the project and the run.
+The first scene-target video: the arm plays back a cached L0a (viewing-pose) target sequence
+open loop, `u = 0` on the recording clock -- there is no controller or predictor yet, so what
+this take shows is the *environment*: the arm reproducing the recorded path, the scene model's
+own dense decode of what it sees, and the target sequence it is being scored against. Four
+panels, titled exactly "Arm camera POV", "Observed scene state", "Target scene state" and
+"Predicted next scene state" (the last one copy-last, honestly labelled as a placeholder in the
+spec line); a data strip of scene-state distance, prediction error and ground-truth tool position
+error, all in mm-eq/mm; a title card naming the project and the run.
 
-This file and `brick_builder/rl/scene_target/viewer.py` are WP8's own files. Everything it reads
+This file and `brick_builder/rl/scene_target/viewer.py` are this package's own files. Everything it reads
 from `brick_builder/rl/scene_target/` (`targets`, `world`, `codec`, `rules`, `wrappers`, `config`)
 is that package's public surface, used exactly as `env.py` itself uses it -- this script builds
 its own small open-loop driver instead of stepping `SceneTargetEnv`, because the dense decode
@@ -49,15 +49,21 @@ from brick_builder.demo.video import (  # noqa: E402
     CamKey, Tick, arm_points, panel_size_for, quality_by_name, studio_look,
 )
 from brick_builder.demo.video_panels import LayoutError, Rect  # noqa: E402
+from brick_builder.perception.scene_model import PLACEHOLDER_SLOT_SCHEMA  # noqa: E402
 from brick_builder.rl.scene_target import targets as TG  # noqa: E402
 from brick_builder.rl.scene_target import viewer as V  # noqa: E402
-from brick_builder.rl.scene_target.codec import SceneDistance  # noqa: E402
+from brick_builder.rl.scene_target.codec import Calibration, SceneDistance, calibration_path  # noqa: E402
 from brick_builder.rl.scene_target.config import SceneTargetConfig  # noqa: E402
 from brick_builder.rl.scene_target.rules import pose_error  # noqa: E402
 from brick_builder.rl.scene_target.wrappers import centre_error_mm  # noqa: E402
 from brick_builder.rl.scene_target.world import (  # noqa: E402
     NOMINAL_PLATE_XY, ViewingPoseWorld, WRIST_FULL, build_source, observe, reset_source,
 )
+
+TARGET_DECODE_VARIANT = "studio"
+"""The target-decode cache holds pictures rendered through `studio_look`, same as the observed
+world -- a variant tag of its own so a cache from before that look was applied is never reused
+silently, and a future look change (a different `Quality`) gets a variant of its own too."""
 
 # Camera framing: the same lookat/distance/azimuth/elevation `scripts/make_campaign_video.py`
 # measured for the two-brick build (span 24% of frame width, whole arm in shot) -- the same
@@ -104,9 +110,9 @@ def build_video(out: Path | None, *, seed: int, source: str = "ideal",
 
     seq, seq_stats = TG.load_or_generate(seed, source_name=source, source_kwargs=source_kwargs,
                                          cache_dir=cache_dir, family="viewing_pose")
-    target_decode = V.load_or_render_target_decode(seq, source_name=source,
-                                                   source_kwargs=source_kwargs,
-                                                   cache_dir=cache_dir)
+    target_decode = V.load_or_render_target_decode(
+        seq, source_name=source, source_kwargs=source_kwargs, cache_dir=cache_dir,
+        variant=TARGET_DECODE_VARIANT, prepare=lambda model: studio_look(model, quality))
 
     world = ViewingPoseWorld(render_samples=quality.msaa)
     studio_look(world.scene.model, quality)
@@ -117,7 +123,16 @@ def build_video(out: Path | None, *, seed: int, source: str = "ideal",
 
     obs_source, obs_info = build_source(source, source_kwargs, build_decode=True)
     reset_source(obs_source)
-    distance = SceneDistance()
+    # The same schema and calibration `env.py` builds `SceneDistance` with (E2): an uncalibrated
+    # `SceneDistance()` scores in window units at the align-hover scale, not the viewing-pose
+    # scale this take actually runs at, and the two numbers are not interchangeable.
+    schema = getattr(obs_source, "schema", PLACEHOLDER_SLOT_SCHEMA)
+    calib_path = calibration_path(cache_dir / "calib", obs_info.name, obs_info.weights_sha256,
+                                  "viewing_pose")
+    calibration = (Calibration.load(calib_path, source=obs_info.name,
+                                    weights_sha256=obs_info.weights_sha256, W=schema.W,
+                                    family="viewing_pose") if calib_path.exists() else None)
+    distance = SceneDistance(schema, calibration)
 
     panel_size = panel_size_for(quality, 4)
     panels = V.Panels(panel_size)
@@ -141,7 +156,7 @@ def build_video(out: Path | None, *, seed: int, source: str = "ideal",
 
     def motion():
         # Tick -1: the settled start pose, before any recorded command -- the same moment
-        # `SceneTargetEnv.reset()` scores against `seq.frame(1)` (2.2).
+        # `SceneTargetEnv.reset()` scores against `seq.frame(1)`.
         frame0 = world.render()
         state0 = observe(obs_source, frame0, t=0.0)
         _record(state0, 1)
@@ -191,6 +206,8 @@ def build_video(out: Path | None, *, seed: int, source: str = "ideal",
             "arm_bodies": recorder.arm_bodies, "arm_px_under_boxes": dict(recorder.arm_under_text),
             "seq_stats": {k: v for k, v in seq_stats.items()},
             "final_d_mm": last["d_mm"], "final_tool_err_mm": last["tool_err_mm"],
+            "mm_scale": distance.mm_scale, "calibration_file": str(calib_path) if calibration else "",
+            "weights_path": obs_info.weights_path, "weights_sha256": obs_info.weights_sha256,
         }
     world.close()
     return result, info
@@ -287,9 +304,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("QA: pass" if not failures else f"QA: {len(failures)} failure(s)")
         return 1 if failures else 0
 
+    if args.source == "learned" and not args.weights:
+        parser.error("--source learned needs an explicit --weights checkpoint path "
+                     "(every CNN take is logged by explicit path and sha256, not a silent "
+                     "default)")
+
     stills_dir.mkdir(parents=True, exist_ok=True)
     source_kwargs = {"threads": 2}
-    if args.source == "learned" and args.weights:
+    if args.source == "learned":
         source_kwargs["weights"] = args.weights
     result, info = build_video(out, seed=args.seed, source=args.source,
                                source_kwargs=source_kwargs if args.source == "learned" else {},
@@ -302,6 +324,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"seed {args.seed}  source {args.source}  T {info['T']}  "
           f"final scene-state distance {info['final_d_mm']:.2f} mm-eq  "
           f"final tool position error {info['final_tool_err_mm']:.2f} mm")
+    print(f"scene-state distance scale {info['mm_scale']:.4f} mm-eq per window unit  "
+          f"calibration {info['calibration_file'] or '(none: uncalibrated default)'}")
+    if args.source == "learned":
+        print(f"weights {info['weights_path']}  sha256 {info['weights_sha256']}")
     write_manifest(stills_dir, result, info)
     failures = run_qa(out, stills_dir)
     for line in failures:
