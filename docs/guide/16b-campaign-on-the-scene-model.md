@@ -3,7 +3,8 @@
 The closed-loop campaign (`docs/guide/16-closed-loop-campaign.md`) drives with simulator ground
 truth and scores the analytic and learned inverse against it. This page drives the same loop with
 the convolutional scene model instead: the loop reads `SceneState` rows the scene model produced
-from the rendered frame, not the simulator's own state. Two runs are reported.
+from the rendered frame, not the simulator's own state. Three runs are reported, plus a
+re-run of the first after two sets of fixes.
 
 - `closed_loop_cnn`, evaluate-only: how much the ground-truth-trained round-5 pair loses when the
   states it sees at test time come from the scene model instead of the simulator, against the
@@ -11,9 +12,13 @@ from the rendered frame, not the simulator's own state. Two runs are reported.
 - `closed_loop_cnn_train`, two rounds asked for, three episodes per task per round: a campaign
   that performs and trains on the scene model's own states rather than the simulator's. It logs a
   predictor checkpoint at round 1 and does not reach a trained inverse; see Results.
+- `closed_loop_cnn_refs`, evaluate-only, round 0 (analytic): the first run's round 0 again, after
+  the scene model's reference bodies are named by matching its slots to ground truth instead of
+  by slot index; see Reference bodies matched to ground truth.
 
-Both campaigns reuse `brick_builder/campaign/**` unchanged; only `--source cnn` and the campaign
-name differ from `docs/guide/16-closed-loop-campaign.md`.
+The first two campaigns reuse `brick_builder/campaign/**` unchanged; only `--source cnn` and the
+campaign name differ from `docs/guide/16-closed-loop-campaign.md`. The third also runs the
+reference-body change, which renames the scene-model recording cache in `campaign/tasks.py`.
 
 ## Scene-model weights
 
@@ -25,6 +30,9 @@ here and its own numbers.
 `brick_builder/action/twin.py` and `brick_builder/action/learn/dataset.py` changed after the
 numbers below were measured (see Fixes to the crashes); the sha256 above did not change, and the
 tables and the figure are unchanged, measured-before-the-fix numbers. They are not re-run here.
+`brick_builder/action/place.py`'s reference-body naming changed after that as well (Reference
+bodies matched to ground truth): every `--source cnn` number on this page above that section was
+measured with the slot-index naming.
 
 ## Evaluate-only against the round-5 pair
 
@@ -186,8 +194,11 @@ seeds -- every frame after the first ten of each 62-frame step. The matching `--
 recordings name the same body in 353 of 620 Approach frames and an empty set in the other 267,
 never any other body: `place.py`'s pick-and-place filter keeps only entries that already equal
 `SUPPLY_BODY` at `Approach`/`Grasp` (`place.py:595-603`), so whatever else the slot-id/instance-id
-mismatch mislabels there is dropped rather than shown. Why the label is present in some frames and
-absent in others under `--source cnn` is not traced further here.
+mismatch mislabels there is dropped rather than shown. A body is named only in a frame where the
+scene model's slot tracker happens to hold that body's blob in the slot whose index equals the
+body's instance id (1 the arm, 2 the baseplate, 3 the held brick, 4 onwards the other bricks,
+`compose.py`'s `build_scene`); which slot a blob takes depends on the order the tracker handed
+slots out, so the label comes and goes along the recording.
 
 `placement` recordings carry the same slot-id/instance-id mismatch, but under `--source cnn` most
 of their per-step body sets are not empty: `Align` is empty in none of 400 cnn frames, `Transport`
@@ -205,9 +216,8 @@ once the brick is let go, so it names the released brick's own body.
 
 The pattern that stays fixed across both inverses in the table above (seven seeds crash at
 `Approach`, two at `Lift`, seed 7 is the one that completes) is the recorded label, not either
-inverse: both rounds replay the same cached `pick_and_place` recordings. Fixing the label mapping
-needs a change in `record_ideal`/`reference_bodies` (`place.py`); this page reports the effect, not
-the fix.
+inverse: both rounds replay the same cached `pick_and_place` recordings. The label mapping is
+fixed in `record_ideal`/`reference_bodies`; see Reference bodies matched to ground truth.
 
 ### Training round
 
@@ -362,6 +372,172 @@ cp results/campaign/closed_loop/weights/{inverse.npz,predictor.npz,deployed.json
   --name closed_loop_cnn_v2 --root results/campaign
 ```
 
+## Reference bodies matched to ground truth
+
+`record_ideal` names each reference frame's bodies from the scene model's own slots, matched to
+the ground-truth blobs of the same render, instead of reading the scene model's slot indices as
+instance ids (see Mislabeled reference bodies).
+
+### Change
+
+- `brick_builder/action/adapter.py`: `WorldAdapter.observe_labelled()` renders one wrist frame and
+  returns the source's `SceneState` and a ground-truth `SceneState` of the same render
+  (`IdealSceneModel`, `K = 16`, so no visible body is folded into the background slot). With the
+  ground-truth source both are the same object. It sits with `scene_for_scoring` in the adapter's
+  scoring-and-recording section; `record_ideal` is its only caller, checked on `place.py`'s syntax
+  tree by `tests/action/test_reference_bodies.py`.
+- `brick_builder/action/place.py`: `match_slots(state, truth)` pairs the source's slots with the
+  ground-truth blobs one to one (`scipy.optimize.linear_sum_assignment`) on what both publish:
+  centre, mass and mean colour. A pair outside any of three tolerances stays unpaired: centre
+  0.08 window units (10 px of the 256 px frame), mass ratio 1.6 either way, colour 0.30
+  (`DigitalTwin.calibrate`'s own tolerance). A blob the scene model merged, split or lost
+  therefore names no body. `reference_bodies(..., truth=)` names each source slot after its
+  paired blob's body; the size and border filters still read the source's own slot, the one the
+  servo searches at run time. A state whose source is not `ideal`, passed without `truth`,
+  raises `ValueError`.
+- `brick_builder/campaign/tasks.py`: `record_for` caches a scene-model recording as
+  `<task>_c<cycle>_s<seed>_cnn_matched_...pkl` (was `..._cnn_...`), so no recording cached before
+  the change is read back under any campaign name.
+
+Under `--source ideal` the naming is unchanged: the state is its own ground truth and its
+`slot_ids` are read as before.
+
+### Tests
+
+`tests/action/test_reference_bodies.py`, 15 tests, 30 s at one thread.
+
+| Test | Input | Expected |
+|---|---|---|
+| Naming by appearance | Scene-model state, every blob in a slot whose index is another body's instance id | the two placed bricks named, as ground truth names them |
+| The defect | The same state read as instance ids | wrong set: `baseplate` and `placed brick 0` |
+| Slot order | 20 random slot orders | same pairing, same names |
+| Segmentation error | Blobs 4-5 px off, mass 0.75x and 1.2x, colour 0.07-0.09 off | still named |
+| Merge, side by side | Two equal bricks reported as one blob | neither named |
+| Merge, second layer | Brick under the held brick reported inside the held brick's blob | held brick matched and excluded, brick under it not named |
+| Missed brick, wrong colour | Blob absent; blob in place with another colour | not named |
+| Background slot | Scene model's background slot (token -1) with a brick's row | never paired |
+| No ground truth | Scene-model state without `truth` | `ValueError` |
+| Rendered recording | Placement, seed 0, recorded through ground truth and through a source publishing the same ground-truth rows under slot-index tokens | same bodies on 161 of 161 frames; read by slot index, 161 of 161 differ |
+| Guard | `observe_labelled` call sites in `place.py` | `record_ideal` only |
+
+`pytest -q -m "not slow" tests/action`: 78 passed, 7 deselected (67 s); `tests/campaign` and
+`tests/perception/test_scene_model.py`: 60 passed, 2 deselected; `tests/rl/vision_control` and
+`tests/gui`: 20 passed, 12 deselected.
+
+### Label check
+
+Per frame, the bodies named from a `--source cnn` recording against the bodies ground truth names
+from the same render: seed 0, the campaign's lighting, `placement` and `pick_and_place` and the
+second cycle of `stack_2` (the pick and place onto the first brick); a scratch script that also
+runs the old slot-index reading on the same states. "Wrong" is a set that names a body the
+ground-truth set of the same frame does not.
+
+| Recording | Frames | Wrong body named, slot index | Wrong body named, matched | `Align` frames with 2 or more references, slot index / matched / ground truth |
+|---|---|---|---|---|
+| `placement` | 161 | 0 | 0 | 0 / 40 / 40 of 40 |
+| `pick_and_place` | 279 | 199 | 0 | 40 / 40 / 40 of 40 (all 40 slot-index sets wrong) |
+| `stack_2`, cycle 2 | 273 | 25 | 0 | 40 / 40 / 40 of 40 |
+
+The matched set is a subset of the ground-truth set on every frame of the three recordings
+(713 of 713). The bodies it leaves out are ones the scene model does not report as their own
+blob; at `Align` these are the red 2x2 (nearest scene-model blob 0.19-0.20 window units away,
+7-12x its mass) and, at the second layer, the blue brick under the held one (nearest scene-model
+blob 0.14 window units away, 5.4x its mass: the one blue region `docs/demos/videos.md` reports at
+`Align`).
+
+Over seeds 0-9 the recordings the two evaluations below replayed (`closed_loop_cnn_v2/ideals/`,
+slot-index naming; `closed_loop_cnn_refs/ideals/`) were compared frame by frame with fresh
+ground-truth recordings of the same seeds (`record_for(..., source=None)`, scratch cache); every
+frame sequence matched step for step.
+
+| Task | Frames | Wrong body named, slot index / matched | No body named, slot index / matched / ground truth | `Align` frames with 2 or more references, slot index / matched / ground truth |
+|---|---|---|---|---|
+| `placement` | 1597 | 0 / 0 | 166 / 0 / 0 | 80 / 400 / 400 of 400 |
+| `pick_and_place` | 2810 | 1130 / 0 | 346 / 219 / 100 | 320 / 399 / 400 of 400 (200 of the 320 wrong) |
+
+The `pick_and_place` `Approach` frames with nothing named (212 matched, 100 ground truth) are the
+scene model not separating the brick to pick up from what surrounds it, not a naming error.
+
+### Evaluate-only, before and after
+
+Same command as Re-evaluation after the fixes, round 0 only, `--name closed_loop_cnn_refs`:
+`--source cnn --evaluate-only --round 0 --seeds 0-9 --tasks placement pick_and_place
+--processes 1 --no-baseline-learned`, analytic inverse, scene-model weights `3e07a382`. Before is
+`closed_loop_cnn_v2` round 0 (Re-evaluation after the fixes), measured with the slot-index naming.
+
+| Task | Predictor column | Before (`closed_loop_cnn_v2`) | After (`closed_loop_cnn_refs`) | Paired exact McNemar |
+|---|---|---|---|---|
+| Placement | analytic | 4/10 (17-69 %) | 10/10 (72-100 %) | 6 fail to seated, 0 seated to fail; p = 0.031 |
+| Placement | learned | 4/10 (17-69 %) | 10/10 (72-100 %) | 6 / 0; p = 0.031 |
+| Pick and place | learned | 5/10 (24-76 %) | 9/10 (60-98 %) | 5 / 1; p = 0.22 |
+
+Per seed, the analytic-predictor placement column and pick and place:
+
+| Seed | Placement, before | Placement, after | Pick and place, before | Pick and place, after |
+|---|---|---|---|---|
+| 0 | seated on the wrong cell, 16.01 mm | seated, 0.03 mm | seated, 0.15 mm | seated, 0.14 mm |
+| 1 | seated, 0.15 mm | seated, 0.07 mm | seated, 0.08 mm | partial seat, 0.15 mm, depth error 0.46 mm |
+| 2 | seated on the wrong cell, 7.95 mm | seated, 0.06 mm | seated on the wrong cell, 15.99 mm | seated, 0.10 mm |
+| 3 | seated, 0.10 mm | seated, 0.04 mm | seated, 0.08 mm | seated, 0.05 mm |
+| 4 | partial seat, 0.16 mm | seated, 0.07 mm | seated, 0.07 mm | seated, 0.10 mm |
+| 5 | seated, 0.14 mm | seated, 0.07 mm | seated, 0.10 mm | seated, 0.13 mm |
+| 6 | seated, 0.07 mm | seated, 0.12 mm | seated on the wrong cell, 16.08 mm | seated, 0.09 mm |
+| 7 | partial seat, 0.19 mm | seated, 0.11 mm | seated on the wrong cell, 14.20 mm | seated, 0.05 mm |
+| 8 | partial seat, 0.15 mm | seated, 0.10 mm | seated on the wrong cell, 8.15 mm | seated, 0.11 mm |
+| 9 | seated on the wrong cell, 7.70 mm | seated, 0.07 mm | partial seat, 0.21 mm | seated, 0.05 mm |
+
+Millimetres are the brick's lateral error from the target cell. Placement is 10/10 in each
+predictor column after the change, the ground-truth column's own 10/10
+(`docs/guide/16-closed-loop-campaign.md`); pick and place is 9/10 against ground truth's 9/10.
+Placement's median `Align` vision ticks go from 40 to 68. Before, 80 of the 400 recorded `Align`
+frames named two or more reference bodies (Label check), the step was untrusted on the rest, and on
+8 of 10 seeds (analytic-predictor column) the progress index played through the 40 recorded `Align`
+frames in 40 ticks; after, it holds on a measured error.
+Replanned episodes: placement 7 and 6 of 10 (two columns) before, 0 and 0 after; pick and place 5
+before, 1 after (seed 1). Evaluate time 32.4 min against 50.7 min, both at `--processes 1` on a
+shared machine, not a like-for-like cost figure.
+
+The learned round-5 pair was not re-measured after the change.
+
+### Stacked build, seeds 0-2
+
+`scripts/make_campaign_video.py --task stack_2 --cnn-drives --probe`, one run per seed, target
+sequences recorded through the scene model (`--targets driving`, the default), scene-model
+weights `3e07a382` (`results/video/vision_model_frozen.pt`). Before is `docs/demos/videos.md`'s
+re-probe after the crash fixes. `Align` is given as vision ticks with a measured scene-state error
+(the loop measures only on trusted ticks there) over vision ticks spent at `Align`; the script's
+own "measured ticks" line counts control-tick records, six per advancing vision tick: the earlier
+"0/240" is 40 vision ticks.
+
+| Seed | Brick 0, before | Brick 0, after | Brick 1, before | Brick 1, after | `Align` measured, cycle 1, before / after | `Align` measured, cycle 2, before / after |
+|---|---|---|---|---|---|---|
+| 0 | not seated, 17.47 mm off | seated, 0.04 mm | not seated, 20.59 mm off | not seated, 94.00 mm off | 0/40 / 107/107 | 0/40 / 51/67 |
+| 1 | not seated, 13.62 mm off | seated, 0.04 mm | seated, wrong cell, 16.28 mm off | not seated, 23.40 mm off | 0/40 / 59/59 | 0/40 / 37/53 |
+| 2 | not seated, 6.43 mm off | seated, 0.11 mm | not seated, 21.66 mm off | not seated, 17.60 mm off | 0/40 / 390/390 | 0/40 / 40/56 |
+
+The first brick (a placement from the jaws) seats on all three seeds, 0.04-0.11 mm from the cell,
+where it seated on none before. The second brick (a pick and place onto the first) seats on none
+of the three, before or after: `RESULT: not built` on every seed, `failure: none` on both cycles.
+Cycle 2's last measured `Align` error is 4.77, 2.20 and 0.40 mm (seeds 0-2), `Lift` has no
+measured tick on any seed (0 of 32 vision ticks), and the second press step ends at 15.28, 9.01
+and 15.81 mm. In the recording of the same cycle under the campaign's lighting (seed 0, Label
+check) the matched naming at `Align` leaves out the red 2x2 and the blue brick under the held one
+on all 40 frames; the probe's own recordings (the video's lighting, `studio_look`) were not
+inspected. Why the second brick misses is not traced further here.
+
+### Commands
+
+```bash
+.venv/bin/python scripts/run_campaign.py \
+  --evaluate-only --round 0 --seeds 0-9 --tasks placement pick_and_place \
+  --source cnn --processes 1 --no-baseline-learned \
+  --name closed_loop_cnn_refs --root results/campaign
+
+for seed in 0 1 2; do
+  .venv/bin/python scripts/make_campaign_video.py --task stack_2 --seed $seed --cnn-drives --probe
+done
+```
+
 ## Limits
 
 - `pick_and_place` under `--source cnn` raised on 9 of 10 held-out seeds before the twin.py fix
@@ -389,3 +565,14 @@ cp results/campaign/closed_loop/weights/{inverse.npz,predictor.npz,deployed.json
   seeds complete under `--source cnn`. Neither `place.py` nor `campaign/tasks.py` give a blind
   step its own failure class in `evaluate.csv`, so which completed episodes hit a blind step is
   still not visible in the per-episode record.
+- The matched naming reads ground truth of the nominal world the target sequence is recorded in.
+  That world is simulated; a target sequence recorded on the arm itself has no ground truth to
+  name its bodies from.
+- The three tolerances of `match_slots` (0.08 window units, mass ratio 1.6, colour 0.30) were set
+  before the label check and the evaluation above, from the frame size, the two-bricks-as-one case and
+  `DigitalTwin.calibrate`'s colour tolerance; they were not tuned on seeds 0-9.
+- After the reference-body change only round 0 (analytic inverse) was re-measured. The round-5
+  learned pair and `closed_loop_cnn_train` were not re-run, so their numbers on this page are
+  slot-index-naming numbers.
+- `stack_2` under the scene model was probed on seeds 0-2 only, not evaluated with
+  `run_campaign.py`; its second brick seats on none of the three after the change.
