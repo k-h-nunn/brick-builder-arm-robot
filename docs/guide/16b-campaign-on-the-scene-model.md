@@ -244,9 +244,9 @@ edited here) is unverified.
 ### Fixes to the crashes
 
 Two changes, made so the two crashes above no longer end a whole episode or a whole campaign.
-Each has a unit test that does not need a campaign run (`tests/action/test_twin_blind_step.py`,
+Each has unit tests that do not need a campaign run (`tests/action/test_twin_blind_step.py`,
 `tests/action/learn/test_dataset_empty_gate.py`; `PYTHONPATH=$PWD heavy .../python -m pytest -q
-tests/action` also passes, 47 tests, no regressions).
+tests/action` also passes, 48 tests, no regressions).
 
 - **`brick_builder/action/twin.py`.** `build_step`'s reference-count check raised a bare
   `RuntimeError` when it saw fewer than `min_refs` blobs before any Jacobian is measured; the check
