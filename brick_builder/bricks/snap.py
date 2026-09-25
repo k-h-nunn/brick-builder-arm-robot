@@ -27,7 +27,7 @@ already solves dry friction properly. What shape `g` has is a parameter (`SnapPa
 a force gauge yet. Nothing in this file cares which shape is in use: the clutch is scheduled
 from whatever `engagement` returns, and all three shapes end at `g(stud_h) = 1`, so a seated
 stud holds `f_clutch * (1 - beta)` whichever one is chosen. The shape does decide whether a
-rocking press is worth anything - see `docs/guide/02-simulator-and-bricks.md`.
+tilted press is worth anything - see `docs/guide/02-simulator-and-bricks.md`.
 
 Scaling that same bound by `1 + beta` while the stud is
 going in and `1 - beta` while it is coming out or standing still makes pushing cost
@@ -37,10 +37,10 @@ instead; `_asymmetry` below says why that had to change.)
 
 The collet also carries two short sideways slides, limited to the socket's clearance. Without
 them a `connect` pins a stud to a point fixed in the brick, and a brick with two studs in
-cannot tilt at all - which makes rocking and peeling impossible. With them a stud has the play
-a real socket gives it, and the tilt-binding limit `atan(2c/d)` comes out for free.
+cannot tilt at all - which makes the tilted press and peeling impossible. With them a stud has
+the play a real socket gives it, and the tilt-binding limit `atan(2c/d)` comes out for free.
 
-Nothing in here special-cases rocking or peeling. A brick pressed at an angle simply has its
+Nothing in here special-cases the tilted press or peeling. A brick pressed at an angle simply has its
 sockets at different depths, so the leading row is already at full `g` while the trailing row
 is barely gripping; the leading row then acts as the hinge. Peeling is the same thing in
 reverse. Both come out of the per-stud bookkeeping for free.
@@ -149,8 +149,8 @@ class ColletSnap:
                 # Two sideways slides limited to the socket clearance, then the axial slide the
                 # clutch acts on. Without the sideways pair a `connect` would pin the stud to a
                 # point fixed in the brick, so a brick with two or more studs in could not tilt
-                # at all and rocking became impossible (measured: 22 N of resistance at 2 mm of
-                # insertion, with zero contacts). With them, a stud has exactly the play a real
+                # at all and the tilted press became impossible (measured: 22 N of resistance at
+                # 2 mm of insertion, with zero contacts). With them, a stud has exactly the play a real
                 # socket gives it, which also reproduces the tilt-binding limit atan(2c/d).
                 play = p.lateral_play * spec.clearance
                 for axis, tag in (([1.0, 0.0, 0.0], "x"), ([0.0, 1.0, 0.0], "y")):
@@ -348,7 +348,7 @@ class ColletSnap:
                 model.dof_frictionloss[self._dof[still]] = np.maximum(clutch, p.friction_floor)
                 # The sideways play grips too, or a seated brick could be slid across the
                 # studs for nothing; at `lateral_ratio` of the axial clutch it still lets a
-                # brick be rocked or peeled, which needs only tens of microns of side travel.
+                # brick be tilt-pressed or peeled, which needs only tens of microns of side travel.
                 model.dof_frictionloss[self._lat_dof[still].reshape(-1)] = np.maximum(
                     np.repeat(p.lateral_ratio * clutch, 2), p.friction_floor
                 )

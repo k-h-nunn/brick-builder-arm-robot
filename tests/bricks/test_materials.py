@@ -668,7 +668,7 @@ def test_tilted_press_needs_fewer_studs_worth_of_force_by_the_simplified_model()
     """push_on_force's ``tilted`` reduction is a per-row simplification, not a full accounting
     of what a tilted press's peak does over an entire run.
 
-    brick_builder.bricks.bench.measure_rocking_ratio (tests/bricks/test_snap_bench.py) shows that,
+    brick_builder.bricks.bench.measure_tilted_press_ratio (tests/bricks/test_snap_bench.py) shows that,
     for the simulator's default "ramp" curve, a tilted press's OVERALL peak stays close to a
     flat press's (ratio 0.9 to 1.1 there): every stud still has to reach full depth by the end
     of the roll, and a rigid brick's ram reads the sum of every stud's force whatever the tool

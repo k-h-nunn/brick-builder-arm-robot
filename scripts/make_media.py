@@ -60,7 +60,7 @@ def _bricks(seed: int, run_all: bool, out_root: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)  # unlike most figure functions, these don't mkdir themselves
     bricks_media.make_exploded_collision_vs_visual_figure(out_path=str(out_dir / "exploded_collision_vs_visual.png"))
     bricks_media.make_force_vs_depth_figure(out_path=str(out_dir / "force_vs_depth.png"))
-    bricks_media.make_rocking_vs_flat_figure(out_path=str(out_dir / "rocking_vs_flat.png"))
+    bricks_media.make_tilted_press_vs_flat_figure(out_path=str(out_dir / "tilted_press_vs_flat.png"))
 
 
 def _robot(seed: int, run_all: bool, out_root: Path) -> None:

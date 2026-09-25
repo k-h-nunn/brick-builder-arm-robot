@@ -39,7 +39,7 @@ def test_bricks_section_creates_its_own_output_directory(tmp_path: Path) -> None
     status = make_media.run(["bricks"], seed=0, run_all=False, out_root=tmp_path)
     assert status == {"bricks": "ok"}
     out_dir = tmp_path / "docs/media/bricks"
-    for name in ("exploded_collision_vs_visual.png", "force_vs_depth.png", "rocking_vs_flat.png"):
+    for name in ("exploded_collision_vs_visual.png", "force_vs_depth.png", "tilted_press_vs_flat.png"):
         assert (out_dir / name).exists(), name
 
 
@@ -83,4 +83,4 @@ def test_demos_section_runs_every_demo(tmp_path: Path) -> None:
     assert status == {"demos": "ok"}
     out_dir = tmp_path / "docs/media/demos"
     written = {p.stem for p in out_dir.iterdir()}
-    assert written == {"scene", "teleop", "press", "rocking", "force_map", "policy", "tokens"}
+    assert written == {"scene", "teleop", "press", "tilted_press", "force_map", "policy", "tokens"}

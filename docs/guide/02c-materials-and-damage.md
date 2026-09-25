@@ -678,11 +678,11 @@ first-principles estimate.
 **That per-row accounting is optimistic.** `tests/bricks/test_snap_bench.py` measures a complete
 tilted run through the real per-socket mechanism (`ColletSnap`/`engagement()`); for `"ramp"` (the
 shipped default), a tilted press's peak force comes within about 10% of a flat press's, not
-divided by four (`test_rocking_peak_against_flat_press_depends_on_the_curve_shape`). Reason: a
+divided by four (`test_tilted_press_peak_against_flat_press_depends_on_the_curve_shape`). Reason: a
 rigid brick's last moments of seating bring every stud to full depth together regardless of tilt,
 and the ram reads the summed force of every stud, so whichever row seats last still adds its full
 share while earlier rows are still near full force. Staging is real — sockets do reach full depth
-at different times (`test_rocking_really_stages_the_rows_one_at_a_time`) — but it shifts *when*
+at different times (`test_the_tilted_press_really_stages_the_rows_one_at_a_time`) — but it shifts *when*
 each row's force arrives, not the summed *peak*. The per-row ceiling is a valid account of the
 force to start the leading row, useful for comparing configurations, but not a validated
 prediction of a whole tilted run's peak; the "tilted" column throughout this section is optimistic
@@ -702,7 +702,7 @@ panel:
   seated holding force**, and that peak must be beaten: every ceiling above divides by 1.43 under
   this shape, so the 2x4 tilted ceiling at 7.4 V falls from 6.1 to 4.3 N per stud, below the
   first-principles estimate. Unlike "ramp," a bench measurement backs a tilted benefit here (about
-  a third lower peak than flat, `test_rocking_peak_against_flat_press_depends_on_the_curve_shape`):
+  a third lower peak than flat, `test_tilted_press_peak_against_flat_press_depends_on_the_curve_shape`):
   the bump is transient and localised in depth rather than persisting to full seat, so tilting is
   expected to help.
 

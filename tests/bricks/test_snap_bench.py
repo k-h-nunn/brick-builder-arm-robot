@@ -7,8 +7,8 @@ quietly relaxed.
 
 The shape of the insertion force curve is a parameter, not a fact (`SnapParams.curve`, one of
 "ramp", "plateau" and "detent"), so the tests that depend
-on it run for all three shapes. Test 4, rocking, is the one that tells them apart, and it is
-three separate measurements rather than one threshold.
+on it run for all three shapes. Test 4, the tilted press, is the one that tells them apart, and
+it is three separate measurements rather than one threshold.
 
 The same eight behaviours are checked for the fallback model in `test_snap_detent.py`, which
 only claims the four that do not depend on the shape of the insertion force curve.
@@ -28,10 +28,10 @@ from brick_builder.bricks.bench import (
     BenchConfig,
     PressBench,
     build_stack_scene,
-    measure_rocking_ratio,
+    measure_tilted_press_ratio,
     predicted_press_force,
     quasi_static_band,
-    rocking_config,
+    tilted_press_config,
 )
 from brick_builder.bricks.snap import ColletSnap
 from brick_builder.bricks.snap_api import SnapParams, engagement, equality_forces
@@ -254,30 +254,30 @@ def test_pull_off_releases_at_the_configured_force_and_clears_every_connect(curv
 
 
 # ---------------------------------------------------------------------------
-# 4. Rocking
+# 4. Tilted press
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
     "curve, upper, note",
     [
-        ("ramp", 1.10, "rocking cannot pay when resistance peaks at full depth"),
+        ("ramp", 1.10, "the tilted press cannot pay when resistance peaks at full depth"),
         ("plateau", 1.10, "reported: a flat curve gives nothing to stage against either"),
         ("detent", 0.75, "the entry bump is passed one row at a time"),
     ],
 )
-def test_rocking_peak_against_flat_press_depends_on_the_curve_shape(curve, upper, note):
+def test_tilted_press_peak_against_flat_press_depends_on_the_curve_shape(curve, upper, note):
     """Test 4, as three measurements rather than one threshold (spec section 6b, decision 1).
 
     The bench gauge is the ram's slide actuator, so by Newton's third law it reads the sum of
     the vertical stud forces whatever the tool is doing: `F_ram = sum(F_stud_z)` plus any
     contact reaction, never less than `sum(F_stud_z)`. A rigid brick on a flat plate ends every
-    press with all eight studs sliding at the same depth, tilted or not. So whether rocking
-    lowers the peak is decided entirely by where the force curve has its maximum:
+    press with all eight studs sliding at the same depth, tilted or not. So whether the tilted
+    press lowers the peak is decided entirely by where the force curve has its maximum:
 
     - "ramp" and "plateau" peak at (or hold until) full seat, which every press has to reach
-      with every stud at once. Rocking cannot beat that, and the measured ratio is about 1.
-      That is a property of the force law, not a failure of the rocking motion: the same runs
+      with every stud at once. The tilted press cannot beat that, and the measured ratio is
+      about 1. That is a property of the force law, not a failure of the tilted-press motion: the same runs
       show the rows going in one at a time and a quarter of a newton-metre of the work moved
       onto the wrist.
     - "detent" peaks at the entry bump, 1 mm in. Tilting the brick puts its four rows of studs
@@ -288,20 +288,20 @@ def test_rocking_peak_against_flat_press_depends_on_the_curve_shape(curve, upper
     Every case still has to seat the brick, stage the rows and stay inside one servo's torque.
     """
 
-    result = measure_rocking_ratio(SnapParams(curve=curve), tilt_deg=2.0)
+    result = measure_tilted_press_ratio(SnapParams(curve=curve), tilt_deg=2.0)
     print(
         f"\ntest 4 [{curve}]: flat {result['flat_peak']:.3f} N, "
-        f"rocking {result['rocking_peak']:.3f} N, ratio {result['ratio']:.3f}  ({note})"
+        f"tilted press {result['tilted_press_peak']:.3f} N, ratio {result['ratio']:.3f}  ({note})"
     )
-    assert result["rocking_seated"], "the rocking press has to actually get the brick on"
+    assert result["tilted_press_seated"], "the tilted press has to actually get the brick on"
     assert result["flat_seated"]
     assert result["warnings"] == 0
-    # the rocking run really did stage the rows, whatever it did to the peak
-    assert result["rocking_depth_spread"] > 1.5e-3, result["rocking_depth_spread"]
+    # the tilted-press run really did stage the rows, whatever it did to the peak
+    assert result["tilted_press_depth_spread"] > 1.5e-3, result["tilted_press_depth_spread"]
     assert result["flat_depth_spread"] < 2e-4, result["flat_depth_spread"]
     assert result["peak_wrist_torque"] < 1.9, result["peak_wrist_torque"]
     assert result["ratio"] <= upper, (
-        f"{curve}: rocking {result['rocking_peak']:.3f} N against flat "
+        f"{curve}: tilted press {result['tilted_press_peak']:.3f} N against flat "
         f"{result['flat_peak']:.3f} N (ratio {result['ratio']:.3f})"
     )
     if curve != "detent":
@@ -309,12 +309,13 @@ def test_rocking_peak_against_flat_press_depends_on_the_curve_shape(curve, upper
         assert result["ratio"] >= 0.90, result["ratio"]
 
 
-def test_rocking_really_stages_the_rows_one_at_a_time():
-    """Rocking has to emerge from the per-stud bookkeeping, and this is the evidence that it does.
+def test_the_tilted_press_really_stages_the_rows_one_at_a_time():
+    """The tilted press has to emerge from the per-stud bookkeeping, and this is the evidence
+    that it does.
 
-    Nothing in `snap.py` knows what rocking is. If the per-socket model is real, a tilted press
-    must put the brick's sockets at visibly different depths at the same instant, while a flat
-    press keeps them within a few hundredths of a millimetre of each other all the way down.
+    Nothing in `snap.py` knows what a tilted press is. If the per-socket model is real, a tilted
+    press must put the brick's sockets at visibly different depths at the same instant, while a
+    flat press keeps them within a few hundredths of a millimetre of each other all the way down.
     The spread is measured straight out of `stud_depths`, which is also what the rest of the
     project will read.
     """
@@ -323,16 +324,16 @@ def test_rocking_really_stages_the_rows_one_at_a_time():
     flat = _bench(params).press()
     flat_spread = float(np.max(flat.depths.max(axis=1) - flat.depths.min(axis=1)))
 
-    rock_bench = PressBench(ColletSnap(params), rocking_config(tilt_deg=2.0))
-    rock = rock_bench.press_rocking()
-    rock_spread = float(np.max(rock.depths.max(axis=1) - rock.depths.min(axis=1)))
+    tilted_press_bench = PressBench(ColletSnap(params), tilted_press_config(tilt_deg=2.0))
+    tilted = tilted_press_bench.press_tilted()
+    tilted_spread = float(np.max(tilted.depths.max(axis=1) - tilted.depths.min(axis=1)))
 
-    assert rock_bench.seated()
-    assert rock.warnings == 0
+    assert tilted_press_bench.seated()
+    assert tilted.warnings == 0
     assert flat_spread < 2e-4, f"flat press spread {flat_spread * 1e3:.4f} mm"
-    assert rock_spread > 1.5e-3, f"rocking spread only {rock_spread * 1e3:.4f} mm"
-    # and the wrist torque a rocking press asks for is well inside one STS3215's 1.9 N.m
-    assert float(np.max(np.abs(rock.wrist_torque))) < 1.9
+    assert tilted_spread > 1.5e-3, f"tilted press spread only {tilted_spread * 1e3:.4f} mm"
+    # and the wrist torque a tilted press asks for is well inside one STS3215's 1.9 N.m
+    assert float(np.max(np.abs(tilted.wrist_torque))) < 1.9
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +420,7 @@ def test_peel_moment_matches_the_sum_of_clutch_times_lever(curve):
     """
 
     params = SnapParams(curve=curve)
-    bench = PressBench(ColletSnap(params), rocking_config(tilt_deg=0.0))
+    bench = PressBench(ColletSnap(params), tilted_press_config(tilt_deg=0.0))
     bench.press()
     assert bench.seated()
     bench.hold(0.2)          # let the press force out of the rig before turning the wrist

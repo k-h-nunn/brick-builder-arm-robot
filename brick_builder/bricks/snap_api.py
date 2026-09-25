@@ -10,8 +10,8 @@ Two implementations live next door:
 
 - `snap.py` (`ColletSnap`) - the per-socket collet of
   `docs/guide/02-simulator-and-bricks.md`. It models force against
-  depth for every stud separately, so partial insertion, rocking and peeling all fall out of
-  the same mechanism.
+  depth for every stud separately, so partial insertion, the tilted press and peeling all fall
+  out of the same mechanism.
 - `snap_detent.py` (`DetentSnap`) - a much simpler fallback: a funnel that pulls a nearly
   aligned brick into place, a rigid weld once it is seated, and a force threshold that breaks
   the weld. It has no force-against-depth curve at all, which is exactly why the collet model

@@ -20,14 +20,15 @@ measurement: it keeps the reading equal to the insertion force instead of the in
 plus a constant 0.12 N of brick weight. Tests that are *about* gravity (the stability and
 creep checks) build their scenes with `build_stack_scene` instead, which has it on.
 
-The wrist hinge matters for rocking and peeling and for nothing else, and it is driven rather
-than free: a brick hanging off a frictionless pivot is a pendulum, and the first contact simply
-spins it over. It is the wrist a real arm has, and `run` records the torque it is supplying
-alongside the vertical force, because part of the point of rocking is to move load onto it.
+The wrist hinge matters for the tilted press and peeling and for nothing else, and it is driven
+rather than free: a brick hanging off a frictionless pivot is a pendulum, and the first contact
+simply spins it over. It is the wrist a real arm has, and `run` records the torque it is supplying
+alongside the vertical force, because part of the point of the tilted press is to move load onto
+it.
 
 Where the ram grips the brick is a free parameter (`cfg.grip`, in brick-local coordinates), and
-it is the difference between a flat press and a rocking press. A flat press grips the middle of
-the top face and pushes every stud in at once. A rocking press grips the leading bottom edge,
+it is the difference between a flat press and a tilted press. A flat press grips the middle of
+the top face and pushes every stud in at once. A tilted press grips the leading bottom edge,
 tips the brick by a couple of degrees, lets the leading row go in first, and then turns the
 wrist back to level so the brick rolls down about that edge. Gripping on the bottom face is not
 a detail: tilting about a point one brick-height above the sockets slides them 0.7 mm sideways,
@@ -274,7 +275,7 @@ class PressBench:
         # Distance from the grip point to the far end of the stud grid. When the grip sits
         # on the leading row, this is the lever the wrist rotation swings the trailing row
         # down through, and it sets the rotation rate that matches a given press speed.
-        self.rock_lever = abs((cfg.ny - 1) / 2.0 * spec.pitch - grip[1])
+        self.tilted_press_lever = abs((cfg.ny - 1) / 2.0 * spec.pitch - grip[1])
 
     # -- running -----------------------------------------------------------
 
@@ -383,7 +384,7 @@ class PressBench:
         stop = self.seated if until_seated else None
         return self.run(lambda t: start - speed * (t - t0), steps, stop)
 
-    def press_rocking(
+    def press_tilted(
         self,
         speed: float = 0.002,
         trigger_depth: float | None = None,
@@ -407,7 +408,7 @@ class PressBench:
 
         cfg = self.cfg
         if self._tilt_qadr is None:
-            raise RuntimeError("press_rocking() needs a bench built with tilt=True")
+            raise RuntimeError("press_tilted() needs a bench built with tilt=True")
         spec = cfg.spec
         theta0 = math.radians(cfg.tilt_deg)
         overhang = spec.pitch / 2.0          # bottom face beyond the outer row of sockets
@@ -415,17 +416,17 @@ class PressBench:
             trigger_depth = spec.stud_h - overhang * math.tan(theta0) - 0.0002
         start = float(self.data.qpos[self._ram_qadr])
         t0 = float(self.data.time)
-        rate = speed / max(self.rock_lever, 1e-6)
-        state = {"t_rock": None, "z_rock": start, "t_flat": None}
+        rate = speed / max(self.tilted_press_lever, 1e-6)
+        state = {"t_tilted": None, "z_tilted": start, "t_flat": None}
 
         def phase(t: float) -> int:
-            if state["t_rock"] is None:
+            if state["t_tilted"] is None:
                 if float(np.max(self.snap.stud_depths("brick"))) >= trigger_depth:
-                    state["t_rock"] = t
-                    state["z_rock"] = float(self.data.qpos[self._ram_qadr])
+                    state["t_tilted"] = t
+                    state["z_tilted"] = float(self.data.qpos[self._ram_qadr])
                 return 1
             if state["t_flat"] is None:
-                if theta0 - rate * (t - state["t_rock"]) <= 0.0:
+                if theta0 - rate * (t - state["t_tilted"]) <= 0.0:
                     state["t_flat"] = t
                 else:
                     return 2
@@ -436,13 +437,13 @@ class PressBench:
             if ph == 1:
                 return start - speed * (t - t0)
             if ph == 2:
-                return state["z_rock"]
-            return state["z_rock"] - speed * (t - state["t_flat"])
+                return state["z_tilted"]
+            return state["z_tilted"] - speed * (t - state["t_flat"])
 
         def tilt_cmd(t: float) -> float:
-            if state["t_rock"] is None:
+            if state["t_tilted"] is None:
                 return theta0
-            return max(0.0, theta0 - rate * (t - state["t_rock"]))
+            return max(0.0, theta0 - rate * (t - state["t_tilted"]))
 
         if travel is None:
             travel = cfg.start_gap + 2.0 * spec.stud_h
@@ -545,12 +546,13 @@ def quasi_static_band(params: SnapParams, stud_h: float) -> tuple[float, float]:
     return params.engage_depth, hi
 
 
-def measure_rocking_ratio(
+def measure_tilted_press_ratio(
     params: SnapParams,
     tilt_deg: float = 2.0,
     cfg: BenchConfig | None = None,
 ) -> dict:
-    """Press one brick flat and once rocked, and report the peak forces and their ratio.
+    """Press one brick flat and once with the tilted press, and report the peak forces and
+    their ratio.
 
     Both runs use the same brick, the same studs, the same gauge and the same snap parameters;
     only the tool's grip and its motion differ. The ratio is bench test 4, and what it comes
@@ -561,27 +563,29 @@ def measure_rocking_ratio(
 
     flat_bench = PressBench(ColletSnap(params), cfg or BenchConfig())
     flat = flat_bench.press()
-    rock_bench = PressBench(ColletSnap(params), rocking_config(tilt_deg=tilt_deg))
-    rock = rock_bench.press_rocking()
+    tilted_press_bench = PressBench(ColletSnap(params), tilted_press_config(tilt_deg=tilt_deg))
+    tilted = tilted_press_bench.press_tilted()
     return {
         "curve": params.curve,
         "tilt_deg": tilt_deg,
         "flat": flat,
-        "rock": rock,
+        "tilted_press": tilted,
         "flat_peak": flat.peak_force,
-        "rocking_peak": rock.peak_force,
-        "ratio": rock.peak_force / max(flat.peak_force, 1e-9),
+        "tilted_press_peak": tilted.peak_force,
+        "ratio": tilted.peak_force / max(flat.peak_force, 1e-9),
         "flat_seated": flat_bench.seated(),
-        "rocking_seated": rock_bench.seated(),
+        "tilted_press_seated": tilted_press_bench.seated(),
         "flat_depth_spread": float(np.max(flat.depths.max(axis=1) - flat.depths.min(axis=1))),
-        "rocking_depth_spread": float(np.max(rock.depths.max(axis=1) - rock.depths.min(axis=1))),
-        "peak_wrist_torque": float(np.max(np.abs(rock.wrist_torque))),
-        "warnings": int(flat.warnings + rock.warnings),
+        "tilted_press_depth_spread": float(
+            np.max(tilted.depths.max(axis=1) - tilted.depths.min(axis=1))
+        ),
+        "peak_wrist_torque": float(np.max(np.abs(tilted.wrist_torque))),
+        "warnings": int(flat.warnings + tilted.warnings),
     }
 
 
-def rocking_config(tilt_deg: float = 4.0, spec: BrickSpec = DUPLO, ny: int = 4) -> BenchConfig:
-    """The bench set-up for a rocking press: tipped brick, tool held at the trailing edge."""
+def tilted_press_config(tilt_deg: float = 4.0, spec: BrickSpec = DUPLO, ny: int = 4) -> BenchConfig:
+    """The bench set-up for a tilted press: tipped brick, tool held at the trailing edge."""
 
     edge = (ny - 1) / 2.0 * spec.pitch
     return BenchConfig(
