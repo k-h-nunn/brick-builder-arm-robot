@@ -214,31 +214,42 @@ def test_the_search_gives_up_once_it_has_swept_its_whole_disc():
 
 
 def test_the_default_spiral_covers_its_disc_inside_one_episode_and_the_specs_does_not():
-    """Why ``spiral_pitch`` deviates from the spec's 0.5 mm: both pitches cover the disc, but
-    only the coarse one fits in the 200-tick horizon, and the measured 3 mm capture basin of a
-    2x4 means the fine one is six times finer than the task needs."""
+    """Why ``spiral_pitch`` deviates from the spec's 0.5 mm, and what the coarse pitch does and
+    does not guarantee: through the interior it is within half a pitch of every point (swept
+    going out, and again one turn further out coming back nearby), but the spiral ends mid-turn,
+    so its outer rim is only swept from one side and the worst gap there is bigger than half a
+    pitch -- see :class:`~brick_builder.control.primitives.PressConfig`'s docstring."""
     coarse_x, coarse_y = primitives._spiral_path(PressConfig())
     fine_x, fine_y = primitives._spiral_path(PressConfig(spiral_pitch=0.0005))
     assert len(coarse_x) < 100, len(coarse_x)
     assert len(fine_x) > 200, len(fine_x)   # more than the whole 200-tick episode, on its own
 
-    # Every point of the 4 mm disc is brought inside the measured 3 mm capture basin at some
-    # point of the sweep. Half a pitch (1.25 mm) is the bound away from the outer edge; the
-    # outermost ring is only crossed once, so a point there can be a whole pitch off -- still
-    # well inside the basin, which is the claim that matters.
     path = np.column_stack([coarse_x, coarse_y])
+
+    # Interior of the disc (up to one half-pitch short of the outer radius): every point is
+    # within about half a pitch of the nearest sample of the sweep.
     rng = np.random.default_rng(0)
-    worst_inner, worst_outer = 0.0, 0.0
-    for _ in range(300):
+    worst_inner = 0.0
+    for _ in range(2000):
         angle = rng.uniform(0, 2 * math.pi)
-        radius = math.sqrt(rng.uniform()) * 4.0      # mm, the whole search disc
+        radius = math.sqrt(rng.uniform()) * (4.0 - 0.5 * 2.5)   # mm, stays off the outer rim
         point = np.array([radius * math.cos(angle), radius * math.sin(angle)])
         gap = float(np.min(np.linalg.norm(path - point, axis=1)))
-        if radius <= 4.0 - 0.5 * 2.5:
-            worst_inner = max(worst_inner, gap)
-        worst_outer = max(worst_outer, gap)
+        worst_inner = max(worst_inner, gap)
     assert worst_inner <= 0.5 * 2.5 + 0.2, worst_inner
-    assert worst_outer <= 3.0, worst_outer
+
+    # The outer rim itself, swept on a fine angular grid (deterministic, not a random sample --
+    # this is exactly the boundary case the claim is about). The spiral's last ring is not
+    # closed, so this is not "within half a pitch": measured worst gap 2.23 mm, not 1.25 mm.
+    # Still comfortably inside the measured 3 mm capture basin of a 2x4
+    # (docs/guide/04-environments.md, "Scripted press and the press environment"), which is the
+    # claim that actually matters for the search to still find the sockets from there.
+    thetas = np.linspace(0.0, 2.0 * math.pi, 3600, endpoint=False)
+    ring = np.column_stack([4.0 * np.cos(thetas), 4.0 * np.sin(thetas)])
+    gaps = np.min(np.linalg.norm(path[None, :, :] - ring[:, None, :], axis=2), axis=1)
+    worst_outer = float(np.max(gaps))
+    assert 2.0 <= worst_outer <= 2.5, worst_outer
+    assert worst_outer < 3.0, "the outer-rim gap must still stay inside the capture basin"
     assert len(fine_y) == len(fine_x)
 
 
