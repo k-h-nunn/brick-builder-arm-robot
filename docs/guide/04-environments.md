@@ -8,11 +8,17 @@ first task built on them, used to prove the whole multi-rate loop end to end.
 `AlignFromTokens-v0` subclasses the same `ArmEnv` described here.
 
 !!! note "Measurement status"
-    Results on this page that depend on arm positioning or press success (scripted press,
-    `PressFromHeld`, `AlignFromTokens`, the positioning dead band, deflection under load) were
-    measured before the servo model's encoder was moved to the output shaft
+    Most results on this page that depend on arm positioning or press success were measured
+    before the servo model's encoder was moved to the output shaft
     ([Robot and servo model](03-robot-and-servo-model.md)) and have not been re-measured.
-    Current closed-loop results are in [Closed-loop videos](../demos/videos.md).
+    Re-measured 2026-09-25, after the correction: the scripted (no-learning) Reach baseline, the
+    scripted-press-vs-oracle table and the single-episode press cost figures (both below), and
+    `AlignFromTokens`' settling re-measurement behind its success tolerance (`align_env.py`,
+    `SUCCESS_TOL_POS`). Still predating the correction, and not re-run this pass because each
+    needs training a policy on an arm environment or a multi-thousand-episode sweep past this
+    pass's time budget: the ~2 200-episode press baseline curve and misalignment sweep, the first
+    PPO press run, and every trained-policy result on `Reach`, `PressFromHeld` or
+    `AlignFromTokens`. Current closed-loop results are in [Closed-loop videos](../demos/videos.md).
 
 ## Purpose
 
@@ -174,6 +180,15 @@ bricks, no vision; grip and compliance frozen. The residual clips to a box aroun
 - Single-process `env.step()` rate, random actions: **1 538 steps/s**
   (`brick_builder.envs.base_env.measure_step_rate`, 2 000 steps after a 200-step warm-up, load
   average 1.1; full table and tick breakdown: [Throughput](#throughput)).
+- **Scripted (no learning) baseline**, added 2026-09-25 after the servo-encoder correction
+  (`docs/guide/03-robot-and-servo-model.md`): the same hand-written P controller
+  (`tests/envs/test_reach_env.py::test_a_hand_written_p_controller_closes_most_of_the_distance_to_goal`
+  generalized across seeds), 20 held-out seeds, gravity feedforward on, no learned residual.
+  **2/20** reach the literal 3 mm / 10-tick success band; final TCP error mean 2.75 mm, median
+  2.52 mm, max 5.71 mm. This is the honest floor a zero-residual policy starts from: inside the
+  roughly 4-5 mm Coulomb-friction deadband this page already documents (below), so a controller
+  with no dithering clears the literal band on some seeds by luck rather than reliably, which is
+  exactly what the PPO result right below this bullet exists to close.
 - PPO (`brick_builder.rl.ppo_asym`), 6 async processes, CPU, `total_steps=307200` (set from a
   measured ~512 effective steps/s to fit a 12-minute budget): training finished in **505 s**
   (8.4 min), mean return rising from -20.6 (update 0) to a plateau near +8.4 (update ~150 of 200;
@@ -394,8 +409,12 @@ clearance 0.20 mm), weld grasp.
   fourteen times slower than `Reach`. 79 % of the tick is `mj_step` (held 2×4 in contact, eight
   friction-joint bodies, twenty-four extra degrees of freedom; breakdown: [Throughput](#throughput)).
   Six processes: about 350 steps/s total; a million environment steps ≈ 48 minutes.
-- **Press cost.** Clean 2×4, level 0: about 74 ticks (1.5 s), 5 mm hover to success band, peak
-  12-14 N. 2×2: quicker, about 58 ticks, about 11 N (four studs, not eight).
+- **Press cost.** Re-measured 2026-09-25, after the servo-encoder correction (below). Clean 2×4,
+  level 0: 69 ticks (1.4 s), peak 8.9 N. 2×2: 134 ticks (2.7 s), peak 9.3 N (one seed each; the
+  previously published numbers were 74 ticks/12-14 N for the 2×4 and 58 ticks/11 N for the 2×2 —
+  the 2×4 is now faster and softer, since the corrected arm arrives on target instead of pressing
+  through several millimetres of hidden play; the 2×2's tick count moved the other way, which a
+  single seed does not explain and a wider re-run should check).
 - **Capture basin**, straight press, no search: 2×4 seats up to about 3 mm lateral error, 2×2 up
   to about 2 mm — sets the spiral pitch.
 - **Yaw is less forgiving than lateral error.** Capture gate `SnapParams.capture_lateral` =
@@ -408,24 +427,42 @@ clearance 0.20 mm), weld grasp.
 **Scripted press vs. a privileged oracle, by level** (10 episodes each, no domain randomization,
 2×4; misalignment drawn from the level's own box, lateral/yaw/tilt varying together).
 `oracle_action` reads the true misalignment and cancels it; not a policy, but a check for whether
-a learner has anything to gain:
+a learner has anything to gain. Re-measured 2026-09-25 after the servo-encoder correction moved
+the encoder to the output shaft (`docs/guide/03-robot-and-servo-model.md`); the table below
+replaces the pre-correction one:
 
 | level | scripted | mean return | oracle | mean return |
 |---|---|---|---|---|
-| 0 (±1 mm, 2°) | 9/10 | +16.7 | 10/10 | +18.2 |
-| 1 (±2 mm, 4°) | 3/10 | +4.2 | 8/10 | +15.0 |
-| 2 (±4 mm, 8°) | 1/10 | −1.8 | 9/10 | +16.6 |
-| 3 (±6 mm, 12°) | 1/10 | −1.9 | 2/10 | +1.8 |
+| 0 (±1 mm, 2°) | 10/10 | +18.3 | 10/10 | +18.3 |
+| 1 (±2 mm, 4°) | 10/10 | +18.3 | 10/10 | +18.3 |
+| 2 (±4 mm, 8°) | 10/10 | +18.3 | 10/10 | +18.3 |
+| 3 (±6 mm, 12°) | 10/10 | +18.3 | 10/10 | +18.3 |
 
-The gap between levels 1 and 2 is large: the oracle (lift, correct, press) turns a 10-30 % task
-into an 80-90 % one, using only signals the critic already has. Level 3 defeats the oracle too,
-because of yaw: at ±12° the brick must rotate more than the residual can manage before contact,
-and the lateral error falls outside the search radius. Pure yaw, no lateral error: scripted 0/8 at
-both 2° and 4°, oracle 8/8 at both.
+**This is a different result, not a rounding change: before the correction, scripted collapsed
+from 9/10 at level 0 to 1/10 by level 2, and the oracle's own gap (turning a 10-30 % task into an
+80-90 % one, defeated again by yaw at level 3) was the headline finding of this whole table.**
+Both numbers are gone. The reason is the grasp mode: `PressFromHeld` welds the brick to the tool
+(`grasp_mode="weld"` in `scene_config`), so once the arm arrives within the spiral search's own
+capture radius the search's trigger — the tool dropping into a socket — fires the way it is meant
+to, the same mechanism the pick-and-place bench's friction grip could not use
+(`docs/guide/02-simulator-and-bricks.md`, "Brick seating with the stock gripper"). Before the
+correction, the tool arrived several millimetres off and the search rarely got the chance to run
+at all; after it, the tool arrives inside the search's own reach on every one of these 40 episodes
+per condition, at every level up to ±6 mm / ±12°. The old "pure yaw, no lateral error: scripted
+0/8, oracle 8/8" sub-measurement is not re-run here (out of this pass's budget) — level 3 already
+includes ±12° yaw and now succeeds outright, so that finding is very likely stale too, but this
+page does not claim a number it did not measure. Level 4/5 (two-brick) episodes are likewise not
+re-run this pass.
 
-**Scripted baseline curve** (target for the learned press): 100 episodes per point, one
-misalignment axis at a time, exact magnitude in a random direction, level 0 dynamics, no
-randomization (`docs/media/envs/press_baseline_curve.png`; raw counts
+**Scripted baseline curve** (target for the learned press) — **predates the servo-encoder
+correction and was not re-run this pass (2 200 episodes, ~36 min at one process against this
+pass's 30-minute budget); read it as history, not current behaviour.** The 40-episode oracle
+table just above, measured after the correction at the same misalignment magnitudes this curve
+covers (level 3 = ±6 mm / ±12°), scored 10/10 everywhere this curve shows single digits, so the
+decay below almost certainly no longer holds; it is being kept rather than deleted because no
+replacement has been measured yet. 100 episodes per point, one misalignment axis at a time, exact
+magnitude in a random direction, level 0 dynamics, no randomization
+(`docs/media/envs/press_baseline_curve.png`; raw counts
 `runs/press_baseline/curve.json`; 1 451 s on six processes):
 
 | lateral | 0 mm | 1 mm | 2 mm | 3 mm | 4 mm | 5 mm | 6 mm |

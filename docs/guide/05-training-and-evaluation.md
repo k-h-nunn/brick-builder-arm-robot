@@ -10,11 +10,17 @@ recipe](#sac-the-off-policy-fallback-recipe)) — tests of the implementations t
 any brick_builder environment.
 
 !!! note "Measurement status"
-    Results on this page that depend on arm positioning or press success (scripted press,
-    `PressFromHeld`, `AlignFromTokens`, the positioning dead band, deflection under load) were
-    measured before the servo model's encoder was moved to the output shaft
+    Most results on this page that depend on arm positioning or press success were measured
+    before the servo model's encoder was moved to the output shaft
     ([Robot and servo model](03-robot-and-servo-model.md)) and have not been re-measured.
-    Current closed-loop results are in [Closed-loop videos](../demos/videos.md).
+    Re-measured 2026-09-25, after the correction: the scripted-baseline row of the press smoke
+    table below (20 episodes, level 0), and both Pendulum learning-curve figures (PPO and SAC;
+    Pendulum-v1 is the RL core's own toy task, not a `brick_builder` arm environment, so
+    re-running it is not an arm-environment training run). Still predating the correction, and
+    not re-run this pass since each needs training a policy on an actual `brick_builder` arm
+    task: the 6-update press smoke checkpoint row, the Reach/Press/Align PPO and SAC training
+    runs referenced throughout this page. Current closed-loop results are in
+    [Closed-loop videos](../demos/videos.md).
 
 ## Purpose
 
@@ -328,21 +334,22 @@ hidden_critic=(128, 128), async_envs=False)`, seed 0:
 
 ![SAC Pendulum learning curve](../media/rl/sac_pendulum_learning_curve.png)
 
-Measured on this project's dev machine (CPU only, `SyncVectorEnv`, under sustained load from an
-unrelated CPU-heavy job on this shared machine — `cat /proc/loadavg` read 10.37 12.83 10.21 at the
-moment the run finished): mean return over 10 held-out episodes reaches **-168.3** (up from about
--1200 for a random policy), in **69.2 seconds** wall-clock for training plus evaluation — inside
-the 3-minute acceptance budget even under this load. `hidden_critic=(128, 128)` here (not
-`SACConfig`'s (256, 256) default) is deliberate for this 3-dimensional toy task, not a general
-recommendation (see the update-throughput measurement below).
+Re-measured and the plot above regenerated 2026-09-25 (this project's dev machine, CPU only,
+`SyncVectorEnv`, shared with the other packages' own compute at the time): mean return over 10
+held-out episodes reaches **-167.7** (up from about -1200 for a random policy), in **76.7
+seconds** wall-clock for training plus evaluation — inside the 3-minute acceptance budget.
+`hidden_critic=(128, 128)` here (not `SACConfig`'s (256, 256) default) is deliberate for this
+3-dimensional toy task, not a general recommendation (see the update-throughput measurement
+below).
 
-> **Predates rl-eval-export-1.** Measured before the fix to `_flush_n_step`'s truncation handling
-> (a time-limit truncation no longer stores `done=1` and drops the bootstrap the way a true
-> termination does; it now stores `done=0` and bootstraps from the episode's real final
-> observation). Re-run post-fix (seed 0, same config): still clears the acceptance bar, mean return
-> **-168.0** over 10 held-out episodes — nearly unchanged for this toy task, though not
-> re-measured carefully enough to replace the plot or the "-168.3" figure as canonical. PPO's
-> number below did change materially (its own note).
+> **rl-eval-export-1.** This run (and the plot above) already includes the fix to
+> `_flush_n_step`'s truncation handling (a time-limit truncation no longer stores `done=1` and
+> drops the bootstrap the way a true termination does; it now stores `done=0` and bootstraps
+> from the episode's real final observation). Two earlier measurements bracket it and are kept
+> for the history: pre-fix, **-168.3** over 69.2 s; a first post-fix check at the same seed and
+> config, **-168.0**, called "not re-measured carefully enough to replace the plot" at the time.
+> This run is that replacement. The number barely moved across all three (this toy task's return
+> is not sensitive to the fix); PPO's own number below did change materially.
 
 `tests/rl/test_sac_asym.py::test_update_throughput_on_brick_builder_sized_networks` measures
 `sac_update`'s own cost directly (random tensors, no environment stepping) at the observation/action
@@ -375,21 +382,21 @@ not the arm's `PPOConfig` defaults), and evaluates for 10 held-out episodes.
 
 ![Pendulum learning curve](../media/rl/pendulum_learning_curve.png)
 
-Measured on this project's dev machine (CPU only, `n_envs=8`, `SyncVectorEnv`): mean return
-improves from about -1200 (random policy) to -271.6 over held-out episodes, in about 137 seconds
-wall-clock for training plus evaluation — inside the acceptance test's 4-minute budget.
+Re-measured and the plot above regenerated 2026-09-25 (this project's dev machine, CPU only,
+`n_envs=8`, `SyncVectorEnv`): mean return improves from about -1200 (random policy) to **-229.3**
+over held-out episodes, in **128.8 seconds** wall-clock for training plus evaluation — inside the
+acceptance test's 4-minute budget.
 
-> **Predates rl-eval-export-1.** This -271.6 figure (and the plot above) predates the fix to PPO's
-> GAE bootstrap: every episode here truncates at Pendulum's 200-step time limit, and the pre-fix
-> code treated that as a true termination, zeroing the value bootstrap instead of bootstrapping
-> from the truncated episode's real final observation. The plot has not been regenerated against
-> the fixed code, but a controlled before/after comparison at reduced scale (150,000 of the full
-> 400,000 steps, same seed and hyperparameters) measured mean return over 20 held-out episodes at
-> **-499.5 (fixed) vs. -990.9 (pre-fix)** — nearly 2x better at the same step count, the two
-> learning curves identical through the first update (same actions, since only the value target
-> differs) and diverging in the fixed run's favor after. The full acceptance test still passes
-> post-fix (mean return well past the -300 bar); -271.6 is a pre-fix number, to be re-measured
-> (and the plot regenerated) the next time this page's media is rebuilt.
+> **rl-eval-export-1.** This run (and the plot above) already includes the fix to PPO's GAE
+> bootstrap: every episode here truncates at Pendulum's 200-step time limit, and the pre-fix code
+> treated that as a true termination, zeroing the value bootstrap instead of bootstrapping from
+> the truncated episode's real final observation. The number this replaces, **-271.6**, was
+> itself a pre-fix figure kept past the fix landing because the plot had not been regenerated; a
+> controlled before/after comparison at reduced scale (150,000 of the full 400,000 steps, same
+> seed and hyperparameters) had measured mean return over 20 held-out episodes at **-499.5
+> (fixed) vs. -990.9 (pre-fix)** at that scale — nearly 2x better at the same step count. This
+> run is the full-budget, full-plot replacement: -229.3 clears the acceptance bar with more room
+> than -271.6 did, consistent with that reduced-scale comparison.
 
 ## Reach: a trained skill
 
@@ -409,14 +416,21 @@ budget (`--sync-envs --n-envs 4 --total-steps 6144`, i.e. 6 PPO updates — a fe
 
 | policy | level | episodes | successes | 95% Wilson CI |
 |---|---|---|---|---|
-| scripted baseline (`press_env.scripted_action`) | 0 | 20 | 16 | [0.583, 0.927] |
+| scripted baseline (`press_env.scripted_action`) | 0 | 20 | 20 | [0.839, 1.000] |
 | 6-update smoke checkpoint | 0 | 20 | 15 | [0.531, 0.888] |
 
-The two overlap completely: six PPO updates move the actor's weights off their random init and
-nothing more. This checks that the training path (`scripts/train.py` -> `PressFromHeld-v0` ->
-`scripts/eval.py`) runs end to end, not that the residual policy has learned anything. A real run
-needs `press.yaml`'s full budget (or several times it — see open issues) before the sweep
-comparison (`scripts/eval.py --sweep press-misalign`) means anything.
+The scripted-baseline row is re-measured (2026-09-25, after the servo-encoder correction); it
+moved from 16/20 to 20/20 for the same reason the press-vs-oracle table in
+[Environments](04-environments.md#measured-numbers-press) did — `PressFromHeld`'s weld grasp lets
+the spiral search's socket-drop trigger fire once the corrected arm actually arrives within its
+reach. **The 6-update smoke checkpoint row is not re-run**: reproducing it means training a PPO
+policy on `PressFromHeld-v0`, an arm environment, which this pass does not do. Read the two rows
+as no longer comparable — the checkpoint's 15/20 predates the correction, the baseline's 20/20
+does not — rather than re-concluding "the two overlap." Six PPO updates moving the actor's
+weights off their random init is still all that row checks: the training path (`scripts/train.py`
+-> `PressFromHeld-v0` -> `scripts/eval.py`) runs end to end, not that the residual policy has
+learned anything. A real run needs `press.yaml`'s full budget (or several times it — see open
+issues) before the sweep comparison (`scripts/eval.py --sweep press-misalign`) means anything.
 
 ## AlignFromTokens: measured results
 
