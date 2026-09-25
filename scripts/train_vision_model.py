@@ -62,20 +62,18 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--device", default="cpu", choices=("cpu", "cuda"))
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--extra-split", action="append", default=[],
-                        help="an extra split (already generated under --cache) mixed into "
-                             "training in memory, on top of 'train'; repeatable")
+                        help="extra split mixed into training in memory, on top of 'train' "
+                             "(repeatable)")
     parser.add_argument("--photometric-strength", type=float, default=1.0,
-                        help="scales the photometric jitter's half-widths; 1.0 reproduces the "
-                             "original fixed ranges, 2.0 doubles them")
+                        help="photometric jitter multiplier [x fixed range]")
     parser.add_argument("--init-weights", type=Path, default=None,
-                        help="a shipped weights snapshot to fine-tune from, on a fresh --out "
-                             "(ignored once that --out already has a checkpoint.pt to resume)")
+                        help="weights snapshot to fine-tune from, fresh --out only")
     parser.add_argument("--ship-weights", dest="ship_weights", action="store_true",
                         default=None,
-                        help="write new best epochs to brick_builder/perception/weights/"
-                             "vision_model.pt (default: on for --out results/vision_model, "
-                             "off otherwise)")
-    parser.add_argument("--no-ship-weights", dest="ship_weights", action="store_false")
+                        help="write best epochs to the shipped weights file (default: on for "
+                             "--out results/vision_model, off otherwise)")
+    parser.add_argument("--no-ship-weights", dest="ship_weights", action="store_false",
+                        help="do not write to the shipped weights file")
     args = parser.parse_args(argv)
 
     from brick_builder.perception.cnn import data as data_mod
