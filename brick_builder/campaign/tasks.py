@@ -233,6 +233,7 @@ class EpisodeRecord:
             row[f"brick{i}_on_target"] = "" if b is None else b.on_target
             row[f"brick{i}_seated"] = "" if b is None else b.seated
             row[f"brick{i}_at_cell"] = "" if b is None else b.at_target_cell
+            row[f"brick{i}_at_layer"] = "" if b is None else b.at_target_layer
             row[f"brick{i}_lateral_mm"] = "" if b is None else round(b.lateral_mm, 4)
             row[f"brick{i}_depth_error_mm"] = "" if b is None else round(b.depth_error_mm, 4)
             row[f"brick{i}_replanned"] = "" if b is None else b.replanned

@@ -669,6 +669,8 @@ def _read_csv(path: Path) -> list[EpisodeRecord]:
                     index=i, cell=tuple(int(v) for v in cell),
                     seated=row[f"brick{i}_seated"] == "True",
                     at_target_cell=row[f"brick{i}_at_cell"] == "True", connected=False,
+                    # A file written before the column existed scored no layer: read as true.
+                    at_target_layer=row.get(f"brick{i}_at_layer", "") in ("", "True"),
                     lateral_mm=_f(row[f"brick{i}_lateral_mm"]),
                     depth_error_mm=_f(row[f"brick{i}_depth_error_mm"]), tilt_deg=float("nan"),
                     replanned=row[f"brick{i}_replanned"] == "True"))

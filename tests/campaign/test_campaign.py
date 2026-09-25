@@ -6,6 +6,7 @@ CSV round trip, the columns each round asks for and that a finished phase is not
 
 from __future__ import annotations
 
+import csv
 import json
 
 from brick_builder.campaign.campaign import (
@@ -100,6 +101,42 @@ def test_the_episode_csv_round_trips(tmp_path) -> None:
             == summarize_records(records)["build_2 | learned | F analytic"]["seated_on_target"])
 
 
+def test_a_brick_on_the_wrong_layer_stays_a_miss_through_the_csv(tmp_path) -> None:
+    record = EpisodeRecord(task="stack_2", seed=0, phase="evaluate", round_index=0,
+                           inverse="analytic", predictor="analytic", inverse_version="",
+                           predictor_version="", source="ideal")
+    lower = BrickRecord(index=0, cell=(4, 3, 0), seated=True, at_target_cell=True,
+                        connected=True, lateral_mm=0.1, depth_error_mm=0.0, tilt_deg=0.0)
+    upper = BrickRecord(index=1, cell=(4, 3, 1), seated=True, at_target_cell=True,
+                        connected=True, lateral_mm=0.1, depth_error_mm=0.0, tilt_deg=0.0,
+                        at_target_layer=False)
+    record.bricks = [lower, upper]
+    assert not record.success
+
+    back = _read_csv(_write_csv(tmp_path / "evaluate.csv", [record]))[0]
+    # Layer 0 is written as the two plate numbers, a higher layer as three.
+    assert [b.cell for b in back.bricks] == [(4, 3), (4, 3, 1)]
+    assert [b.at_target_layer for b in back.bricks] == [True, False]
+    assert [b.on_target for b in back.bricks] == [True, False]
+    assert not back.success
+
+
+def test_a_csv_without_the_layer_column_reads_as_on_the_layer(tmp_path) -> None:
+    records = _records("placement", "analytic", 1, n=1)
+    path = _write_csv(tmp_path / "old.csv", records)
+    with path.open(newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    fields = [k for k in rows[0] if k not in ("brick0_at_layer", "brick1_at_layer")]
+    with path.open("w", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    assert "at_layer" not in path.read_text()
+    back = _read_csv(path)[0]
+    assert back.bricks[0].at_target_layer
+    assert back.success
+
+
 def test_a_finished_phase_is_not_run_again(tmp_path) -> None:
     campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
     assert campaign._done("r1.perform") is None
@@ -156,3 +193,4 @@ def test_the_prediction_rules_are_paired_on_one_task(tmp_path) -> None:
     paired = [c for c in columns if "placement" in c["tasks"]]
     assert {c["predictor"] for c in paired} == {"analytic", "learned"}
     assert [c["tasks"] for c in paired if c["predictor"] == "analytic"] == [("placement",)]
+
