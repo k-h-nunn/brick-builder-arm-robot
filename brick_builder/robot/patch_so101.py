@@ -575,7 +575,7 @@ WRIST_CAM_DISTORTION_K2_RANGE = (0.0, 0.08)
 
 @dataclass(frozen=True)
 class CameraConfig:
-    """Everything about the wrist camera a caller may want to measure, randomize or dial in.
+    """Wrist camera configuration: resolution, lens, distortion, mount pose.
 
     Two ways to specify the lens: ``diagonal_fov_deg`` (the vendor spec, converted to MuJoCo's
     vertical ``fovy`` at ``resolution``) or measured pixel intrinsics -- ``fx_px``/``fy_px``/
@@ -585,6 +585,15 @@ class CameraConfig:
     :func:`_add_sites_and_camera`), taking whichever of ``fx_px``/``fy_px`` is given (both default
     to the other if only one is set, i.e. square pixels) and centring ``cx_px``/``cy_px`` on the
     resolution if either is left at ``None``.
+
+    The pixel-intrinsics model is not a drop-in replacement for the ``fovy`` model at runtime: a
+    compiled pixel-intrinsics camera's frustum is fixed at compile time from ``focal_pixel``/
+    ``principal_pixel``/``sensor_size``, and does not respond to a later write to
+    ``model.cam_fovy`` the way an ``fovy``-only camera does. ``render.domain_rand``'s fovy jitter
+    and ``perception.views``/``perception.backproject`` all read or write ``model.cam_fovy`` (and
+    ``backproject.camera_geometry`` assumes a centred principal point) on the wrist camera; none of
+    those call sites are aware of ``CameraConfig`` yet, so a scene built with a measured-intrinsics
+    camera and then run through one of them will silently keep whatever frustum it compiled with.
 
     ``distortion_k1``/``distortion_k2`` are carried here for calibration and domain-randomization
     callers to read back -- MuJoCo's pinhole camera has no lens-distortion model, so this module
@@ -898,6 +907,17 @@ def _add_sites_and_camera(spec: mujoco.MjSpec, camera_cfg: CameraConfig) -> None
         # frame-*edge* midpoint `width / 2` (320): the two differ by half a pixel, which a
         # default (`cx_px` left at its centred value) must cancel to exactly zero offset, or
         # every "centred" measured calibration would compile a camera off-centre by construction.
+        #
+        # MuJoCo's `principal_pixel` is defined against its own camera-frame convention (+x left,
+        # looking down -z), which is mirrored left-right relative to OpenCV's image-pixel-column
+        # convention (+x/cx increasing to the right) this module's `cx`/`cy` are given in: passing
+        # `cx - centre` straight through renders the principal point at `centre - (cx - centre)` ==
+        # `(width - 1) - cx`, the mirror image of the requested `cx` -- caught by rendering a
+        # checkerboard with an off-centre `cx` and comparing detected corners against the OpenCV
+        # pinhole projection of their known 3D positions (see
+        # `tests/calib/test_camera_sim.py::test_off_centre_principal_point_lands_on_the_requested_side`).
+        # Negating the offset (`centre - cx`) is what makes the compiled camera's principal point
+        # land at the requested `cx`/`cy`, not its mirror image.
         fx, fy, cx, cy = camera_cfg.resolved_intrinsics_px()
         width, height = camera_cfg.resolution
         gripper.add_camera(
@@ -907,7 +927,7 @@ def _add_sites_and_camera(spec: mujoco.MjSpec, camera_cfg: CameraConfig) -> None
             resolution=[int(width), int(height)],
             sensor_size=[1.0, 1.0],
             focal_pixel=[fx, fy],
-            principal_pixel=[cx - 0.5 * (width - 1), cy - 0.5 * (height - 1)],
+            principal_pixel=[0.5 * (width - 1) - cx, 0.5 * (height - 1) - cy],
         )
     else:
         gripper.add_camera(
