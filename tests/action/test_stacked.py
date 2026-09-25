@@ -1,4 +1,4 @@
-"""A brick that goes on top of another one, rather than on the baseplate.
+"""Stacked placements: seat heights and layer scoring.
 
 The heights are a geometry question and are checked without stepping any physics: the script
 seats on the brick underneath, so every height it derives has to move up by one brick height per
@@ -20,19 +20,19 @@ from brick_builder.control.pick_place import tcp_for_foot, verify_placement
 from brick_builder.scene.compose import HeldBrick
 
 FIRST = Placement(h=2, w=2, x=4, y=3, z=0, colour="blue")
-"""The brick the second one goes on top of."""
+"""First brick, layer 0."""
 
 
 @pytest.fixture(scope="module")
 def nominal():
-    """The nominal world of a build's second cycle: the first brick already on the plate."""
+    """Nominal second-cycle world, first brick on the plate."""
     held = HeldBrick(nx=2, ny=2, colour="blue")
     scene = build_nominal_world(False, held=held, placed=[REF_YELLOW, REF_RED, FIRST])
     yield scene, held
 
 
 def _heights(scene, held, target) -> dict:
-    """Every height the script derives from one target, in metres."""
+    """Script heights for one target [m]."""
     cfg = PlaceConfig(pick=True)
     g = Geometry(scene, target, held, cfg)
     spec = scene.cfg.spec
@@ -51,7 +51,7 @@ def _heights(scene, held, target) -> dict:
 
 
 def test_a_target_with_no_layer_is_the_baseplate(nominal) -> None:
-    """The two-element target every single-brick task uses must not move a millimetre."""
+    """Two-element target: layer-0 heights, unchanged."""
     scene, held = nominal
     plain = _heights(scene, held, (4, 3))
     zero = _heights(scene, held, (4, 3, 0))
@@ -61,7 +61,10 @@ def test_a_target_with_no_layer_is_the_baseplate(nominal) -> None:
 
 
 def test_the_descent_moves_up_one_brick_height_per_layer(nominal) -> None:
-    """Hover, low dwell, press, release clearance and the push on the roof, all of them."""
+    """Descent heights: one brick height up per layer.
+
+    Hover, low dwell, press, release clearance and the push on the roof.
+    """
     scene, held = nominal
     spec = scene.cfg.spec
     ground = _heights(scene, held, (4, 3, 0))
@@ -75,7 +78,7 @@ def test_the_descent_moves_up_one_brick_height_per_layer(nominal) -> None:
 
 
 def test_the_press_aims_at_the_brick_underneath_not_the_plate(nominal) -> None:
-    """The seat height is the roof of whatever stands on the target cell."""
+    """Layer-1 seat: the top face of the brick on the target cell."""
     scene, held = nominal
     spec = scene.cfg.spec
     roof = scene.plate_top + (FIRST.z + 1) * spec.height
@@ -83,7 +86,7 @@ def test_the_press_aims_at_the_brick_underneath_not_the_plate(nominal) -> None:
 
 
 def test_the_carry_clears_what_is_already_standing_on_the_plate(nominal) -> None:
-    """The brick is carried above the tallest stack, whichever layer it is going to."""
+    """Carry height above the tallest stack, layers 0-2."""
     scene, held = nominal
     spec = scene.cfg.spec
     cfg = PlaceConfig(pick=True)
@@ -97,7 +100,7 @@ def test_the_carry_clears_what_is_already_standing_on_the_plate(nominal) -> None
 
 
 def test_the_verifier_scores_against_the_layer_it_was_sent_to(nominal) -> None:
-    """A brick on the plate is not a brick on the first one, whatever its studs say."""
+    """Layer check, layer 1: a brick on the plate fails it."""
     scene, _ = nominal
     spec = scene.cfg.spec
     name = scene.placed_names[-1]
@@ -112,6 +115,20 @@ def test_the_verifier_scores_against_the_layer_it_was_sent_to(nominal) -> None:
     assert a_layer_up.at_target_cell, "the cell is the same one either way"
 
 
+def test_the_verifier_checks_the_layer_on_the_baseplate_too() -> None:
+    """Layer check, layer 0: a brick on top of another brick fails it."""
+    upper = Placement(h=2, w=2, x=4, y=3, z=1, colour="blue")
+    scene = build_nominal_world(False, held=HeldBrick(nx=2, ny=2, colour="blue"),
+                                placed=[REF_YELLOW, REF_RED, FIRST, upper])
+    spec = scene.cfg.spec
+    name = scene.placed_names[-1]
+    on_the_plate = verify_placement(scene, name, (4.5, 3.5, 0))
+    assert not on_the_plate.at_target_layer, "a brick one layer up scored as on the plate"
+    assert on_the_plate.height_error_mm == pytest.approx(1e3 * spec.height, abs=0.5)
+    assert not on_the_plate.success
+    assert verify_placement(scene, name, (4.5, 3.5, 1)).at_target_layer
+
+
 def test_the_verifier_names_the_body_underneath(nominal) -> None:
     scene, _ = nominal
     check = verify_placement(scene, scene.placed_names[-1], (4.5, 3.5, 0))
@@ -120,7 +137,7 @@ def test_the_verifier_names_the_body_underneath(nominal) -> None:
 
 @pytest.mark.slow
 def test_a_nominal_two_brick_tower_lands_both_bricks_on_their_cells() -> None:
-    """One brick on the plate, one on top of it, in a world with nothing wrong with it.
+    """Nominal two-brick tower: both bricks seated on target.
 
     The world is exactly the one the sequences were recorded in, so anything the loop has to
     correct for here is its own.

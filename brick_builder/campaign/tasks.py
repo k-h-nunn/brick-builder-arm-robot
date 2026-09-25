@@ -173,7 +173,7 @@ class BrickRecord:
     """True when this brick's cycle was run a second time after `remaining_steps` still listed it."""
 
     at_target_layer: bool = True
-    """Target layer check. Always true for a brick on the plate."""
+    """Target layer check: bottom face within half a brick height of the layer's height."""
 
     height_error_mm: float = 0.0
     """Bottom face, minus the height the target layer puts it at [mm]."""

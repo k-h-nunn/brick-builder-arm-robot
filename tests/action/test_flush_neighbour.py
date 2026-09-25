@@ -1,4 +1,4 @@
-"""A cell with a brick already standing flush against it.
+"""Flush-neighbour geometry: align hover and aim offset.
 
 Two bricks on adjacent cells have 0.2 mm of air between them, which is under the loop's own
 lateral floor, and a neighbour's studs stand 3.7 mm above the height the align dwell hovers at.
@@ -16,7 +16,7 @@ from brick_builder.bricks.structures import Placement
 from brick_builder.scene.compose import HeldBrick
 
 FIRST = Placement(h=2, w=2, x=4, y=3, z=0, colour="blue")
-"""The brick the second one is pressed against."""
+"""First brick, layer 0: the neighbour of cells (2, 3), (6, 3) and (4, 1)."""
 
 HELD = HeldBrick(nx=2, ny=2, colour="blue")
 
@@ -32,7 +32,10 @@ def _geometry(scene, target, **kw):
 
 
 def test_flush_neighbours_have_two_tenths_of_a_millimetre_between_them(world) -> None:
-    """The footprint is `n * pitch` minus one clearance, so the gap is one clearance."""
+    """Gap between flush neighbours [mm]: one clearance.
+
+    The footprint is `n * pitch` minus one clearance.
+    """
     spec = world.cfg.spec
     footprint = 2 * spec.pitch - spec.clearance
     gap = 2 * spec.pitch - footprint
@@ -57,7 +60,7 @@ def test_the_aim_leans_away_from_what_is_standing_beside_the_cell(world, target,
 
 
 def test_a_cell_with_nothing_beside_it_is_untouched(world) -> None:
-    """The single-brick tasks' own cell: no lean, and the hover it has always had."""
+    """Cell without a neighbour: no aim offset, default hover."""
     g = _geometry(world, (4, 3, 1))
     assert not g.has_neighbour
     assert np.allclose(g.bias, 0.0)
@@ -67,13 +70,16 @@ def test_a_cell_with_nothing_beside_it_is_untouched(world) -> None:
 
 
 def test_a_brick_a_layer_down_is_not_a_neighbour(world) -> None:
-    """It is what the new brick seats on, not something it can be pressed against."""
+    """Brick one layer down: the seat, not a neighbour."""
     assert not _geometry(world, (4, 3, 1)).has_neighbour
     assert _geometry(world, (2, 3, 0)).has_neighbour
 
 
 def test_the_align_dwell_stands_above_a_neighbour_s_studs(world) -> None:
-    """20 mm over the seat is 3.7 mm under the studs of the brick beside it."""
+    """Align hover above a neighbour's stud tops.
+
+    The default hover, 20 mm over the seat, is 3.7 mm under them.
+    """
     spec = world.cfg.spec
     beside = _geometry(world, (2, 3))
     alone = _geometry(world, (4, 3, 1))
@@ -86,7 +92,7 @@ def test_the_align_dwell_stands_above_a_neighbour_s_studs(world) -> None:
 
 
 def test_the_push_on_the_roof_stays_over_the_cell(world) -> None:
-    """The lean is on the way in only. The push aims at `cell_nominal`, which does not move."""
+    """Aim offset on the descent only; the roof push at `cell_nominal`."""
     for target, want in (((2, 3), 0.3), ((4, 3, 1), 0.0)):
         leaning = _geometry(world, target)
         square = _geometry(world, target, neighbour_bias=0.0)

@@ -825,8 +825,9 @@ class PlacementCheck:
     at_target_layer: bool = True
     """Target layer check: bottom face within half a brick height of the layer's height.
 
-    Always true on the baseplate (layer 0). On a stacked target it tells a brick seated on the
-    lower brick from one seated on the plate beside it; the lateral check covers the cell.
+    Checked on every layer, the baseplate (layer 0) included: a layer-0 brick that ends up on
+    top of another brick fails it, and on a stacked target a brick seated on the plate beside
+    the lower brick fails it. The lateral check covers the cell.
     """
 
     height_error_mm: float = 0.0
