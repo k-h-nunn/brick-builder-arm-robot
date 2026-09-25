@@ -117,6 +117,41 @@ def test_run_skill_runs_end_to_end_and_verify_agrees_with_the_depths(scene):
     )
 
 
+# ------------------------------------------------------------------------ occupancy cross-check ---
+
+
+def test_with_no_occupancy_check_given_the_field_stays_none(scene):
+    seat_z, cell = seat_and_cell(scene)
+    fsm = SkillFSM(seat_z, cell)
+    fsm.reset(fb())
+    assert fsm.seated_by_occupancy is None
+
+
+def test_the_occupancy_check_is_read_once_at_the_settled_moment_and_never_overrides_height(scene):
+    """The scene-model cross-check the module docstring describes: read once, reported
+    alongside the height verdict, never used to change it. A producer's own occupancy call has
+    failure modes (dropout, wrong cell) this module cannot audit, so a reading that disagrees
+    with the settled height must not flip that verdict -- see the module docstring."""
+    seat_z, cell = seat_and_cell(scene)
+    reset_scene(scene, np.random.default_rng(0))
+    calls = []
+
+    def occupancy_check():
+        calls.append(1)
+        # Deliberately the opposite of the height verdict this exact scene/seed produces (a
+        # blind 2x4 press does not seat here -- see the end-to-end test above).
+        return True
+
+    fsm = SkillFSM(seat_z, cell, occupancy_check=occupancy_check)
+    report = run_skill(scene, fsm, max_ticks=500)
+
+    assert len(calls) == 1, "the occupancy readout should be taken exactly once, at the settle"
+    assert fsm.seated_by_occupancy is True
+    assert report["seated_by_occupancy"] is True
+    assert fsm.seated_by_height is False, "a disagreeing occupancy reading must not override this"
+    assert report["seated_by_height"] is False
+
+
 def test_verify_tells_a_seated_brick_from_a_loose_one(scene):
     """A small, fast version of the discrimination check: the two groups have to separate with a
     gap, not merely land on either side of a threshold by luck."""
