@@ -106,4 +106,6 @@ class ReachEnv(ArmEnv):
         return False  # only success ends this episode early; otherwise it runs to the horizon
 
     def episode_result_extra(self) -> dict:
-        return {"params": {"final_error_m": self._true_error()}}
+        # No brick, no plate the gripper can reach past its own residual box (see scene_config):
+        # nothing in this task can be broken, so the acceptance criterion is vacuously true.
+        return {"structure_intact": True, "params": {"final_error_m": self._true_error()}}

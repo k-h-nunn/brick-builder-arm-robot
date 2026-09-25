@@ -221,8 +221,15 @@ class PressConfig:
       straight press is about 3 mm for a 2x4 and 2 mm for a 2x2, so a 0.5 mm pitch covers the
       same disc six times over: 100 mm of spiral path, 6.7 s (334 ticks) at ``spiral_speed``,
       which does not fit inside the 200-tick (4 s) horizon the spec gives the press environment,
-      let alone leave time for the press that follows it.  2.5 mm still passes within 1.25 mm of
-      every point of the disc -- well inside the basin -- in 20 mm of path and 1.4 s (69 ticks).
+      let alone leave time for the press that follows it.  2.5 mm still sweeps every point of the
+      disc within 20 mm of path and 1.4 s (69 ticks) -- comfortably inside the basin through most
+      of the disc (worst gap 1.24 mm, about half the pitch, for radii up to half a pitch short of
+      the edge), but the spiral ends mid-turn, so the outer band is not swept from both sides: the
+      worst gap there is 2.23 mm, not 1.25 mm (measured by :func:`_spiral_path`, see
+      ``test_the_default_spiral_covers_its_disc_inside_one_episode_and_the_specs_does_not``).
+      Still comfortably inside the measured basin (3 mm for a 2x4), so this is not fixed by
+      completing the last turn: doing so would add most of a revolution at the outer radius
+      (another 80-plus ticks) to close a 1 mm gap the basin already tolerates.
     - ``stall_time``/``stall_speed``: the tool must have descended less than 0.7 mm/s averaged
       over the last 0.4 s before the press believes it is stuck.  Averaging over a window rather
       than differencing two ticks matters: the encoder quantizes to about 0.1 mm at the TCP, so a

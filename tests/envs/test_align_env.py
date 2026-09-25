@@ -367,6 +367,19 @@ def test_unknown_colour_is_rejected():
 # ------------------------------------------------------------------------- success criterion ---
 
 
+def test_structure_intact_is_reported_true_since_there_is_nothing_to_break():
+    """One loose brick, nothing placed and nothing snapped to it (see ``scene_config``): the
+    acceptance criterion the campaign checks (``EpisodeResult.structure_intact``) has to be
+    reported explicitly rather than left at whatever the base class defaults to -- see
+    ``episode_result_extra``."""
+    env = AlignFromTokensEnv(horizon=3, seed=0)
+    env.reset(seed=0)
+    info = {}
+    for _ in range(3):
+        obs, reward, terminated, truncated, info = env.step(np.zeros(8, dtype=np.float32))
+    assert info["structure_intact"] is True
+
+
 def test_success_streak_needs_position_and_yaw_within_tolerance_for_ten_ticks():
     env = AlignFromTokensEnv(horizon=20, seed=0)
     env.reset(seed=0)
@@ -397,12 +410,14 @@ def test_success_streak_resets_when_error_leaves_the_band():
 @pytest.mark.slow
 def test_the_scripted_go_to_token_controller_beats_chance_at_zero_noise():
     """Zero residual, zero noise: the scripted `MoveTo`-based primitive alone must land inside
-    the success band on a clear majority... in practice this arm's own Coulomb-friction servo
-    deadband (the same ~4-5 mm floor `docs/guide/04-environments.md` documents for Reach's hand-
-    written P controller) means a *scripted* controller with no learned dithering residual does
-    not reach the strict 3 mm / 5 deg band every time. What is asserted here is the honest,
-    measured floor: comfortably better than never, and every episode's final position error is at
-    least within the same rough deadband (under 15 mm) -- i.e. the controller reliably gets close,
+    the success band on a clear majority... in practice a *scripted* controller with no learned
+    dithering residual does not reach the strict 3 mm / 5 deg band every time. The shortfall is
+    bimodal, not a smooth deadband: 11/20 seeds settle at 1.0-1.7 mm, 9/20 at 7.6-11.8 mm (see the
+    comment above `SUCCESS_TOL_POS` in `align_env.py` for the traced cause -- the approaching tool
+    contacting and shoving the loose brick out from under the single vision reading this scripted
+    controller ever gets, not arm friction, IK reachability or the brick settling on its own).
+    What is asserted here is the measured floor: comfortably better than never, and every
+    episode's final position error stays under 20 mm -- i.e. the controller reliably gets close,
     even where it does not clear the literal success flag.
     """
     env = AlignFromTokensEnv(horizon=150, seed=0, producer="surrogate", token_noise_mm=0.0,

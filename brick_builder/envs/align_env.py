@@ -69,6 +69,44 @@ from brick_builder.robot.kinematics import euler_zyx
 from brick_builder.robot.patch_so101 import WRIST_CAM, gripper_angle_for_width
 from brick_builder.scene.compose import SceneConfig, grasp_pose
 
+# 3 mm / 5 deg is the spec's own success band (docs/guide/06-perception.md, "From tokens to a
+# target"), not a number this file chose. Re-measured (2026-09-25) on 20 seeds, zero token
+# noise/dropout/yaw-jitter -- isolating the scripted go-to-token controller's own settling from
+# everything perception-side: `final_pos_error_m` is bimodal, not the smooth ~5 mm spread measured
+# before the servo-encoder correction. 11/20 seeds land at 1.0-1.7 mm, comfortably inside this
+# tolerance; 9/20 land at 7.6-11.8 mm, comfortably outside it (mean 5.54 mm, range 1.0-11.8 mm --
+# almost unchanged from the pre-correction figure, 5.1 mm / 2-14 mm). The *generic* joint-settling
+# error the encoder correction fixed fell from 3.6 mm to 0.43 mm
+# (docs/guide/03-robot-and-servo-model.md), but this environment's own error barely moved, so
+# settling was never the bottleneck here -- and it is not IK reachability either: instrumented on
+# the same 20 seeds, `ik_stats` shows zero fallbacks and a per-tick IK residual under 0.15 mm on
+# every single seed, bad cluster included (the task's own 35.8 % IK-fallback figure,
+# docs/guide/04-environments.md#ik-convergence-behavior, comes from a *different* measurement --
+# random-policy rollouts with the residual driven to the edge of its box -- and does not apply to
+# this zero-residual controller). Nor is it the loose brick settling on its own after being
+# placed: with the arm held at `LOOK_TCP` for the whole episode instead of approaching (a
+# parked-arm control on the same seeds), every bad-cluster brick checked moves under 0.31 mm on
+# its own, an order of magnitude below the gap this splits on. The actual cause, traced on these
+# seeds: a fresh vision token only ever arrives once, at reset, while the tool is still at
+# `LOOK_TCP`; `MoveTo` then ramps toward that one reading and, once it leaves `LOOK_TOL_POS` of
+# `LOOK_TCP`, nothing brings it back into range to refresh (confirmed: the tool re-enters that
+# zone on 0 of these 20 seeds). That stale aim point would be harmless if the brick stayed where
+# it was read, but the *approaching* tool disturbs it: on every bad-cluster seed checked (0, 3, 5,
+# 8, 17) the brick starts moving at tick 44-47 of 150, the moment the descending tool passes within
+# about 27-32 mm of it -- a near approach, not yet a touchdown, but close enough to shove the
+# loose brick's raised profile 3.9-9.3 mm before the grasp closes (parked-control shift on those
+# same seeds: 0.15-0.31 mm). The one good-cluster seed checked (1) is the opposite: the tool is
+# already close enough that contact happens almost immediately (tick 4), and moves the brick less
+# (0.94 mm) than its own at-rest settling under the parked control (1.29 mm) -- consistent with
+# `final_pos_error_m`'s good/bad split tracking how much the approach disturbs the brick relative
+# to the one stale reading, not how far the brick would have settled on its own. The tolerance is
+# kept at the spec's number, not loosened for this: the gap a residual policy has to close is
+# real, and re-sampling the token as the tool closes in (so the aim point tracks wherever contact
+# has since pushed the brick) is the fix, not a wider band -- open issue, not fixed here.
+# Reproducible measurement: the 20-seed noise/error split this comment quotes is
+# `tests/envs/test_align_env.py::test_the_scripted_go_to_token_controller_beats_chance_at_zero_noise`
+# (slow), whose own bounds (max < 20 mm, median < 6 mm) the bad cluster above still clears; the
+# parked-vs-approaching contact comparison above is not itself a checked-in test.
 SUCCESS_TOL_POS = 0.003             # m
 SUCCESS_TOL_YAW = math.radians(5.0)
 SUCCESS_TICKS = 10
@@ -428,7 +466,9 @@ class AlignFromTokensEnv(ArmEnv):
 
     def episode_result_extra(self) -> dict:
         pos_err, yaw_err = self._pose_error()
-        return {"params": {
+        # One loose brick, nothing placed and nothing snapped to it (see scene_config): there is
+        # no structure in this task for the arm to shove apart, so this is vacuously true.
+        return {"structure_intact": True, "params": {
             "final_pos_error_m": pos_err, "final_yaw_error_deg": math.degrees(yaw_err),
             "producer": self.producer_name, "token_confidence": self._token.confidence,
             "token_age_s": self._token_age,
