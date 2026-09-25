@@ -194,3 +194,15 @@ def test_the_prediction_rules_are_paired_on_one_task(tmp_path) -> None:
     assert {c["predictor"] for c in paired} == {"analytic", "learned"}
     assert [c["tasks"] for c in paired if c["predictor"] == "analytic"] == [("placement",)]
 
+
+def test_an_evaluation_outside_a_campaign_builds_its_own_job_list(tmp_path) -> None:
+    from brick_builder.campaign.runner import _parse, evaluation_jobs
+
+    args = _parse(["--tasks", "stack_2", "build_2", "--seeds", "0-9", "--no-replan",
+                   "--out", str(tmp_path / "evaluate.jsonl")])
+    jobs = evaluation_jobs(args.tasks, range(10), cache=tmp_path / "ideals", replan=args.replan)
+    assert len(jobs) == 20
+    assert {(j["task"], j["seed"]) for j in jobs} == {
+        (t, s) for t in ("stack_2", "build_2") for s in range(10)}
+    assert all(j["phase"] == "evaluate" and j["inverse"] == "analytic" and not j["replan"]
+               and j["source_name"] == "ideal" for j in jobs)
