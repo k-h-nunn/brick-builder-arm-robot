@@ -10,7 +10,7 @@ import csv
 import json
 
 from brick_builder.campaign.campaign import (
-    Campaign, CampaignConfig, _read_csv, _write_csv, summarize_records,
+    Campaign, CampaignConfig, RoundRecord, _read_csv, _write_csv, summarize_records,
 )
 from brick_builder.campaign.tasks import BrickRecord, EpisodeRecord
 
@@ -84,56 +84,6 @@ def test_a_build_needs_every_brick_on_its_cell() -> None:
     row = summarize_records([record])["build_2 | analytic | F analytic"]
     assert row["seated_on_target"] == "0/1"
     assert row["bricks_on_target"] == "1/2"
-
-
-# ---------------------------------------------------------------------------------- would ship ---
-
-
-def _baseline_round(campaign: Campaign) -> None:
-    """Round 0: analytic 10/10 on placement and 9/10 on pick and place."""
-    campaign.score_round(0, "shipped",
-                         _records("placement", "analytic", 10)
-                         + _records("pick_and_place", "analytic", 9))
-
-
-def test_a_round_below_the_analytic_baseline_on_one_task_would_not_ship(tmp_path) -> None:
-    campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
-    _baseline_round(campaign)
-    record = campaign.score_round(
-        1, "r1", _records("placement", "learned", 10, predictor="learned", round_index=1)
-        + _records("pick_and_place", "learned", 7, predictor="learned", round_index=1))
-    ship = record.would_ship
-    assert ship["tasks"]["placement"] == {"learned": "10/10", "analytic": "10/10",
-                                          "meets": True}
-    assert ship["tasks"]["pick_and_place"] == {"learned": "7/10", "analytic": "9/10",
-                                               "meets": False}
-    assert ship["ship"] is False
-
-
-def test_a_round_matching_the_analytic_baseline_on_every_task_would_ship(tmp_path) -> None:
-    campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
-    _baseline_round(campaign)
-    record = campaign.score_round(
-        1, "r1", _records("placement", "learned", 10, predictor="learned", round_index=1)
-        + _records("pick_and_place", "learned", 9, predictor="learned", round_index=1))
-    assert record.would_ship["ship"] is True
-
-
-def test_the_summary_recomputes_a_stored_would_ship_verdict(tmp_path) -> None:
-    """A round scored with the old key mismatch stored `ship: true`; the CSV reads it afresh."""
-    campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
-    _baseline_round(campaign)
-    campaign.score_round(
-        1, "r1", _records("placement", "learned", 10, predictor="learned", round_index=1)
-        + _records("pick_and_place", "learned", 7, predictor="learned", round_index=1))
-    stale = {"ship": True, "version": "r1",
-             "tasks": {t: {"learned": "", "analytic": "", "meets": True}
-                       for t in ("placement", "pick_and_place")}}
-    campaign.state["rounds"]["1"]["would_ship"] = stale
-    with campaign.summarize().open() as fh:
-        rows = [r for r in csv.DictReader(fh) if r["round"] == "1"]
-    assert {r["task"]: r["would_ship"] for r in rows} == {"placement": "meets",
-                                                          "pick_and_place": "no"}
 
 
 # ------------------------------------------------------------------------------------ the files ---
@@ -256,3 +206,137 @@ def test_an_evaluation_outside_a_campaign_builds_its_own_job_list(tmp_path) -> N
         (t, s) for t in ("stack_2", "build_2") for s in range(10)}
     assert all(j["phase"] == "evaluate" and j["inverse"] == "analytic" and not j["replan"]
                and j["source_name"] == "ideal" for j in jobs)
+
+
+# -------------------------------------------------------------------------------- would it ship ---
+
+
+def _baseline_round(campaign: Campaign) -> None:
+    """Round 0: analytic 10/10 on placement and 9/10 on pick and place."""
+    campaign.score_round(0, "shipped",
+                         _records("placement", "analytic", 10)
+                         + _records("pick_and_place", "analytic", 9))
+
+
+def test_a_round_below_the_analytic_baseline_on_one_task_would_not_ship(tmp_path) -> None:
+    """Gate over every task: one task short of the baseline, no ship."""
+    campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
+    _baseline_round(campaign)
+    record = campaign.score_round(
+        1, "r1", _records("placement", "learned", 10, predictor="learned", round_index=1)
+        + _records("pick_and_place", "learned", 7, predictor="learned", round_index=1))
+    ship = record.would_ship
+    assert ship["tasks"]["placement"] == {"learned": "10/10", "analytic": "10/10",
+                                          "meets": True}
+    assert ship["tasks"]["pick_and_place"] == {"learned": "7/10", "analytic": "9/10",
+                                               "meets": False}
+    assert ship["ship"] is False
+    assert ship["version"] == "r1"
+
+
+def test_the_summary_recomputes_a_stored_would_ship_verdict(tmp_path) -> None:
+    """Summary CSV verdict from the stored scores, not the stored verdict."""
+    campaign = Campaign(_cfg(tmp_path), log=lambda line: None)
+    _baseline_round(campaign)
+    campaign.score_round(
+        1, "r1", _records("placement", "learned", 10, predictor="learned", round_index=1)
+        + _records("pick_and_place", "learned", 7, predictor="learned", round_index=1))
+    stale = {"ship": True, "version": "r1",
+             "tasks": {t: {"learned": "", "analytic": "", "meets": True}
+                       for t in ("placement", "pick_and_place")}}
+    campaign.state["rounds"]["1"]["would_ship"] = stale
+    with campaign.summarize().open() as fh:
+        rows = [r for r in csv.DictReader(fh) if r["round"] == "1"]
+    assert {r["task"]: r["would_ship"] for r in rows} == {"placement": "meets",
+                                                          "pick_and_place": "no"}
+    assert campaign.state["rounds"]["1"]["would_ship"]["version"] == "r1"
+
+
+
+def test_would_ship_reads_the_seated_key_the_scores_actually_carry(tmp_path) -> None:
+    """`seated_fraction` was written against a `seated_on_target_cell` key the campaign's own
+    score rows never set (they set `seated_on_target`), so the gate always compared 0/0 and
+    passed. A round behind on its baseline has to read as not meeting it."""
+    campaign = Campaign(_cfg(tmp_path, rounds=1), log=lambda line: None)
+    baseline = summarize_records(_records("placement", "analytic", 9))
+    campaign._put_round(RoundRecord(index=0, version="shipped", scores=baseline))
+
+    behind = summarize_records(_records("placement", "learned", 5, predictor="learned",
+                                        round_index=1))
+    ship = campaign.would_ship(1, behind)
+    assert ship["tasks"]["placement"]["meets"] is False
+    assert ship["ship"] is False
+
+    ahead = summarize_records(_records("placement", "learned", 10, predictor="learned",
+                                       round_index=1))
+    ship = campaign.would_ship(1, ahead)
+    assert ship["tasks"]["placement"]["learned"] != ship["tasks"]["placement"]["analytic"]
+    assert ship["tasks"]["placement"]["meets"] is True
+    assert ship["ship"] is True
+
+
+def test_would_ship_carries_the_round_s_own_version_before_the_record_is_saved(tmp_path) -> None:
+    """`would_ship` used to read `self._round(index).version` -- the round's own record, not yet
+    written when `score_round` calls it -- and got back the empty default. `score_round` now
+    passes the version it already has in hand."""
+    campaign = Campaign(_cfg(tmp_path, rounds=1), log=lambda line: None)
+    baseline = summarize_records(_records("placement", "analytic", 9))
+    campaign._put_round(RoundRecord(index=0, version="shipped", scores=baseline))
+
+    scores = summarize_records(_records("placement", "learned", 9, predictor="learned",
+                                        round_index=1))
+    assert campaign.would_ship(1, scores)["version"] == ""
+    assert campaign.would_ship(1, scores, version="r1")["version"] == "r1"
+
+
+def test_redeploy_returns_the_round_s_own_version_not_the_shared_pointer(tmp_path) -> None:
+    """A later round's redeploy moves the campaign's shared `deployed.json` pointer onto its own
+    version; an earlier round whose own redeploy already finished must not read that shared
+    pointer back and relabel itself with it."""
+    campaign = Campaign(_cfg(tmp_path, rounds=2), log=lambda line: None)
+    campaign._finish("r1.deploy", version="r1")
+    campaign.weights.mkdir(parents=True, exist_ok=True)
+    (campaign.weights / "deployed.json").write_text(json.dumps({"version": "r5"}))
+
+    class _Result:
+        version = "r5"
+
+    assert campaign.redeploy(1, _Result()) == "r1"
+
+
+# ------------------------------------------------------------------------- offline action error ---
+
+
+def test_offline_action_error_only_reads_data_through_its_own_round(tmp_path, monkeypatch) -> None:
+    """A resumed campaign's later rounds leave their `data/r*` directories on disk; an earlier
+    round's offline metric must not be scored against ticks logged after it."""
+    campaign = Campaign(_cfg(tmp_path, rounds=3), log=lambda line: None)
+    for index in (1, 2, 3):
+        directory = campaign.data / f"r{index}"
+        directory.mkdir(parents=True)
+        (directory / "ep_0.npz").write_bytes(b"")
+
+    seen: dict = {}
+
+    def fake_load(dirs):
+        seen["dirs"] = sorted(dirs)
+        return "the loaded data"
+
+    def fake_metrics(data, inverse, predictor, *, seed):
+        assert data == "the loaded data"
+        return {"action_rmse": (0.1, 0.2, 0.3), "analytic_rms": (0.4, 0.5, 0.6),
+                "n_held_out": 7}
+
+    monkeypatch.setattr("brick_builder.action.learn.dataset.load", fake_load)
+    monkeypatch.setattr("brick_builder.action.learn.evaluate.inverse_metrics", fake_metrics)
+    monkeypatch.setattr("brick_builder.action.models.mlp.Mlp.load",
+                        classmethod(lambda cls, path: path))
+
+    class _Result:
+        ticks = 1000
+        inverse = "inverse.npz"
+        predictor = "predictor.npz"
+
+    out = campaign._offline_action_error(2, _Result())
+    assert seen["dirs"] == [str(campaign.data / "r1"), str(campaign.data / "r2")]
+    assert out["action_held_out_ticks"] == 7

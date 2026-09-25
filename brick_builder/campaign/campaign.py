@@ -444,10 +444,8 @@ class Campaign:
             result = self.train(index)
             if result is None:
                 break
-            deployed = self.redeploy(index, result)
-            inverse_path, predictor_path, version = self.deployed_paths()
-            # On a resume the deployed pair is the latest round's; a finished round keeps its own.
-            version = deployed or version
+            version = self.redeploy(index, result)
+            inverse_path, predictor_path, _ = self.deployed_paths()
             records = self.evaluate(index, self.columns_for(index, version, inverse_path,
                                                          predictor_path))
             self.score_round(index, version, records, result=result)
@@ -467,11 +465,11 @@ class Campaign:
             record.ticks = int(result.ticks)
             record.episodes_logged = int(result.episodes)
             record.metrics = dict(result.metrics)
-            record.metrics.update(self._offline_action_error(result))
+            record.metrics.update(self._offline_action_error(index, result))
         for key, entry in self.state["phases"].items():
             if key.startswith(f"r{index}.") and "wall_s" in entry:
                 record.wall_s[key.split(".", 1)[1]] = float(entry["wall_s"])
-        record.would_ship = self.would_ship(index, record.scores)
+        record.would_ship = self.would_ship(index, record.scores, version=record.version)
         self._put_round(record)
         for name, row in sorted(record.scores.items()):
             self.log(f"  {name:44s} {row['seated_on_target']:>7s}  "
@@ -479,13 +477,25 @@ class Campaign:
                      f"pred {row['median_prediction_mm']:.2f} mm")
         return record
 
-    def _offline_action_error(self, result) -> dict:
-        """The learned inverse against the analytic one on held-out ticks of the campaign's log."""
+    def _offline_action_error(self, index: int, result) -> dict:
+        """The learned inverse against the analytic one on held-out ticks of the campaign's log.
+
+        Only the data logged through round `index`: a later round's directories exist on disk by
+        the time a resumed campaign re-scores an earlier one, and this round's checkpoint was
+        never trained or evaluated against ticks it had not yet seen.
+        """
         from ..action.learn import dataset as ds
         from ..action.learn.evaluate import inverse_metrics
         from ..action.models.mlp import Mlp
 
-        data_dirs = sorted(str(p) for p in self.data.glob("r*") if any(p.glob("ep_*.npz")))
+        def _round_num(name: str) -> int:
+            try:
+                return int(name[1:])
+            except ValueError:
+                return -1
+
+        data_dirs = sorted(str(p) for p in self.data.glob("r*")
+                           if any(p.glob("ep_*.npz")) and 0 < _round_num(p.name) <= index)
         if not data_dirs:
             return {}
         try:
@@ -503,17 +513,23 @@ class Campaign:
                 "analytic_rms_deg": metrics["analytic_rms"][2],
                 "action_held_out_ticks": metrics["n_held_out"]}
 
-    def would_ship(self, index: int, scores: dict) -> dict:
+    def would_ship(self, index: int, scores: dict, version: str | None = None) -> dict:
         """What `rounds.deploy_if_better` would have decided, on the tasks this round measured.
 
         The gate the shipped pair is behind: the learned inverse has to match the analytic one on
         every task, not win on one and lose on another. The analytic baseline is the fixed one
         from round 0, whatever round the learned column comes from.
+
+        `version` is the round's own version, as `score_round` has it in hand before the record is
+        saved; without it, the stored round record has not been written yet and reads back as the
+        empty default.
         """
         from ..action.learn.rounds import seated_fraction
 
+        if version is None:
+            version = self._round(index).version
         baseline = self._round(0).scores
-        out: dict = {"tasks": {}, "ship": True, "version": self._round(index).version}
+        out: dict = {"tasks": {}, "ship": True, "version": version}
         for key, row in scores.items():
             if row["inverse"] != "learned" or row["predictor"] == "analytic":
                 continue
@@ -522,8 +538,6 @@ class Campaign:
                             if r["task"] == task and r["inverse"] == "analytic"), None)
             if against is None:
                 continue
-            # `summarize_records` names the count `seated_on_target`; the deployment gate reads
-            # `seated_on_target_cell`.
             learned = seated_fraction({"seated_on_target_cell": row["seated_on_target"]})
             analytic = seated_fraction({"seated_on_target_cell": against["seated_on_target"]})
             out["tasks"][task] = {"learned": row["seated_on_target"],
@@ -540,7 +554,7 @@ class Campaign:
         for index in sorted(int(k) for k in self.state["rounds"]):
             record = self._round(index)
             # Recomputed from the stored scores, so a round scored before a gate fix reads right.
-            ship = self.would_ship(index, record.scores)
+            ship = self.would_ship(index, record.scores, version=record.version)
             self.state["rounds"][str(index)]["would_ship"] = ship
             for name, row in sorted(record.scores.items()):
                 would = ""

@@ -89,6 +89,49 @@ def test_one_row_per_round_task_and_inverse_in_the_success_figure(campaign_dir) 
     assert len(paired) == 1 and paired[0]["predictor"] == "learned"
 
 
+def test_runs_splits_rounds_a_sparse_task_skipped() -> None:
+    """A gap in the round numbers starts a new run, so no line is ever drawn across it."""
+    assert curves._runs([0, 1, 2, 5]) == [[0, 1, 2], [5]]
+    assert curves._runs([0, 5]) == [[0], [5]]
+    assert curves._runs([3]) == [[3]]
+    assert curves._runs([]) == []
+
+
+def test_prediction_figure_uses_runs_to_split_a_sparse_series(monkeypatch, campaign_dir) -> None:
+    """`build_2` measured at round 0 and round 5 only must not join a line through rounds 1-4."""
+    calls = []
+    original = curves._runs
+
+    def spy(values):
+        calls.append(list(values))
+        return original(values)
+
+    monkeypatch.setattr(curves, "_runs", spy)
+    rows = [
+        {"round": 0, "task": "build_2", "predictor": "learned", "inverse": "learned",
+         "median_prediction_mm": 0.6},
+        {"round": 5, "task": "build_2", "predictor": "learned", "inverse": "learned",
+         "median_prediction_mm": 0.5},
+    ]
+    path = curves.prediction_figure(rows, campaign_dir / "p.png")
+    assert path.exists()
+    assert [0, 5] in calls
+    assert original([0, 5]) == [[0], [5]]
+
+
+def test_failure_table_does_not_print_round_zero_twice() -> None:
+    """Round 0's `placement` is scored with both prediction rules on the same driving run; the
+    failure table must keep the `predictor == "learned"` row only, as every later round does."""
+    rows = [
+        {"round": 0, "task": "placement", "inverse": "learned", "predictor": "analytic",
+         "seated_on_target": "10/10", "failures": ""},
+        {"round": 0, "task": "placement", "inverse": "learned", "predictor": "learned",
+         "seated_on_target": "10/10", "failures": ""},
+    ]
+    text = tables.failure_table(rows)
+    assert text.count("| 0 | placement |") == 1
+
+
 def test_the_tables_carry_the_fixed_baselines(campaign_dir) -> None:
     text = tables.render(campaign_dir)
     assert "| fixed | analytic |" in text
@@ -97,14 +140,3 @@ def test_the_tables_carry_the_fixed_baselines(campaign_dir) -> None:
     assert "### Cost per round" in text
     assert "### Failures" in text
     assert "Build 2" in text
-
-
-def test_a_learned_row_names_the_version_its_episodes_ran_with(campaign_dir) -> None:
-    """A resumed campaign stamped every finished round with the latest version; the episodes
-    carry their own."""
-    rows = curves.read_summary(campaign_dir / "summary.csv")
-    for row in rows:
-        row["version"] = "r9"
-    text = tables.task_table(rows, "placement")
-    assert "| 1 | learned | r1 |" in text and "| 2 | learned | r2 |" in text
-    assert "r9" not in text

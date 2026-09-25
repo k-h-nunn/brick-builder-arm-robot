@@ -64,18 +64,32 @@ def _primary(rows: Sequence[dict]) -> list[dict]:
     return list(best.values())
 
 
+def _runs(values: Sequence[int]) -> list[list[int]]:
+    """Split ascending round numbers into consecutive runs, so a sparse task's rounds are never
+    joined by a line across the rounds it was not evaluated in."""
+    out: list[list[int]] = []
+    for v in values:
+        if out and v - out[-1][-1] == 1:
+            out[-1].append(v)
+        else:
+            out.append([v])
+    return out
+
+
 def success_figure(rows: Sequence[dict], out_path: Path) -> Path:
     """Seated on the target cell against the round, one panel per task, both inverses.
 
     The analytic inverse is a fixed baseline measured in round 0, so it is drawn as a level line
-    across every round rather than as a series that happens to be flat.
+    across every round rather than as a series that happens to be flat. A sparse task (evaluated
+    in some rounds only) draws no line across the rounds in between: a straight segment there
+    would show a trend across rounds that were never measured.
     """
     plt = _plt()
     rows = _primary(rows)
     tasks = [t for t in ("placement", "pick_and_place", "build_2")
              if any(r["task"] == t for r in rows)]
     rounds = sorted({r["round"] for r in rows})
-    fig, axes = plt.subplots(1, len(tasks), figsize=(4.0 * len(tasks), 3.6), dpi=150,
+    fig, axes = plt.subplots(1, len(tasks), figsize=(4.0 * len(tasks), 4.3), dpi=150,
                              squeeze=False)
     for ax, task in zip(axes[0], tasks):
         learned = sorted([r for r in rows if r["task"] == task and r["inverse"] == "learned"],
@@ -83,12 +97,17 @@ def success_figure(rows: Sequence[dict], out_path: Path) -> Path:
         analytic = [r for r in rows if r["task"] == task and r["inverse"] == "analytic"]
         colour = TASK_COLOUR.get(task, "#1f6feb")
         if learned:
-            x = [r["round"] for r in learned]
-            y = [100.0 * r["success_rate"] for r in learned]
-            lo = [100.0 * (r["success_rate"] - r["wilson_low"]) for r in learned]
-            hi = [100.0 * (r["wilson_high"] - r["success_rate"]) for r in learned]
-            ax.errorbar(x, y, yerr=[lo, hi], color=colour, marker="o", markersize=4,
-                        linewidth=1.4, capsize=3, label="learned inverse")
+            by_round = {r["round"]: r for r in learned}
+            for i, run in enumerate(_runs(sorted(by_round))):
+                run_rows = [by_round[v] for v in run]
+                x = [r["round"] for r in run_rows]
+                y = [100.0 * r["success_rate"] for r in run_rows]
+                lo = [100.0 * (r["success_rate"] - r["wilson_low"]) for r in run_rows]
+                hi = [100.0 * (r["wilson_high"] - r["success_rate"]) for r in run_rows]
+                ax.errorbar(x, y, yerr=[lo, hi], color=colour, marker="o", markersize=4,
+                            linestyle="-" if len(run) > 1 else "none", linewidth=1.4,
+                            elinewidth=1.2, capsize=3,
+                            label="learned inverse" if i == 0 else None)
         if analytic:
             base = 100.0 * analytic[0]["success_rate"]
             ax.axhline(base, color="#444444", linewidth=1.2, linestyle="--",
@@ -103,7 +122,8 @@ def success_figure(rows: Sequence[dict], out_path: Path) -> Path:
         ax.set_ylim(-5, 105)
         ax.set_xticks(rounds)
         ax.grid(alpha=0.25, linewidth=0.5)
-        ax.legend(fontsize=7, loc="lower right")
+        ax.legend(fontsize=6.5, loc="upper center", bbox_to_anchor=(0.5, -0.22),
+                 borderaxespad=0.0, frameon=False)
     axes[0][0].set_ylabel("Seated on target cell [%]")
     fig.suptitle("Closed-loop success against training round [%]", fontsize=11)
     fig.tight_layout()
@@ -111,10 +131,15 @@ def success_figure(rows: Sequence[dict], out_path: Path) -> Path:
 
 
 def prediction_figure(rows: Sequence[dict], out_path: Path) -> Path:
-    """Median prediction error against the round, per prediction rule."""
+    """Median prediction error against the round, per prediction rule.
+
+    A sparse task's rounds are split into consecutive runs, the same as in `success_figure`, so
+    no line is drawn across rounds it was not evaluated in.
+    """
     plt = _plt()
     fig, ax = plt.subplots(figsize=(6.4, 3.6), dpi=150)
-    styles = {"learned": ("-", "o"), "analytic": ("--", "s")}
+    styles = {"learned": "-", "analytic": "--"}
+    markers = {"learned": "o", "analytic": "s"}
     drawn = False
     for task in ("placement", "pick_and_place", "build_2"):
         for predictor in ("learned", "analytic"):
@@ -124,19 +149,23 @@ def prediction_figure(rows: Sequence[dict], out_path: Path) -> Path:
             series = [r for r in series if r["median_prediction_mm"] == r["median_prediction_mm"]]
             if not series:
                 continue
-            style, marker = styles[predictor]
-            ax.plot([r["round"] for r in series],
-                    [r["median_prediction_mm"] for r in series],
-                    style, marker=marker, markersize=4, linewidth=1.3,
-                    color=TASK_COLOUR.get(task, "#1f6feb"),
-                    label=f"{task.replace('_', ' ')}, F {predictor}")
+            by_round = {r["round"]: r for r in series}
+            for i, run in enumerate(_runs(sorted(by_round))):
+                run_rows = [by_round[v] for v in run]
+                ax.plot([r["round"] for r in run_rows],
+                        [r["median_prediction_mm"] for r in run_rows],
+                        marker=markers[predictor], markersize=4, linewidth=1.3,
+                        linestyle=styles[predictor] if len(run) > 1 else "none",
+                        color=TASK_COLOUR.get(task, "#1f6feb"),
+                        label=f"{task.replace('_', ' ')}, F {predictor}" if i == 0 else None)
             drawn = True
     ax.set_xlabel("Round")
     ax.set_ylabel("Median prediction error [mm]")
     ax.set_title("One-step prediction error against training round [mm]", fontsize=11)
     ax.grid(alpha=0.25, linewidth=0.5)
     if drawn:
-        ax.legend(fontsize=7)
+        ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.02, 1.0),
+                 borderaxespad=0.0, frameon=False)
     fig.tight_layout()
     return _save(fig, out_path)
 
@@ -165,12 +194,12 @@ def action_figure(state: dict, out_path: Path) -> Path:
         ax.plot(x, rmse_s, "-^", markersize=4, linewidth=1.3, color="#2a9d55",
                 label="spin [deg/tick]")
         ax.plot(x, base_x, ":", linewidth=1.1, color="#888888",
-                label="analytic answer, rms in x")
+                label="analytic RMS, x [mm/tick]")
         ax.legend(fontsize=7)
         ax.set_xticks(x)
     ax.set_xlabel("Round")
-    ax.set_ylabel("Root-mean-square difference")
-    ax.set_title("Learned inverse against the analytic one, held-out ticks", fontsize=11)
+    ax.set_ylabel("RMS error [mm/tick, deg/tick]")
+    ax.set_title("Action error against the analytic inverse", fontsize=11)
     ax.grid(alpha=0.25, linewidth=0.5)
     fig.tight_layout()
     return _save(fig, out_path)
@@ -197,7 +226,7 @@ def data_figure(state: dict, out_path: Path) -> Path:
         ax.set_xticks(x)
     lines = ax.get_lines() + twin.get_lines()
     ax.legend(lines, [line.get_label() for line in lines], fontsize=7, loc="lower right")
-    ax.set_title("Log accumulated by round", fontsize=11)
+    ax.set_title("Training data by round [ticks, episodes]", fontsize=11)
     fig.tight_layout()
     return _save(fig, out_path)
 
@@ -205,7 +234,7 @@ def data_figure(state: dict, out_path: Path) -> Path:
 def _save(fig, out_path: Path) -> Path:
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path)
+    fig.savefig(out_path, bbox_inches="tight")
     fig.clf()
     _plt().close(fig)
     return out_path
