@@ -37,7 +37,7 @@ and is not touched here), its two checkpoints and `deployed.json` are copied int
 what `Campaign.deployed_paths()` reads, so nothing in `campaign.py` changes.
 
 ```bash
-PYTHONPATH=$PWD heavy .../python scripts/run_campaign.py \
+.venv/bin/python scripts/run_campaign.py \
   --evaluate-only --round 0 --seeds 0-9 --tasks placement pick_and_place \
   --source cnn --processes 1 --no-baseline-learned \
   --name closed_loop_cnn --root results/campaign
@@ -45,7 +45,7 @@ PYTHONPATH=$PWD heavy .../python scripts/run_campaign.py \
 cp results/campaign/closed_loop/weights/{inverse.npz,predictor.npz,deployed.json} \
    results/campaign/closed_loop_cnn/weights/
 
-PYTHONPATH=$PWD heavy .../python scripts/run_campaign.py \
+.venv/bin/python scripts/run_campaign.py \
   --evaluate-only --round 5 --seeds 0-9 --tasks placement pick_and_place \
   --source cnn --processes 1 --no-baseline-learned \
   --name closed_loop_cnn --root results/campaign
@@ -69,7 +69,7 @@ redeploys, and scores the held-out seeds, as `docs/guide/16-closed-loop-campaign
 with `--source cnn` the only substantive difference.
 
 ```bash
-PYTHONPATH=$PWD heavy .../python scripts/run_campaign.py \
+.venv/bin/python scripts/run_campaign.py \
   --rounds 2 --episodes 3 --seeds 0-9 --tasks placement pick_and_place \
   --source cnn --processes 1 --no-baseline-learned \
   --budget-minutes 150 --round-minutes 30 \
@@ -245,7 +245,7 @@ edited here) is unverified.
 
 Two changes, made so the two crashes above no longer end a whole episode or a whole campaign.
 Each has unit tests that do not need a campaign run (`tests/action/test_twin_blind_step.py`,
-`tests/action/learn/test_dataset_empty_gate.py`; `PYTHONPATH=$PWD heavy .../python -m pytest -q
+`tests/action/learn/test_dataset_empty_gate.py`; `.venv/bin/python -m pytest -q
 tests/action` also passes, 48 tests, no regressions).
 
 - **`brick_builder/action/twin.py`.** `build_step`'s reference-count check raised a bare
