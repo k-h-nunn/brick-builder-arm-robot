@@ -231,6 +231,16 @@ class SimulatedServos(RegisterServos):
             self.set(servo_id, "goal_position", cal.to_ticks(reading.position[k]))
         self._refresh(reading)
 
+    def resync(self) -> None:
+        """Push the plant's *current* state into 56-70, without a control tick.
+
+        Nothing here writes ``data.ctrl`` or steps physics: this is for a caller that moved the
+        scene's joints directly (the self-test's torque-off range check pokes ``data.qpos`` the
+        way a technician backdrives a real joint by hand) and wants ``Present_Position`` -- what a
+        sync-read over the wire actually reports -- to reflect it, the way it would on hardware.
+        """
+        self._refresh(self.servo.read())
+
     # -- the control tick ----------------------------------------------------------------------
 
     def on_write(self, servo_id: int, address: int, data: bytes) -> None:
