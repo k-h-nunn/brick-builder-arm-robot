@@ -11,7 +11,8 @@ observation `z_t`); after the step it writes to `info`:
 | `pred_err_vs_truth_mm` | predicted vs the ground-truth rows of the same next frame, paired by appearance (sources other than `ideal`) [mm-eq] |
 
 Errors are the RMS centre difference of the slots present in both states, weighted by
-`1 - border`, times 87.4 mm per window unit; NaN when no slot pairs up.
+`1 - border`, times the environment's `mm_scale` (the calibrated value, else 87.4 mm per window
+unit); NaN when no slot pairs up.
 """
 
 from __future__ import annotations
@@ -32,7 +33,8 @@ Predictor = Callable[[dict, np.ndarray], np.ndarray]
 
 
 def centre_error_mm(pred_rows, pred_ids, obs_rows, obs_ids,
-                    schema: SlotSchema = PLACEHOLDER_SLOT_SCHEMA) -> float:
+                    schema: SlotSchema = PLACEHOLDER_SLOT_SCHEMA,
+                    mm_scale: float = MM_PER_WINDOW_UNIT) -> float:
     """RMS centre error [mm-eq] over slots with the same non-negative slot id in both states."""
     c = schema.fields["centre"]
     b = schema.fields.get("border")
@@ -52,7 +54,7 @@ def centre_error_mm(pred_rows, pred_ids, obs_rows, obs_ids,
         den += w
     if den <= 0.0:
         return float("nan")
-    return MM_PER_WINDOW_UNIT * math.sqrt(num / den)
+    return float(mm_scale) * math.sqrt(num / den)
 
 
 class PredictionScoring(gym.Wrapper):
@@ -66,6 +68,8 @@ class PredictionScoring(gym.Wrapper):
         self._prev_rows = None
         self._prev_ids = None
         self._distance = SceneDistance(PLACEHOLDER_SLOT_SCHEMA)
+        dist = getattr(env.unwrapped, "distance", None)
+        self.mm_scale = float(getattr(dist, "mm_scale", MM_PER_WINDOW_UNIT))
 
     def reset(self, **kwargs):
         obs, info = self.env.reset(**kwargs)
@@ -89,10 +93,11 @@ class PredictionScoring(gym.Wrapper):
         obs, reward, terminated, truncated, info = self.env.step(action)
         z_next = np.asarray(obs["actor"]["z"], dtype=np.float64)
         ids_next = np.asarray(info["slot_ids"])
-        info["pred_err_mm"] = centre_error_mm(pred, ids_t, z_next, ids_next)
-        info["copy_last_err_mm"] = centre_error_mm(z_t, ids_t, z_next, ids_next)
+        sc = self.mm_scale
+        info["pred_err_mm"] = centre_error_mm(pred, ids_t, z_next, ids_next, mm_scale=sc)
+        info["copy_last_err_mm"] = centre_error_mm(z_t, ids_t, z_next, ids_next, mm_scale=sc)
         info["linear_err_mm"] = (float("nan") if linear is None
-                                 else centre_error_mm(linear, ids_t, z_next, ids_next))
+                                 else centre_error_mm(linear, ids_t, z_next, ids_next, mm_scale=sc))
         if info.get("source", "ideal") != "ideal":
             gt = np.asarray(obs["privileged"]["gt_z"], dtype=np.float64)
             gt_ids = np.asarray(info["gt_slot_ids"])
@@ -106,7 +111,8 @@ class PredictionScoring(gym.Wrapper):
             for j, i in enumerate(perm):
                 if i >= 0:
                     paired_ids[j] = ids_t[i]
-            info["pred_err_vs_truth_mm"] = centre_error_mm(pred, ids_t, gt, paired_ids)
+            info["pred_err_vs_truth_mm"] = centre_error_mm(pred, ids_t, gt, paired_ids,
+                                                           mm_scale=sc)
         self._prev_rows, self._prev_ids = z_t, ids_t
         self._obs, self._ids = obs, ids_next.copy()
         return obs, reward, terminated, truncated, info

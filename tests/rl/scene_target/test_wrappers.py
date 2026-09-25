@@ -24,6 +24,7 @@ def test_centre_error_pairs_slots_by_id():
     ids_b = np.array([-1, -1, -1, -1, 7, -1, -1, -1])
     assert centre_error_mm(a, ids_a, b, ids_b) == pytest.approx(MM_PER_WINDOW_UNIT * 0.02)
     assert math.isnan(centre_error_mm(a, ids_a, b, np.full(8, -1)))
+    assert centre_error_mm(a, ids_a, b, ids_b, mm_scale=210.0) == pytest.approx(210.0 * 0.02)
 
 
 @pytest.mark.slow
