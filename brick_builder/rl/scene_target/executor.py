@@ -9,7 +9,8 @@ five 20 ms writes, so one step is always 100 ms of physics:
 - feed-forward off (L0a): the start pose plus the offset, five times.
 
 Offsets are in the nominal-plate world frame. `u = 0` with the feed-forward on issues exactly the
-recorded writes: open-loop replay.
+recorded writes of the frames the index visits; with the recording clock (one frame per tick)
+that is open-loop replay.
 """
 
 from __future__ import annotations

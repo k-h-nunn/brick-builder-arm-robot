@@ -26,7 +26,10 @@ debugging and is dropped at export.
 
 Action: `Box(-1, 1, (n,))`, the change of the tool-target offset in units of the stage's
 per-tick scale (L0a: dx, dy, dz, dyaw at 3 mm, 3 mm, 2 mm, 2 deg; L0b: dx, dy, dyaw at 2 mm,
-2 mm, 1.5 deg). `u = 0` with the feed-forward on is open-loop replay of the recording.
+2 mm, 1.5 deg). With the feed-forward on, the recorded writes follow the progress index
+(`feedforward_clock="progress"`, the default: they pause while it holds) or the recording's own
+clock (`"recording"`: one frame per tick). `u = 0` with the recording clock is open-loop replay
+of the recording, the camera-off control condition.
 
 Stages in this version: L0a `viewing_pose` and L0b `viewing_pose_displaced`. The environment
 imports nothing under `brick_builder.action` (see `world.py`).
@@ -106,13 +109,15 @@ class SceneTargetEnv(gym.Env):
         self.cache_dir = Path(cfg.cache_dir) if cfg.cache_dir is not None else default_cache_dir()
         calib_dir = Path(cfg.calib_dir) if cfg.calib_dir is not None else self.cache_dir / "calib"
         self.calibration: Calibration | None = None
-        cpath = calibration_path(calib_dir, self.source_info.name, self.source_info.weights_sha256)
+        self.calibration_file = ""
+        cpath = calibration_path(calib_dir, self.source_info.name, self.source_info.weights_sha256,
+                                 cfg.stage.family)
         if cpath.exists():
             self.calibration = Calibration.load(cpath, source=self.source_info.name,
                                                 weights_sha256=self.source_info.weights_sha256,
-                                                W=self.W)
-        self.distance = SceneDistance(self.schema, self.calibration if not self.schema.has("centre")
-                                      else None)
+                                                W=self.W, family=cfg.stage.family)
+            self.calibration_file = str(cpath)
+        self.distance = SceneDistance(self.schema, self.calibration)
         self.sigma_obs_mm = (0.0 if self.calibration is None or self.calibration.sigma_obs_mm is None
                              else float(self.calibration.sigma_obs_mm))
         if cfg.tol_mm is not None:
@@ -231,9 +236,10 @@ class SceneTargetEnv(gym.Env):
         opts = dict(options or {})
         level = resolve_level(opts.get("level", self.level))
         if level != self.level:
-            if LEVELS[level].action_dims != self._dims or not LEVELS[level].implemented:
+            if (LEVELS[level].action_dims != self._dims or not LEVELS[level].implemented
+                    or LEVELS[level].family != self.cfg.stage.family):
                 raise ValueError(f"cannot switch from {self.level} to {level} in one environment: "
-                                 "the action space or the implementation differs")
+                                 "the action space, the target family or the implementation differs")
             self.cfg = self.cfg.with_overrides(level=level)
             self._configure_stage()
         stage = self.cfg.stage
@@ -290,7 +296,9 @@ class SceneTargetEnv(gym.Env):
             "plate_offset_mm": float(1e3 * np.linalg.norm(self.plate_offset)),
             "plate_yaw_deg": float(math.degrees(self.plate_yaw)),
             "T": seq.T, "tol_mm": self.tol_mm, "tol_source": self.tol_source,
-            "feedforward": self._feedforward, "max_ticks": self.cfg.max_ticks(seq.T),
+            "mm_scale": float(self.distance.mm_scale), "calibration_file": self.calibration_file,
+            "feedforward": self._feedforward, "feedforward_clock": self.cfg.feedforward_clock,
+            "max_ticks": self.cfg.max_ticks(seq.T),
         }
         res = self.distance(self._z, seq.frame(1))
         info = dict(self._episode_info)
@@ -337,7 +345,8 @@ class SceneTargetEnv(gym.Env):
                           tube_scale=cfg.tube_scale)
         state, advanced, held = progress_update(
             ProgressState(self.k, self.holds, self.settled), T=seq.T, d_mm=d_next,
-            tube_mm=tube, tol_mm=self.tol_mm)
+            tube_mm=tube, tol_mm=self.tol_mm,
+            play_forward=cfg.feedforward_clock == "recording")
         self.k, self.holds, self.settled = state.k, state.holds, state.settled
         n_matched = int(np.sum(res.matched & target.objects))
         blind = n_matched == 0

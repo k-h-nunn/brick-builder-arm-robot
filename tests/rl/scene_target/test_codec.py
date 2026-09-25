@@ -115,6 +115,15 @@ def test_a_common_centre_shift_reads_in_mm_eq():
     assert d.parts["abs"] == pytest.approx(MM_PER_WINDOW_UNIT * 0.01, rel=1e-4)
 
 
+def test_a_calibrated_scale_replaces_87_4_on_the_named_schema():
+    target = scene(drop=(11,))
+    obs = scene(shift=(0.01, 0.0), drop=(11,))
+    cal = Calibration("ideal", "", W, family="viewing_pose", mm_scale=210.0)
+    d = SceneDistance(S, cal)(obs, target)
+    assert d.parts["abs"] == pytest.approx(210.0 * 0.01, rel=1e-4)
+    assert d.parts["missing"] == 0.0
+
+
 def test_shifting_only_the_held_brick_moves_the_relative_term():
     target = scene()
     held_only = D(scene(held_shift=(0.02, 0.0)), target, held=HELD)
@@ -277,3 +286,12 @@ def test_calibration_json_round_trip_and_refusal(tmp_path):
         Calibration.load(path, weights_sha256="cd" * 32)
     with pytest.raises(ValueError):
         Calibration.load(path, W=14)
+    fam = Calibration(source="learned", weights_sha256="ef" * 32, W=14, family="viewing_pose",
+                      mm_scale=210.0, sigma_obs_mm=1.2, stats={"scale_fit": {"n": 3}})
+    fpath = calibration_path(tmp_path, fam.source, fam.weights_sha256, fam.family)
+    assert fpath.name == "learned_efefefef_viewing_pose.json"
+    fam.save(fpath)
+    assert Calibration.load(fpath, family="viewing_pose") == fam
+    assert Calibration.load(fpath).tol_mm == pytest.approx(2.4)
+    with pytest.raises(ValueError):
+        Calibration.load(fpath, family="placement")

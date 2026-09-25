@@ -1,6 +1,7 @@
 """`BrickBuilder/SceneTarget-v0`: registration, spaces, the env checker, replay, termination.
 
-Every test uses a temporary target cache, so nothing is written to `data_cache/`.
+Every test uses a temporary target cache (and, where one is needed, a calibration fitted into
+it), so nothing is written to `data_cache/`.
 """
 
 from __future__ import annotations
@@ -132,30 +133,107 @@ def test_default_rendering_differs_only_in_colour_fields(tmp_path):
                                        atol=1e-3, err_msg=key)
 
 
-REPLAY_SEED_3 = (
-    "measured: open-loop replay of seed 3 ends 1.19 mm from the target pose in the plane "
-    "(tolerance 1.0 mm) when the representation settles; the arm keeps creeping toward the "
-    "command at rest (1.02 mm after 0.5 s more, 0.66 mm after 2 s). Seeds 0-2 and 4 end at "
-    "0.87-0.91 mm. The servo's open-loop floor sits at the tolerance.")
+@pytest.fixture(scope="module")
+def calibrated_cache(tmp_path_factory):
+    """A target cache holding the ground-truth calibration of the viewing-pose family, fitted on
+    training seeds 1000-1011 (none of the replay seeds)."""
+    from brick_builder.rl.scene_target.bench import calibrate
+
+    root = tmp_path_factory.mktemp("calibrated")
+    cal = calibrate("ideal", cache_dir=str(root), seeds=range(1000, 1012), poses_per_seed=5,
+                    static_seeds=(1000,), static_ticks=20)
+    return root, cal
+
+
+def record_writes(env):
+    """Run to the end with `u = 0`; the five writes of every tick and the last `info`."""
+    inner = env.unwrapped
+    world = inner._world
+    original = world.command
+    issued = []
+
+    def logging_command(tcp, spin, grip, *, c_vert=1.0, c_lat=1.0):
+        issued[-1].append(np.array([*np.asarray(tcp), spin, grip, c_vert, c_lat]))
+        original(tcp, spin, grip, c_vert=c_vert, c_lat=c_lat)
+
+    world.command = logging_command
+    try:
+        done, info = False, {}
+        while not done:
+            issued.append([])
+            _, _, term, trunc, info = env.step(zero(env))
+            done = term or trunc
+    finally:
+        world.command = original
+    return [np.stack(t) for t in issued], info
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("seed", [0, 1, 2, pytest.param(3, marks=pytest.mark.xfail(
-    strict=True, reason=REPLAY_SEED_3)), 4])
-def test_zero_action_replay_reaches_the_target_on_ground_truth(tmp_path, seed):
-    """L0a with the feed-forward on: `u = 0` is open-loop replay of the recorded path in the
-    nominal world, and it ends inside the ground-truth tolerance of the target pose."""
-    env = make(tmp_path, level="viewing_pose", feedforward=True)
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+def test_zero_action_replays_the_recording_and_reaches_the_target_on_ground_truth(
+        calibrated_cache, seed):
+    """L0a, feed-forward on, recording clock, nominal world: `u = 0` issues frame
+    `min(tick, T - 1)`'s recorded writes on every tick (open-loop replay), and the arm ends
+    inside the ground-truth tolerance of the target pose. Calibrated distance scale."""
+    root, cal = calibrated_cache
+    env = make(root, level="viewing_pose", feedforward=True, feedforward_clock="recording")
     try:
-        env.reset(seed=seed, options={"world_seed": seed})
-        info, n, term, trunc = run_to_end(env)
+        _, info0 = env.reset(seed=seed, options={"world_seed": seed})
+        assert info0["mm_scale"] == pytest.approx(cal["mm_scale"])
+        assert info0["calibration_file"]
+        seq = env.unwrapped.seq
+        issued, info = record_writes(env)
     finally:
         env.close()
-    print(f"seed {seed}: T {info['T']}, {n} ticks, xy {info['gt_final_xy_mm']:.2f} mm, "
+    for tick, got in enumerate(issued):
+        np.testing.assert_array_equal(got, seq.commands[min(tick, seq.T - 1)])
+    print(f"seed {seed}: T {info['T']}, {len(issued)} ticks, xy {info['gt_final_xy_mm']:.2f} mm, "
           f"z {info['gt_final_z_mm']:.2f} mm, yaw {info['gt_final_yaw_deg']:.2f} deg, "
-          f"D {info['d_mm']:.2f} mm-eq, representation success {info['success_repr']}, "
-          f"failure {info['failure']!r}")
+          f"D {info['d_mm']:.2f} mm, representation success {info['success_repr']}, "
+          f"failure {info['failure']!r}, mm_scale {cal['mm_scale']:.1f}")
     assert info["success_gt"], info
+
+
+@pytest.mark.slow
+def test_zero_action_with_the_recording_clock_misses_by_the_displacement_on_l0b(tmp_path):
+    """L0b, recording clock: `u = 0` issues exactly the recorded writes and lands where the
+    recording goes in the nominal world, off the displaced plate's target by its yaw."""
+    env = make(tmp_path, level="viewing_pose_displaced", feedforward_clock="recording")
+    try:
+        _, info0 = env.reset(seed=0, options={"world_seed": 5})
+        seq = env.unwrapped.seq
+        issued, info = record_writes(env)
+    finally:
+        env.close()
+    for tick, got in enumerate(issued):
+        np.testing.assert_array_equal(got, seq.commands[min(tick, seq.T - 1)])
+    print(f"L0b seed 5, recording clock, u = 0: {len(issued)} ticks, failure {info['failure']!r}, "
+          f"plate {info0['plate_offset_mm']:.2f} mm {info0['plate_yaw_deg']:.2f} deg, final xy "
+          f"{info['gt_final_xy_mm']:.2f} mm, yaw {info['gt_final_yaw_deg']:.2f} deg")
+    assert len(issued) >= seq.T and not info["success_gt"]
+    assert abs(abs(info["gt_final_yaw_deg"]) - abs(info0["plate_yaw_deg"])) < 0.5
+    assert info["gt_final_xy_mm"] > 1.0
+
+
+def test_the_environment_applies_the_calibration_file(tmp_path):
+    from brick_builder.rl.scene_target.codec import Calibration, calibration_path
+
+    cal = Calibration("ideal", "", 14, family="viewing_pose", mm_scale=200.0, sigma_obs_mm=0.4)
+    cal.save(calibration_path(tmp_path / "calib", "ideal", "", "viewing_pose"))
+    env = SceneTargetEnv(cache_dir=str(tmp_path))
+    try:
+        assert env.distance.mm_scale == 200.0 and env.sigma_obs_mm == 0.4
+        assert env.tol_mm == pytest.approx(0.8) and env.tol_source == "calibration"
+    finally:
+        env.close()
+    bare = SceneTargetEnv(cache_dir=str(tmp_path / "empty"))
+    try:
+        assert bare.distance.mm_scale == pytest.approx(87.4) and bare.tol_mm == 0.5
+        assert bare.tol_source == "default"
+    finally:
+        bare.close()
+    with pytest.raises(ValueError, match="feedforward_clock"):
+        SceneTargetEnv(cache_dir=str(tmp_path), feedforward_clock="wall")
 
 
 @pytest.mark.slow
@@ -206,7 +284,9 @@ def test_termination_classes(tmp_path):
 
 
 @pytest.mark.slow
-def test_zero_action_issues_exactly_the_recorded_commands_on_l0b(tmp_path):
+def test_zero_action_with_the_progress_clock_issues_the_recorded_writes_of_visited_frames(
+        tmp_path):
+    """L0b, progress clock: advancing ticks issue frame k's writes, held ticks its last write."""
     env = make(tmp_path, level="viewing_pose_displaced")
     inner = env.unwrapped
     try:
@@ -258,6 +338,25 @@ def test_the_actor_half_carries_no_plate_displacement(tmp_path):
             critic = obs["privileged"]["critic"].astype(np.float64)
             assert np.isclose(critic[0], d_xy[0], rtol=1e-5) and np.isclose(critic[2], d_yaw, rtol=1e-5)
             obs, *_ = env.step(zero(env))
+    finally:
+        env.close()
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("source", ["ideal", "learned"])
+def test_rgb_array_render_mode_keeps_the_frame_and_the_dense_decode(tmp_path, source):
+    kw = {"source_kwargs": {"threads": 1}} if source == "learned" else {}
+    env = make(tmp_path, source=source, render_mode="rgb_array", include_image=True, **kw)
+    try:
+        obs, _ = env.reset(seed=0, options={"world_seed": 0})
+        obs, *_ = env.step(zero(env))
+        frame = env.render()
+        decode = env.unwrapped.decode
+        assert frame.shape == (256, 256, 3) and frame.dtype == np.uint8
+        np.testing.assert_array_equal(frame, obs["actor"]["image"])
+        assert decode.shape == (256, 256)
+        # the decode labels at least the objects the state reports
+        assert len(np.unique(decode)) >= int(obs["actor"]["z_valid"].sum()) - 1
     finally:
         env.close()
 

@@ -52,16 +52,21 @@ class ProgressState:
 
 
 def progress_update(state: ProgressState, *, T: int, d_mm: float, tube_mm: float,
-                    tol_mm: float) -> tuple[ProgressState, bool, bool]:
+                    tol_mm: float, play_forward: bool = False) -> tuple[ProgressState, bool, bool]:
     """One tick of the progress index. Returns `(state, advanced, held)`.
 
     Before the last frame the index advances when `d <= tube` and holds otherwise. At the last
     frame a `d` inside the tube counts toward settling when also `d <= tol` (and resets the
     settle count when not); a `d` outside the tube holds. The rule of
     `action.place.TrackingEpisode.run`, with the tube in mm-eq of scene-state distance.
+
+    `play_forward` is that loop's camera-off condition: before the last frame the index
+    advances every tick whatever `d`; the last frame keeps the settle and hold rule.
     """
     k, holds, settled = state.k, state.holds, state.settled
     inside = math.isfinite(d_mm) and d_mm <= tube_mm
+    if play_forward and k < T - 1:
+        return ProgressState(k + 1, 0, 0), True, False
     if k >= T - 1:
         if inside:
             settled = settled + 1 if d_mm <= tol_mm else 0

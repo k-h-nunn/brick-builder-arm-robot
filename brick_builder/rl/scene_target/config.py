@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Mapping
 
 __all__ = [
-    "ACTION_SPACES", "LEVELS", "LEVEL_ALIASES", "LevelSpec", "RewardWeights", "STEP_TITLES",
+    "ACTION_SPACES", "FEEDFORWARD_CLOCKS", "LEVELS", "LEVEL_ALIASES", "LevelSpec", "RewardWeights", "STEP_TITLES",
     "SceneTargetConfig", "level_spec", "resolve_level",
 ]
 
@@ -22,6 +22,12 @@ STEP_TITLES = (
 )
 """The nine step titles of the placement script (`action.place.STEP_TITLES`); the progress
 observation carries a one-hot over them. Viewing-pose stages have no step and leave it zero."""
+
+FEEDFORWARD_CLOCKS = ("progress", "recording")
+"""`progress`: the recorded writes follow the progress index and pause while it holds (the
+default). `recording`: one recorded frame per tick whatever the distance, the camera-off control
+condition; the index follows the recording up to the last frame, where the settle and hold rule
+applies."""
 
 ACTION_SPACES = ("tool", "joint")
 """`tool`: change of the tool-target offset (default). `joint`: 5 joint-position increments, the
@@ -175,8 +181,11 @@ class SceneTargetConfig:
     render_mode: str | None = None
     reward: RewardWeights = field(default_factory=RewardWeights)
     feedforward: bool | None = None
-    """`None` = the stage's (off on L0a, on elsewhere). On L0a `True` turns the stage into
-    open-loop replay of the recorded path, the control condition for the executor."""
+    """`None` = the stage's (off on L0a, on elsewhere). On L0a `True` plays the recorded path
+    from the start pose."""
+    feedforward_clock: str = "progress"
+    """`progress` or `recording` (see `FEEDFORWARD_CLOCKS`). `recording` with `u = 0` is
+    open-loop replay of the recording."""
     settle_control_ticks: int = 25
     """Control ticks (20 ms each) of physics at the start pose before the first observation."""
     privileged_gt_z: bool = True
@@ -196,6 +205,9 @@ class SceneTargetConfig:
 
     def __post_init__(self) -> None:
         resolve_level(self.level)
+        if self.feedforward_clock not in FEEDFORWARD_CLOCKS:
+            raise ValueError(f"feedforward_clock must be one of {FEEDFORWARD_CLOCKS}; "
+                             f"got {self.feedforward_clock!r}")
         if self.action_space not in ACTION_SPACES:
             raise ValueError(f"action_space must be one of {ACTION_SPACES}; got {self.action_space!r}")
         if self.horizon < 1:

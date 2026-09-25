@@ -35,6 +35,11 @@ the valid, non-background target slots with no match.
 
 **Distance, opaque schema.** Whitened matched RMS plus the RMS of whitened pairwise differences
 (the relative term), times `Calibration.mm_scale`, plus the same missing-slot term.
+
+**Calibration.** One file per source, weights and target family
+(`calib/<source>_<sha8>_<family>.json`). Its `mm_scale` replaces 87.4 on the named schema as
+well: the millimetres of tool motion per window unit depend on the camera height, and 87.4 is
+the align-hover value. `sigma_obs_mm` sets `tol_mm = max(0.5, 2 sigma_obs)`.
 """
 
 from __future__ import annotations
@@ -168,6 +173,8 @@ class Calibration:
     source: str
     weights_sha256: str
     W: int
+    family: str = ""
+    """Target family the scale was fitted on (`viewing_pose`, `placement`, ...)."""
     feature_std: list[float] = field(default_factory=list)
     """`[W]` std of one-tick changes per feature (opaque schema); empty = unit scales."""
     depth_std: float = 0.25
@@ -179,6 +186,8 @@ class Calibration:
     """D at the end of open-loop replay in the nominal world [mm-eq]."""
     n_ticks: int = 0
     notes: str = ""
+    stats: dict = field(default_factory=dict)
+    """Measurement record: sample counts, fit residuals, seeds."""
 
     @property
     def tol_mm(self) -> float:
@@ -206,21 +215,22 @@ class Calibration:
 
     @classmethod
     def load(cls, path, *, source: str | None = None, weights_sha256: str | None = None,
-             W: int | None = None) -> "Calibration":
-        """Loads and refuses a file recorded for a different source, weights or width."""
+             W: int | None = None, family: str | None = None) -> "Calibration":
+        """Loads and refuses a file recorded for a different source, weights, width or family."""
         cal = cls.from_json(Path(path).read_text())
         for name, want, got in (("source", source, cal.source),
                                 ("weights_sha256", weights_sha256, cal.weights_sha256),
-                                ("W", W, cal.W)):
+                                ("W", W, cal.W), ("family", family, cal.family)):
             if want is not None and want != got:
                 raise ValueError(f"calibration {path} is for {name}={got!r}, not {want!r}")
         return cal
 
 
-def calibration_path(root, source: str, weights_sha256: str) -> Path:
-    """`<root>/<source>_<sha8>.json`; `sha8` is `none` for a source without weights."""
+def calibration_path(root, source: str, weights_sha256: str, family: str = "") -> Path:
+    """`<root>/<source>_<sha8>[_<family>].json`; `sha8` is `none` for a source without weights."""
     sha8 = weights_sha256[:8] if weights_sha256 else "none"
-    return Path(root) / f"{source}_{sha8}.json"
+    tail = f"_{family}" if family else ""
+    return Path(root) / f"{source}_{sha8}{tail}.json"
 
 
 def fit_feature_std(frames: Sequence[SlotFrame], *, floor: float = 1e-6) -> tuple[np.ndarray, float]:

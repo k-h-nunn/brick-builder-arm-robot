@@ -100,6 +100,21 @@ def test_last_frame_settles_only_inside_tolerance():
     assert held and s.holds == 1
 
 
+def test_play_forward_advances_every_tick_until_the_last_frame():
+    """The camera-off condition: the index follows the recording whatever the distance."""
+    s = ProgressState(0)
+    for k in range(1, 5):
+        s, advanced, held = progress_update(s, T=5, d_mm=50.0, tube_mm=1.0, tol_mm=0.5,
+                                            play_forward=True)
+        assert s.k == k and advanced and not held and s.holds == 0
+    s, advanced, held = progress_update(s, T=5, d_mm=50.0, tube_mm=1.0, tol_mm=0.5,
+                                        play_forward=True)
+    assert s.k == 4 and not advanced and held and s.holds == 1
+    for _ in range(3):
+        s, _, _ = progress_update(s, T=5, d_mm=0.3, tube_mm=1.0, tol_mm=0.5, play_forward=True)
+    assert s.settled == 3
+
+
 # ------------------------------------------------------------------------------ reward ---
 
 
