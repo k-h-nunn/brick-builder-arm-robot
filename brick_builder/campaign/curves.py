@@ -131,10 +131,15 @@ def success_figure(rows: Sequence[dict], out_path: Path) -> Path:
 
 
 def prediction_figure(rows: Sequence[dict], out_path: Path) -> Path:
-    """Median prediction error against the round, per prediction rule."""
+    """Median prediction error against the round, per prediction rule.
+
+    A sparse task's rounds are split into consecutive runs, the same as in `success_figure`, so
+    no line is drawn across rounds it was not evaluated in.
+    """
     plt = _plt()
     fig, ax = plt.subplots(figsize=(6.4, 3.6), dpi=150)
-    styles = {"learned": ("-", "o"), "analytic": ("--", "s")}
+    styles = {"learned": "-", "analytic": "--"}
+    markers = {"learned": "o", "analytic": "s"}
     drawn = False
     for task in ("placement", "pick_and_place", "build_2"):
         for predictor in ("learned", "analytic"):
@@ -144,12 +149,15 @@ def prediction_figure(rows: Sequence[dict], out_path: Path) -> Path:
             series = [r for r in series if r["median_prediction_mm"] == r["median_prediction_mm"]]
             if not series:
                 continue
-            style, marker = styles[predictor]
-            ax.plot([r["round"] for r in series],
-                    [r["median_prediction_mm"] for r in series],
-                    style, marker=marker, markersize=4, linewidth=1.3,
-                    color=TASK_COLOUR.get(task, "#1f6feb"),
-                    label=f"{task.replace('_', ' ')}, F {predictor}")
+            by_round = {r["round"]: r for r in series}
+            for i, run in enumerate(_runs(sorted(by_round))):
+                run_rows = [by_round[v] for v in run]
+                ax.plot([r["round"] for r in run_rows],
+                        [r["median_prediction_mm"] for r in run_rows],
+                        marker=markers[predictor], markersize=4, linewidth=1.3,
+                        linestyle=styles[predictor] if len(run) > 1 else "none",
+                        color=TASK_COLOUR.get(task, "#1f6feb"),
+                        label=f"{task.replace('_', ' ')}, F {predictor}" if i == 0 else None)
             drawn = True
     ax.set_xlabel("Round")
     ax.set_ylabel("Median prediction error [mm]")

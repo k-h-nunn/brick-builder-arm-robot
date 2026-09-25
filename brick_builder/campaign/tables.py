@@ -19,11 +19,12 @@ PUBLISHED_TEXT = {"placement": "10/10", "pick_and_place": "8/10"}
 """What the closed-loop page reports with ground-truth driving. `build_2` has no published
 number: this campaign is the first measurement of it."""
 
-SHIP_NOTE = """`Would ship` is what `action.learn.rounds.deploy_if_better` would have decided
-about the pair the repository ships: `yes` when the round's learned inverse matched the fixed
-analytic baseline on every task it was measured on, `meets` when it matched on this task but not
-on all of them, `no` when it did not match here. The campaign deploys every round to its own
-weights directory whatever this says."""
+SHIP_NOTE = """`Would ship` applies the same rule `action.learn.rounds.deploy_if_better` uses --
+`yes` when the round's learned inverse matched the fixed analytic baseline on every task it was
+measured on, `meets` when it matched on this task but not on all of them, `no` when it did not
+match here -- to whichever tasks the round measured. `deploy_if_better` itself is not called by
+the campaign, and its own default task pair does not cover `build_2`, which this column does. The
+campaign deploys every round to its own weights directory whatever this says."""
 
 
 def _fmt(value: float, digits: int = 2) -> str:
@@ -92,10 +93,15 @@ def cost_table(state: dict) -> str:
 
 
 def failure_table(rows: Sequence[dict]) -> str:
-    """What the failures were, per task and round, for the learned inverse."""
+    """What the failures were, per task and round, for the learned inverse.
+
+    Round 0 carries a `placement` row for both prediction rules (the two share a driving run);
+    keeping only the `predictor == "learned"` row, the same restriction every other round already
+    gets, is what keeps a round from printing twice.
+    """
     lines = ["| Round | Task | Seated on target cell | Failures |", "|---|---|---|---|"]
     for r in sorted(rows, key=lambda r: (r["round"], r["task"])):
-        if r["inverse"] != "learned" or (r["predictor"] != "learned" and r["round"] > 0):
+        if r["inverse"] != "learned" or r["predictor"] != "learned":
             continue
         lines.append(f"| {r['round']} | {r['task'].replace('_', ' ')} | "
                      f"{r['seated_on_target']} | {r['failures'] or 'none'} |")
