@@ -25,7 +25,7 @@ SRC_DIR = LIB_DIR / "src"
 INC_DIR = LIB_DIR / "include"
 RUNNER_SRC = REPO_ROOT / "firmware" / "host_runner" / "main.c"
 DEFAULT_BUILD_DIR = Path(os.environ.get("BB_CONTROL_BUILD_DIR", LIB_DIR / "_build"))
-"""Where the library and the runner are compiled; `BB_CONTROL_BUILD_DIR` moves it, so a test
+"""Build directory of the library and the runner. `BB_CONTROL_BUILD_DIR` moves it, so a test
 run does not rebuild a library another process has loaded."""
 
 CFLAGS = ["-O2", "-std=c99", "-ffp-contract=off", "-Wall", "-Wextra"]
@@ -107,7 +107,7 @@ FRAME_MAX = 8 + 2048 + 4
 
 
 class CDecoder(ctypes.Structure):
-    """`bb_decoder`, so the C frame decoder can be fed the same bytes as `protocol.Decoder`."""
+    """`bb_decoder` mirror, for feeding the C frame decoder from Python."""
 
     _fields_ = [("buf", ctypes.c_uint8 * FRAME_MAX), ("have", ctypes.c_uint32),
                 ("consumed", ctypes.c_uint32), ("bad_crc", ctypes.c_uint32),
@@ -251,8 +251,10 @@ class ControlLib:
             raise RuntimeError("control_lib struct layout does not match: " + "; ".join(bad))
 
     def decode(self, data: bytes) -> tuple[list[tuple[int, int, bytes]], int, int]:
-        """Feed `data` to the C decoder a byte at a time, as `bb_session_run` does. Returns the
-        frames as (type, seq, payload) and the bad-CRC and resynchronisation counts."""
+        """C frame decoder output for `data`, fed one byte at a time as `bb_session_run` does.
+
+        Returns the frames as (type, seq, payload), the bad-CRC count and the resynchronisation
+        count."""
         dec = CDecoder()
         self._lib.bb_decoder_init(ctypes.byref(dec))
         frames = []

@@ -227,7 +227,7 @@ def test_the_tick_log_payload_round_trips():
 
 
 def test_the_c_and_python_decoders_agree_on_a_damaged_stream(lib):
-    """Flipped bytes, cut frames, garbage and sync pairs inside payloads, fed to both decoders."""
+    """Decoder parity on flipped bytes, cut frames, garbage and sync pairs inside payloads."""
     rng = np.random.default_rng(11)
     stream = bytearray()
     for i in range(300):
@@ -259,8 +259,10 @@ J_SYNTH = np.array([[9.0, 0.5, 0.0], [0.3, 8.0, 0.0], [9.5, -0.4, 0.0], [-0.2, 8
 
 
 def _synthetic_bundle():
-    """A small bundle with no recording behind it: two coloured blobs to line up on, a step
-    boundary where the correction freezes, and five 50 Hz writes per frame."""
+    """Synthetic target bundle.
+
+    No recording behind it: two coloured blobs to line up on, a step boundary where the
+    correction freezes, and five 50 Hz writes per frame."""
     from types import SimpleNamespace
 
     from brick_builder.action.place import PlaceConfig
@@ -317,8 +319,10 @@ def synthetic():
 
 
 def _drive(controller, blob, frames, *, ticks: int = 60, damage=None):
-    """Lock step against a plant that is off by a fixed offset the correction has to take out.
-    Returns every number the controller sent back, in order."""
+    """Lock-step run against a plant with a fixed offset.
+
+    The correction has to take the offset out. Returns every number the controller sent back,
+    in order."""
     from types import SimpleNamespace
 
     offset = np.array([0.002, -0.0015])
@@ -388,8 +392,7 @@ def test_the_native_process_is_bit_identical_to_the_library_in_process(lib, synt
 
 @pytest.mark.parametrize("kind", ["crc", "drop"])
 def test_a_damaged_frame_between_ticks_is_dropped_and_the_run_carries_on(lib, synthetic, kind):
-    """A stray damaged frame costs nothing: the decoder drops it and resynchronises, and every
-    later tick is still bit-identical to the undisturbed run."""
+    """Stray damaged frame: dropped, and every later tick bit-identical to the clean run."""
     from brick_builder.hil.controller import SilController
 
     blob, frames = synthetic
@@ -406,8 +409,7 @@ def test_a_damaged_frame_between_ticks_is_dropped_and_the_run_carries_on(lib, sy
 
 @pytest.mark.parametrize("kind", ["crc", "lose"])
 def test_a_damaged_request_fails_loudly(lib, synthetic, kind):
-    """A request that never arrives whole is never acted on, and the host says so rather than
-    carrying on with a tick the controller did not run."""
+    """Damaged or lost request: not acted on, and the host raises instead of carrying on."""
     from brick_builder.hil import protocol as proto
     from brick_builder.hil.controller import ControllerError
 

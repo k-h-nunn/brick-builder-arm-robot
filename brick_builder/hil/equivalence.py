@@ -27,7 +27,7 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 import numpy as np
 
 TARGET_BOUND = 1e-6
-"""Radians a joint target may differ from the Python loop's on the same 50 Hz tick."""
+"""Joint target bound against the Python loop, per 50 Hz tick [rad]."""
 
 
 @dataclass
@@ -157,7 +157,7 @@ def run_side(ideal, plan, blob, cfg, seed: int, controller_spec: str, *, lib=Non
 
 
 def failure_class(text: str | None) -> int:
-    """The Python loop's failure message as the C library's failure class (`library.FAILURES`)."""
+    """Failure class (`library.FAILURES`) of a Python failure message."""
     if text is None:
         return 0
     if text.startswith("stalled"):
@@ -168,7 +168,7 @@ def failure_class(text: str | None) -> int:
 
 
 def _same_floats(a, b) -> bool:
-    """Equal to the last bit, NaN equal to NaN."""
+    """Bitwise equality of two float sequences, NaN equal to NaN."""
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
     return a.shape == b.shape and bool(np.array_equal(a, b, equal_nan=True))
@@ -222,7 +222,7 @@ def diff(task: str, seed: int, controller: str, against: str, ref: SideResult,
 
 
 def compare(seed: int, *, pick: bool, against, lib, build) -> list[SeedComparison]:
-    """One seed: the Python loop, then every controller in `against` on the same bundle."""
+    """Per-seed comparison: the Python loop, then every controller in `against`, one bundle."""
     from ..action.place import PlaceConfig, record_ideal
     from . import bundle as B
     from . import plan as planning

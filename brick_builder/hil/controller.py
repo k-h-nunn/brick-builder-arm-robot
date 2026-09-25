@@ -98,7 +98,7 @@ class SilController:
             absolute_mm=out.absolute_mm, predict_mm=out.predict_mm, yaw_err=out.yaw_err)
 
     def _account(self, dt: float) -> None:
-        """One vision tick: `bb_tick_begin` plus `bb_tick_end`, as the session counts it."""
+        """Vision tick time: `bb_tick_begin` plus `bb_tick_end`, as `bb_session` counts it."""
         self.ticks += 1
         self.tick_seconds += dt
         self.worst_seconds = max(self.worst_seconds, dt)
@@ -199,8 +199,10 @@ class _WireController:
         return P.parse_status(self._await(P.MSG_STATUS).payload)
 
     def damage_next(self, msg_type: int, kind: str = "crc") -> None:
-        """Damage the next outgoing frame of `msg_type`: `crc` flips a byte in its middle,
-        `lose` never sends it. What a lock-step host sees next is a timeout, as it should."""
+        """Fault injection on the next outgoing frame of `msg_type`.
+
+        `crc` flips the byte in the middle of the frame; `lose` does not send it. Either way the
+        controller never acts on it and the reply wait ends in `ControllerError`."""
         if kind not in ("crc", "lose"):
             raise ValueError(f"unknown damage {kind!r}")
         self._damage = (msg_type, kind)

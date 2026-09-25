@@ -29,9 +29,9 @@ W = 14
 HEADER = struct.Struct("<16I")
 
 HELD_NONE = -1
-"""A frame's placed-brick name when the task places nothing: relative mode checks nothing."""
+"""Placed-brick id when the task places nothing; relative mode then checks nothing."""
 HELD_UNLISTED = -2
-"""When the task places a brick but this frame does not list it: never matched."""
+"""Placed-brick id when this frame does not list the placed brick; never matched."""
 
 #: Order of the doubles in `bb_cfg`, then of its int32s. Changing either changes VERSION.
 CFG_DOUBLES = (
@@ -167,8 +167,10 @@ def pack_state(state) -> bytes:
 
 
 def name_table(ideal: IdealSequence, plan: Plan) -> dict[str, int]:
-    """One integer per reference title, so a frame can name the placed brick's reference and the
-    controller can find it among whichever step's references are active at the time."""
+    """Reference title ids.
+
+    One integer per title, so a frame can name the placed brick's reference and the controller can
+    find it among whichever step's references are active at the time."""
     names: dict[str, int] = {}
     for fp in plan.frames:
         if fp.step is not None:
@@ -181,8 +183,7 @@ def name_table(ideal: IdealSequence, plan: Plan) -> dict[str, int]:
 
 
 def held_title(ideal: IdealSequence, frame) -> str | None:
-    """The title under which `frame` lists the placed brick, as `TrackingEpisode._feedback`
-    looks it up in relative mode."""
+    """Placed brick's title in one frame, as `TrackingEpisode._feedback` looks it up."""
     if ideal.held_body is None:
         return None
     titles = [t for t, body in (frame.bodies or {}).items() if body == ideal.held_body]

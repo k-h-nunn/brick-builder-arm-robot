@@ -145,7 +145,7 @@ def scene_state(frame_id: int, host_t: float, slots, depth, slot_ids) -> bytes:
 
 
 def start(q_home) -> bytes:
-    """START: the five joint angles the arm starts at, the inverse kinematics' first seed."""
+    """START payload: the five starting joint angles [rad], the first IK seed."""
     q = np.ascontiguousarray(q_home, dtype="<f8")
     if q.shape != (5,):
         raise ProtocolError(f"START carries five joint angles, got {q.shape}")
