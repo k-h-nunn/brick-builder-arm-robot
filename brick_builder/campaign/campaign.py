@@ -444,8 +444,8 @@ class Campaign:
             result = self.train(index)
             if result is None:
                 break
-            self.redeploy(index, result)
-            inverse_path, predictor_path, version = self.deployed_paths()
+            version = self.redeploy(index, result)
+            inverse_path, predictor_path, _ = self.deployed_paths()
             records = self.evaluate(index, self.columns_for(index, version, inverse_path,
                                                          predictor_path))
             self.score_round(index, version, records, result=result)
@@ -465,7 +465,7 @@ class Campaign:
             record.ticks = int(result.ticks)
             record.episodes_logged = int(result.episodes)
             record.metrics = dict(result.metrics)
-            record.metrics.update(self._offline_action_error(result))
+            record.metrics.update(self._offline_action_error(index, result))
         for key, entry in self.state["phases"].items():
             if key.startswith(f"r{index}.") and "wall_s" in entry:
                 record.wall_s[key.split(".", 1)[1]] = float(entry["wall_s"])
@@ -477,13 +477,25 @@ class Campaign:
                      f"pred {row['median_prediction_mm']:.2f} mm")
         return record
 
-    def _offline_action_error(self, result) -> dict:
-        """The learned inverse against the analytic one on held-out ticks of the campaign's log."""
+    def _offline_action_error(self, index: int, result) -> dict:
+        """The learned inverse against the analytic one on held-out ticks of the campaign's log.
+
+        Only the data logged through round `index`: a later round's directories exist on disk by
+        the time a resumed campaign re-scores an earlier one, and this round's checkpoint was
+        never trained or evaluated against ticks it had not yet seen.
+        """
         from ..action.learn import dataset as ds
         from ..action.learn.evaluate import inverse_metrics
         from ..action.models.mlp import Mlp
 
-        data_dirs = sorted(str(p) for p in self.data.glob("r*") if any(p.glob("ep_*.npz")))
+        def _round_num(name: str) -> int:
+            try:
+                return int(name[1:])
+            except ValueError:
+                return -1
+
+        data_dirs = sorted(str(p) for p in self.data.glob("r*")
+                           if any(p.glob("ep_*.npz")) and 0 < _round_num(p.name) <= index)
         if not data_dirs:
             return {}
         try:
@@ -520,7 +532,8 @@ class Campaign:
                             if r["task"] == task and r["inverse"] == "analytic"), None)
             if against is None:
                 continue
-            learned, analytic = seated_fraction(row), seated_fraction(against)
+            learned = seated_fraction({"seated_on_target_cell": row["seated_on_target"]})
+            analytic = seated_fraction({"seated_on_target_cell": against["seated_on_target"]})
             out["tasks"][task] = {"learned": row["seated_on_target"],
                                   "analytic": against["seated_on_target"],
                                   "meets": learned >= analytic}

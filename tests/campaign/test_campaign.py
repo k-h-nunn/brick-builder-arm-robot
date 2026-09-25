@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 
 from brick_builder.campaign.campaign import (
-    Campaign, CampaignConfig, _read_csv, _write_csv, summarize_records,
+    Campaign, CampaignConfig, RoundRecord, _read_csv, _write_csv, summarize_records,
 )
 from brick_builder.campaign.tasks import BrickRecord, EpisodeRecord
 
@@ -156,3 +156,27 @@ def test_the_prediction_rules_are_paired_on_one_task(tmp_path) -> None:
     paired = [c for c in columns if "placement" in c["tasks"]]
     assert {c["predictor"] for c in paired} == {"analytic", "learned"}
     assert [c["tasks"] for c in paired if c["predictor"] == "analytic"] == [("placement",)]
+
+
+# -------------------------------------------------------------------------------- would it ship ---
+
+
+def test_would_ship_reads_the_seated_key_the_scores_actually_carry(tmp_path) -> None:
+    """`seated_fraction` was written against a `seated_on_target_cell` key the campaign's own
+    score rows never set (they set `seated_on_target`), so the gate always compared 0/0 and
+    passed. A round behind on its baseline has to read as not meeting it."""
+    campaign = Campaign(_cfg(tmp_path, rounds=1), log=lambda line: None)
+    baseline = summarize_records(_records("placement", "analytic", 9))
+    campaign._put_round(RoundRecord(index=0, version="shipped", scores=baseline))
+
+    behind = summarize_records(_records("placement", "learned", 5, predictor="learned",
+                                        round_index=1))
+    ship = campaign.would_ship(1, behind)
+    assert ship["tasks"]["placement"]["meets"] is False
+    assert ship["ship"] is False
+
+    ahead = summarize_records(_records("placement", "learned", 9, predictor="learned",
+                                       round_index=1))
+    ship = campaign.would_ship(1, ahead)
+    assert ship["tasks"]["placement"]["meets"] is True
+    assert ship["ship"] is True
