@@ -10,13 +10,18 @@ extrinsics"):
 
 ``--images`` is a folder of checkerboard photographs (any `cv2.imread`-readable format);
 ``--poses`` is a JSON file mapping each image's filename (with or without its extension) to the
-gripper's pose in the base frame at the moment it was shot --
+**`gripper` body's** pose in the base frame at the moment it was shot --
 
     {"shot001.png": {"position_m": [0.21, -0.03, 0.31], "quat_wxyz": [0.98, 0.0, 0.0, 0.19]}, ...}
 
--- MuJoCo's `(w, x, y, z)` quaternion convention, e.g. read from `ArmKinematics.fk` (real
-hardware: an equivalent forward-kinematics reading off encoder positions). ``--simulate`` writes
-exactly this format, so it doubles as the reference for what a real logging script should produce.
+-- MuJoCo's `(w, x, y, z)` quaternion convention. This is `patch_so101.GRIPPER_BODY`'s own pose,
+not `ArmKinematics.fk`'s return: `fk` reports the TCP site (`patch_so101.TCP_SITE`), offset from
+the gripper body by a fixed, non-trivial transform (about 97 mm and a 180-degree rotation at a
+typical pose) that hand-eye calibration would otherwise silently bake into the mount pose it
+writes. A forward-kinematics reading that only gives the TCP pose -- real hardware or `fk` alike --
+must be converted first with `gripper_pose_from_tcp_pose` below. ``--simulate`` writes gripper-body
+poses directly (`camera_sim.py` reads them off the `gripper` body, never through `fk`), so it
+doubles as the reference for what a real logging script should produce.
 
 Dry-run / self-test mode, no hardware needed -- renders its own checkerboard set with MuJoCo at a
 known `CameraConfig` and reports recovery error against that known truth, in addition to writing
@@ -47,6 +52,34 @@ import cv2
 import numpy as np
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".bmp")
+
+_TCP_SITE_QUAT_IN_GRIPPER = np.array([0.0, 1.0, 0.0, 0.0])
+"""`patch_so101._add_sites_and_camera`'s own TCP-site quaternion (180 degrees about x) -- the
+fixed rotation part of the gripper-body-to-TCP-site transform this module's `fk`-to-gripper-body
+conversion inverts."""
+
+
+def gripper_pose_from_tcp_pose(tcp_pos: np.ndarray, tcp_rot: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``(R, t)`` of the `gripper` body in the base frame, from a TCP-site pose in the same frame
+    (`ArmKinematics.fk`'s return, or an equivalent real-hardware forward-kinematics reading).
+
+    `patch_so101.TCP_SITE` sits at a fixed, known offset from `patch_so101.GRIPPER_BODY`
+    (`patch_so101.tcp_position()`, plus `_TCP_SITE_QUAT_IN_GRIPPER`'s 180-degree-about-x
+    rotation) -- this inverts that fixed transform. Hand-eye calibration needs the gripper body's
+    own pose (what `camera_sim.py` reads directly off `data.xpos`/`data.xmat[gripper_id]`, and what
+    `--simulate` writes to `poses.json`), not the TCP site's: composing camera-to-gripper with a
+    TCP-site pose instead would silently write a mount pose about 97 mm and 180 degrees off (the
+    site's own offset and its 180-degree rotation relative to the body it sits on).
+    """
+    from brick_builder.calib.camera import quat_wxyz_to_matrix
+    from brick_builder.robot.patch_so101 import tcp_position
+
+    r_site_in_gripper = quat_wxyz_to_matrix(_TCP_SITE_QUAT_IN_GRIPPER)
+    t_site_in_gripper = tcp_position()
+    tcp_rot = np.asarray(tcp_rot, dtype=float)
+    r_gripper = tcp_rot @ r_site_in_gripper.T
+    t_gripper = np.asarray(tcp_pos, dtype=float) - r_gripper @ t_site_in_gripper
+    return r_gripper, t_gripper
 
 
 def _load_poses(path: Path) -> dict[str, tuple[np.ndarray, np.ndarray]]:
@@ -109,7 +142,7 @@ def _print_summary(intrinsics, hand_eye, flip) -> None:
           f"({len(intrinsics.used_image_indices)} image(s) used)")
     print(f"distortion (OpenCV): k1={intrinsics.k1:.5f} k2={intrinsics.k2:.5f}")
     t_mm = hand_eye.translation_m_mujoco() * 1000.0
-    print(f"hand-eye ({hand_eye.method}, {hand_eye.n_poses} pose(s), MuJoCo convention): "
+    print(f"hand-eye ({hand_eye.solver_description}, {hand_eye.n_poses} pose(s), MuJoCo convention): "
           f"position [{t_mm[0]:.2f}, {t_mm[1]:.2f}, {t_mm[2]:.2f}] mm")
     print(f"180-degree sensor-flip check: angle to expected pose "
           f"{flip.angle_to_expected_deg:.1f} deg, to expected-flipped {flip.angle_to_expected_flipped_deg:.1f} deg")
@@ -166,8 +199,8 @@ def _cmd_simulate(args: argparse.Namespace) -> None:
 
     print(f"simulating {args.n_poses} checkerboard shots (seed {args.seed}) at:")
     print(f"  diagonal fov {camera_cfg.diagonal_fov_deg:.1f} deg, resolution {camera_cfg.resolution}")
-    print(f"  pose (mm) {tuple(round(v * 1000, 3) for v in camera_cfg.pos_in_gripper)}, "
-          f"quat_wxyz {tuple(round(v, 5) for v in camera_cfg.quat_in_gripper)}")
+    print(f"  pose (mm) {tuple(round(float(v) * 1000, 3) for v in camera_cfg.pos_in_gripper)}, "
+          f"quat_wxyz {tuple(round(float(v), 5) for v in camera_cfg.quat_in_gripper)}")
 
     calib_set = sim.render_calibration_set(camera_cfg=camera_cfg, n_poses=args.n_poses, seed=args.seed)
 
@@ -214,18 +247,21 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--hand-eye-method", default="tsai",
                          choices=("tsai", "park", "horaud", "andreff", "daniilidis"))
     parser.add_argument("--out", required=True, help="output parameter-file fragment (YAML)")
-    parser.add_argument("--measured-by", default=os.environ.get("USER", "unknown"))
+    parser.add_argument("--measured-by", default=None,
+                         help="parameter-file 'measured_by' provenance field (default: $USER for a "
+                              "real run; 'simulate', never a person's name, for --simulate)")
 
     parser.add_argument("--simulate", action="store_true", help="render a synthetic checkerboard set instead of reading photographs")
     parser.add_argument("--images", help="folder of checkerboard photographs (real mode)")
     parser.add_argument("--poses", help="poses.json for --images (real mode)")
 
     parser.add_argument("--out-dir", help="where --simulate writes images/ and poses.json")
-    parser.add_argument("--n-poses", type=int, default=60,
-                         help="--simulate: arm poses to render (default 60; the tilted, close-hover "
-                              "views a real hand-eye calibration needs typically only yield a "
-                              "usable checkerboard detection in roughly a quarter to a third of "
-                              "shots -- see brick_builder.calib.camera_sim.render_calibration_set)")
+    parser.add_argument("--n-poses", type=int, default=90,
+                         help="--simulate: arm poses to render (default 90, with headroom above the "
+                              "--min-corners default of 15: the tilted, close-hover views a real "
+                              "hand-eye calibration needs typically only yield a usable checkerboard "
+                              "detection in roughly a quarter to a third of shots -- see "
+                              "brick_builder.calib.camera_sim.render_calibration_set)")
     parser.add_argument("--seed", type=int, default=0, help="--simulate: RNG seed for pose sampling")
     parser.add_argument("--fov-deg", type=float, default=115.0, help="--simulate: ground-truth diagonal fov")
     parser.add_argument("--resolution", type=int, nargs=2, default=[640, 480], metavar=("W", "H"))
@@ -238,10 +274,17 @@ def main(argv: list[str] | None = None) -> None:
     if args.simulate:
         if not args.out_dir:
             parser.error("--simulate requires --out-dir")
+        if args.measured_by is None:
+            # Never default to $USER here: a --simulate fragment's numbers are a synthetic
+            # self-test round-trip, not anything a person measured, and the file's own
+            # `measured_by` field is the only thing telling a later reader that.
+            args.measured_by = "simulate"
         _cmd_simulate(args)
     else:
         if not (args.images and args.poses):
             parser.error("real mode requires --images and --poses (or pass --simulate)")
+        if args.measured_by is None:
+            args.measured_by = os.environ.get("USER", "unknown")
         _cmd_real(args)
 
 
