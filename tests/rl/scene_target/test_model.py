@@ -498,6 +498,32 @@ def test_checkpoint_refuses_another_source_width_or_weights(tmp_path):
         ScenePredictor.create(SlotLayout.for_schema(S), seed=0).check_compatible(source="ideal")
 
 
+def test_warm_start_refuses_another_source_width_or_weights(tmp_path):
+    logs, toy = synthetic_logs(400, seed=9)
+    w = Windows.from_logs(logs, horizon=2)
+    cfg = TrainConfig(seed=0, epochs=1, batch=128)
+    gt = {"source": "ideal", "weights_sha256": "", "W": S.W}
+    base = train(w, cfg, layout=toy.layout, log=None, meta=gt, out_path=tmp_path / "F.pt")
+    for init in (tmp_path / "F.pt", base.model):
+        # data from another source or weights: the initial model is refused
+        for bad in ({"source": "learned", "weights_sha256": "ab" * 32, "W": S.W},
+                    {"source": "ideal", "weights_sha256": "ab" * 32, "W": S.W},
+                    {"source": "learned", "weights_sha256": "", "W": S.W}):
+            with pytest.raises(ValueError):
+                train(w, cfg, layout=toy.layout, log=None, meta=bad, init=init)
+        # the data's provenance must be given
+        for partial in (None, {"source": "ideal", "W": S.W}):
+            with pytest.raises(ValueError):
+                train(w, cfg, layout=toy.layout, log=None, meta=partial, init=init)
+        ok = train(w, cfg, layout=toy.layout, log=None, meta=gt, init=init)
+        assert ok.model.meta["source"] == "ideal" and ok.model.meta["weights_sha256"] == ""
+        assert torch.equal(ok.model.slot_std, base.model.slot_std)
+    # an initial model that records no source is refused too
+    bare = ScenePredictor.create(toy.layout, seed=0)
+    with pytest.raises(ValueError):
+        train(w, cfg, layout=toy.layout, log=None, meta=gt, init=bare)
+
+
 def test_input_normalization_is_affine_and_never_clipped():
     L = SlotLayout.for_schema(S)
     rng = np.random.default_rng(7)

@@ -13,6 +13,8 @@
 - State file after every epoch: parameters, optimizer, batch-order generator, epoch, history.
   A run started again with the same data and configuration continues from it and ends
   bit-identical to an uninterrupted run (same torch thread count).
+- Warm start (`init`): the initial checkpoint must record the new data's source, W and weights
+  sha256 (`meta`), else it is refused.
 
 Reports: `b_cosine`, `one_step_report` and `action_response` run through the numpy entry points
 (`ScenePredictor.affine`, `predict`, `action_jacobian`) on the logged frames, background
@@ -48,9 +50,12 @@ from .dataset import ToyConfig, Windows, load_episodes, split_logs, synthetic_lo
 from .model import Q_W, ModelConfig, ScenePredictor, SlotLayout, fit_input_norm
 
 __all__ = [
-    "TrainConfig", "TrainResult", "action_response", "b_cosine", "evaluate_loss",
+    "PROVENANCE", "TrainConfig", "TrainResult", "action_response", "b_cosine", "evaluate_loss",
     "one_step_report", "prediction_report", "rollout_loss", "train",
 ]
+
+PROVENANCE = ("source", "W", "weights_sha256")
+"""Meta keys a checkpoint must share with the data it is trained or warm-started on."""
 
 
 @dataclass(frozen=True)
@@ -175,33 +180,45 @@ def train(train_w: Windows, cfg: TrainConfig = TrainConfig(), *, layout: SlotLay
           on_step: Callable[[int, int], None] | None = None) -> TrainResult:
     """Trains `F` on `train_w`; resumes from `state_path` when it exists.
 
-    `init` (a `ScenePredictor` or a checkpoint path) warm-starts the parameters and keeps its
-    input normalization; otherwise the normalization is fitted on `train_w`. `minutes` stops
-    at the first epoch boundary past the budget. `on_step(epoch, step)` runs after every
-    optimizer step. The state file refuses a different data set or configuration."""
+    `meta` is the data's provenance (`source`, `W`, `weights_sha256`), recorded in the
+    checkpoint. `init` (a `ScenePredictor` or a checkpoint path) warm-starts the parameters and
+    keeps its input normalization; it needs `meta`, and an initial model recorded for another
+    source, width or weights (or recording none) is refused. Otherwise the normalization is
+    fitted on `train_w`. `minutes` stops at the first epoch boundary past the budget.
+    `on_step(epoch, step)` runs after every optimizer step. The state file refuses a different
+    data set, configuration or provenance."""
     if threads is not None:
         torch.set_num_threads(int(threads))
     if train_w.W != layout.W:
         raise ValueError(f"windows are W={train_w.W}; layout is W={layout.W}")
     fp = train_w.fingerprint()
     if init is not None:
-        base = init if isinstance(init, ScenePredictor) else ScenePredictor.load(init)
+        missing = [k for k in PROVENANCE if (meta or {}).get(k) is None]
+        if missing:
+            raise ValueError(f"warm start: meta must give the data's {', '.join(missing)}")
+        want = {"source": meta["source"], "W": int(meta["W"]),
+                "weights_sha256": meta["weights_sha256"]}
+        if isinstance(init, ScenePredictor):
+            base = init
+            base.check_compatible(**want)
+        else:
+            base = ScenePredictor.load(init, **want)
         if base.layout != layout or base.cfg != model_cfg:
             raise ValueError("warm start: the initial model has a different layout or architecture")
         model = copy.deepcopy(base)
-        model.meta = dict(meta or base.meta)
+        model.meta = {**base.meta, **meta}
         init_hash = _param_hash(base)
     else:
         norm = fit_input_norm(layout, train_w.rows[:, 0], train_w.depth[:, 0],
                               train_w.present[:, 0], train_w.ctx[:, 0])
         model = ScenePredictor.create(layout, model_cfg, seed=cfg.seed, norm=norm, meta=meta)
         init_hash = ""
+    provenance = {k: model.meta.get(k) for k in PROVENANCE}
     key = {"train": fp, "val": val_w.fingerprint() if val_w is not None else "",
            "cfg": asdict(cfg), "model": model_cfg.to_dict(), "layout": layout.to_dict(),
-           "init": init_hash}
+           "init": init_hash, "provenance": provenance}
     key_json = json.dumps(key, sort_keys=True)
-    version = _json_hash({"key": key, "meta": {k: model.meta.get(k) for k in
-                                                ("source", "weights_sha256", "W")}})[:12]
+    version = _json_hash({"key": key})[:12]
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     rng = np.random.default_rng(cfg.seed)
     history: list[dict] = []
@@ -507,9 +524,11 @@ def _main_episodes(args) -> dict:
 
     W = int(logs[0].z.shape[2])
     meta0 = logs[0].meta
+    if meta0.get("source") is None:
+        raise SystemExit("episode logs record no source; F cannot be labelled")
     for log in logs:
         if log.z.shape[2] != W or log.meta.get("source") != meta0.get("source") or \
-                log.meta.get("weights_sha256") != meta0.get("weights_sha256"):
+                log.meta.get("weights_sha256", "") != meta0.get("weights_sha256", ""):
             raise SystemExit("episode logs mix sources, weights or widths")
     if W == PLACEHOLDER_SLOT_SCHEMA.W and not args.opaque:
         layout = SlotLayout.for_schema(PLACEHOLDER_SLOT_SCHEMA)
