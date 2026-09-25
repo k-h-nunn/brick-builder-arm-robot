@@ -225,29 +225,53 @@ Every default reproduces the module constants above exactly (`WRIST_CAM_FOVY_DEG
 touching `camera` compiles the identical wrist camera this module has always built; pinned by
 `tests/calib/test_camera_config.py`, which renders the default config against a hand-reconstructed
 copy of the pre-`CameraConfig` code path and checks the images match pixel for pixel (up to the GL
-rasterizer's own antialiasing noise — checked directly to be ±1 on a handful of edge pixels even
-rendering the same compiled model twice). Setting any of `fx_px`/`fy_px`/`cx_px`/`cy_px` switches
-the compiled camera from MuJoCo's `fovy` model to its pixel-intrinsics model (`focal_pixel`/
-`principal_pixel`/`resolution`) instead — what a measured calibration produces.
-`brick_builder.calib.camera.camera_config_from_params` builds one straight from a loaded parameter
-file's `camera.*` fields (see below); wiring that into `brick_builder/params.py`'s own
-`to_arm_config` is one call for whoever owns that file next.
+rasterizer's own antialiasing noise, measured at ±1 on a handful of edge pixels even rendering the
+same compiled model twice) and, more strictly, that the two compiled models' `cam_*` fields are
+bit-for-bit equal. Setting any of `fx_px`/`fy_px`/`cx_px`/`cy_px` switches the compiled camera from
+MuJoCo's `fovy` model to its pixel-intrinsics model (`focal_pixel`/`principal_pixel`/`resolution`)
+instead — what a measured calibration produces. The pixel-intrinsics model's principal point is
+defined against MuJoCo's own camera-frame convention, mirrored left-right relative to this
+codebase's OpenCV-style `cx`/`cy`; a real bug caught while building this passed the offset straight
+through and rendered every off-centre `cx`/`cy` at `(width - 1) - cx`/`(height - 1) - cy`, the
+mirror image of what was asked for (`test_off_centre_principal_point_lands_on_the_requested_side`).
+The pixel-intrinsics model is also not runtime-equivalent to the `fovy` model: a compiled
+pixel-intrinsics camera's frustum does not respond to a later write to `model.cam_fovy`, which
+`render.domain_rand`'s fovy jitter and `perception.views`/`perception.backproject` all do on the
+wrist camera (and `backproject.camera_geometry` assumes a centred principal point regardless) —
+none of those call sites know about `CameraConfig` yet, so a measured-intrinsics wrist camera run
+through one of them keeps whatever frustum it compiled with.
+`brick_builder.calib.camera.camera_config_from_params` builds one from a loaded parameter file's
+`camera.*` fields, switching to the pixel-intrinsics path only when at least one of
+`fx_px`/`fy_px`/`cx_px`/`cy_px` has `status: measured` in the file — the shipped default file
+carries plausible-looking values for all four (derived from `diagonal_fov_deg`, `status: assumed`)
+so a member reading it sees a number, not a blank, which would otherwise switch every default
+scene's wrist camera onto the pixel-intrinsics model even though nothing was actually calibrated.
+`brick_builder.params.to_arm_config` calls it to set `ArmConfig.camera`.
 
 **Calibration.** Implemented in `brick_builder/calib/camera.py` (checkerboard corner detection,
-`cv2.calibrateCamera` intrinsics + distortion, a from-scratch closed-form hand-eye `AX = XB` solve
-— this project's OpenCV 5.0 build exposes the `CALIB_HAND_EYE_*` method constants but not the
-`cv2.calibrateHandEye` function itself, checked directly against the installed `cv2/__init__.pyi`
-— and a 180°-sensor-flip check) and `scripts/calibrate_camera.py` (images + a `poses.json` of
-gripper-to-base poses in, a `configs/params/` fragment out; `--simulate` renders its own
-checkerboard set with MuJoCo instead of needing photographs). Print a checkerboard (9x6 internal
-corners, 15 mm squares — `brick_builder.calib.camera.CheckerboardTarget`'s defaults), mount it
-rigidly at a known survey position, drive the arm through 15-20+ varied poses (position *and*
-orientation — rotational spread is what makes the hand-eye solve well-conditioned, not just
-translation) logging the gripper's base-frame pose at each (`ArmKinematics.fk`, or an
-`--images`/`--poses` pair for the script), and run the script. It prints the 180°-flip check
-(`brick_builder.calib.camera.check_sensor_flip`) and converts the hand-eye result from OpenCV's
-convention (+z forward, +y down) to MuJoCo's (-z forward, +y up; a fixed 180° flip about the
-camera's own x axis) before writing `mount_x_mm`/`_y_mm`/`_z_mm`/`_roll_deg`/`_pitch_deg`/`_yaw_deg`.
+`cv2.calibrateCamera` intrinsics + distortion, a hand-eye `AX = XB` solve, and a 180°-sensor-flip
+check) and `scripts/calibrate_camera.py` (images + a `poses.json` of gripper-body poses in, a
+`configs/params/` fragment out; `--simulate` renders its own checkerboard set with MuJoCo instead
+of needing photographs). This project's OpenCV 5.0 build exposes the `CALIB_HAND_EYE_*` method
+constants but not the `cv2.calibrateHandEye` function itself (absent from `dir(cv2)` and the
+installed `cv2/__init__.pyi` stub); `calibrate_hand_eye` falls back to a from-scratch closed-form
+axis-correspondence solve that does not implement Tsai, Park, Horaud, Andreff or Daniilidis and
+ignores the requested `method` — the written fragment's notes name whichever one actually ran
+(`HandEyeResult.solver_description`), not always `cv2.calibrateHandEye`.
+
+Print a checkerboard (9x6 internal corners, 15 mm squares —
+`brick_builder.calib.camera.CheckerboardTarget`'s defaults), mount it rigidly at a known survey
+position, drive the arm through 15-20+ varied poses (position *and* orientation — rotational
+spread is what makes the hand-eye solve well-conditioned, not just translation) logging the
+**`gripper` body**'s base-frame pose at each, and run the script. `ArmKinematics.fk` returns the
+TCP site's pose, not the gripper body's — the two differ by a fixed, non-trivial transform (about
+97 mm and 180° at a typical pose); convert with `scripts.calibrate_camera.gripper_pose_from_tcp_pose`
+first if a forward-kinematics reading only gives the TCP pose. The script prints the 180°-flip
+check (`brick_builder.calib.camera.check_sensor_flip`) and converts the hand-eye result from
+OpenCV's convention (+z forward, +y down) to MuJoCo's (-z forward, +y up; a fixed 180° flip about
+the camera's own x axis) before writing `mount_x_mm`/`_y_mm`/`_z_mm`/`_roll_deg`/`_pitch_deg`/
+`_yaw_deg` (extracted as `R = Rz(yaw) @ Ry(pitch) @ Rx(roll)`, `kinematics.euler_zyx`'s own
+convention — yaw/pitch/roll about the fixed base-frame axes, not the body's own rotated axes).
 
 *Validated in simulation* (`tests/calib/test_camera_sim.py`, `@pytest.mark.slow`): a test-only
 scene (never reachable from `brick_builder.scene.compose`'s default scene builder) — the checkerboard
@@ -267,22 +291,31 @@ truth:
 `tsai` hand-eye method, 65 poses requested per case — `format_report_table`'s own output, pasted
 in here, not retyped by hand.)
 
-Reprojection error is sub-pixel in every case (the intrinsics fit is not the hard part); the 180°
-flip check correctly reports "not flipped" in every case too (4-177°/2-180°/1-179° to the
-expected/expected-flipped pose respectively — nowhere near ambiguous). Position and rotation error
-come from the hand-eye solve, which needs real rotational spread across poses — checked directly:
-an earlier version of the pose generator held the tool exactly straight down and only varied yaw,
-which put every sampled rotation's axis in the same one-dimensional family and made the hand-eye
-position error tens of *metres*, not millimetres, until pitch and roll were varied too
-(`generate_tool_down_poses`'s docstring). Even with that fixed, the perturbed-pose case's 31.85 mm
-is a real, measured outlier against the other two cases' 5.4-5.9 mm, at a *better* yield (35 vs 16
-usable poses) — not a bug in the perturbation itself but the closed-form `AX = XB` solve's known
-sensitivity to how rotationally diverse the *realized* pose sample happens to be (a property of
-which poses that seed's random search landed on), reported honestly rather than smoothed over
-(`tests/calib/test_camera_sim.py`'s own comment on this has the detail). At this close a hover with
-the tool tilted, only a fraction of poses keep the board's outermost corner row clear of the
-gripper's own silhouette (`render_calibration_set`'s docstring); the script and the test both
-oversample to compensate rather than trusting every rendered pose to be usable.
+The 180° flip check correctly reports "not flipped" in every case (4-177°/2-180°/1-179° to the
+expected/expected-flipped pose respectively — nowhere near ambiguous;
+`test_flipped_images_are_detected_by_the_180_degree_flip_check` renders a flipped set and confirms
+the check does fire). The perturbed-pose case's reprojection RMS and focal error are both worse
+than the other two cases' (1.021 px/6.15%, against 0.668-0.742 px/0.32-1.26%): on this rendered
+pose set, `cv2.calibrateCamera`'s five-coefficient distortion fit is the weaker step, not the
+hand-eye solve, and `solve_checkerboard_pose` uses that same fitted (not the true) camera matrix
+to get each view's checkerboard pose, so the intrinsics error propagates into the hand-eye solve
+and inflates its position/rotation error too. Re-solving the same detected corners and gripper
+poses with the *true* camera matrix instead of this case's fitted one recovers the position to
+within a few mm and the rotation to within a few degrees
+(`test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics`) — the closed-form
+`AX = XB` solver itself is not the hard part here. At this close a hover with the tool tilted, only
+a fraction of poses keep the board's outermost corner row clear of the gripper's own silhouette
+(`render_calibration_set`'s docstring); the script and the test both oversample to compensate
+rather than trusting every rendered pose to be usable.
+
+**This does not yet demonstrate resolving a real few-mm mount offset.** Every case's recovered
+position error (5.4-31.9 mm) is at or above both the pose perturbation being tested (5.4 mm) and
+the CAD-nominal mount pose's own prior uncertainty (`configs/params/default.yaml`'s
+`camera.mount_x_mm` etc., "about 3-5 mm"). What this table shows is that the pipeline runs end to
+end and recovers a camera in roughly the right place and orientation, with a working 180°-flip
+check — not that it can yet resolve a genuine few-mm mount offset from the CAD-nominal prior; that
+would need either a real `cv2.calibrateHandEye` binding or a better-conditioned intrinsics fit than
+this rendered pose set gets, neither attempted here.
 
 **Lens.** The specified lens is the "~120°" wide-angle class, stated range 100-130° on the sensor
 **diagonal**. `WRIST_CAM_DIAGONAL_FOV_RANGE_DEG = (100.0, 130.0)` is that range (for domain
