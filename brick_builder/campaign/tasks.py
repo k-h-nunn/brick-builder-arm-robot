@@ -11,10 +11,10 @@ simulator after the arm has left:
 | `stack_2` | as above, twice, the second brick on the first | the above, per cycle |
 
 `build_2` and `stack_2` are each one English command compiled by `brick_builder.language` into
-two placements and executed as consecutive pick-and-place cycles. `stack_2` is not in a
-campaign's default task list; it is evaluated on its own (`--tasks stack_2`). The goal's expected grid is checked after each
-cycle and `Goal.remaining_steps` decides what is left to do, which is what lets a failed
-placement be re-planned once.
+two placements and executed as consecutive pick-and-place cycles. The goal's expected grid is
+checked after each cycle and `Goal.remaining_steps` decides what is left to do, which is what
+lets a failed placement be re-planned once. `stack_2` is not in a campaign's default task list;
+it is evaluated on its own (`--tasks stack_2`).
 
 Seeds 0-9 are the held-out evaluation set for every task and are never performed on; the
 performing rounds draw from a stream that starts far above them (`FIRST_PERFORM_SEED`).
