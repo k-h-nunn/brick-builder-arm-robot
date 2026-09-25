@@ -137,43 +137,39 @@ def test_perturbed_pose_recovery_still_finds_enough_poses(perturbed_pose_report:
 
 
 def test_perturbed_pose_recovery_reprojection_error(perturbed_pose_report: sim.RecoveryReport):
-    """This case's reprojection RMS was measured worse than the default/perturbed-fov cases' (see
-    ``test_perturbed_pose_recovery_position_error_is_bounded`` for why -- not the intrinsics fit
-    itself, but detected-corner error on this pose set's foreshortened far rows).
-    ``find_corners``' ``cornerSubPix`` window is now sized from each image's own detected corner
-    spacing rather than a single fixed window (see ``brick_builder.calib.camera._corner_subpix_window``);
-    this bound is left at its pre-fix value with headroom rather than retightened, since the
-    post-fix number has not been re-measured (see the module-level caveat below)."""
-    assert perturbed_pose_report.reprojection_rms_px < 1.5
+    """Measured 0.528 px at seed 1, in the same range as the default/perturbed-fov cases' own
+    0.594/1.003 px, not the outlier a fixed 11x11 ``cornerSubPix`` window once made it (1.021 px,
+    against 0.668/0.742 px for the other two): ``find_corners`` now sizes that window from each
+    image's own detected corner spacing (``brick_builder.calib.camera._corner_subpix_window``),
+    which removed the excess error a fixed window left on this pose set's foreshortened far rows."""
+    assert perturbed_pose_report.reprojection_rms_px < 1.2
 
 
 def test_perturbed_pose_recovery_focal_length_error(perturbed_pose_report: sim.RecoveryReport):
-    """Left at its pre-fix bound with headroom, not retightened -- see
+    """Measured 0.59% at seed 1, down from 6.15% before ``find_corners``' corner-window fix -- see
     ``test_perturbed_pose_recovery_reprojection_error``."""
-    assert perturbed_pose_report.focal_error_pct < 10.0
+    assert perturbed_pose_report.focal_error_pct < 3.0
 
 
 def test_perturbed_pose_recovery_position_error_is_bounded(perturbed_pose_report: sim.RecoveryReport):
-    """This case's position error was measured worse than the default/perturbed-fov cases' at
-    their own seeds. The root cause is corner-detection error on this pose set's foreshortened far
-    rows, not the intrinsics fit or the hand-eye solver as such: ``solve_checkerboard_pose`` uses
-    the fitted (not the true) camera matrix, so any upstream corner error reaches both the
-    intrinsics fit and, through it, every pose fed to hand-eye.
-    ``test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics`` below isolates the
-    hand-eye solve from the intrinsics fit and checks its result against the injected perturbation
-    itself, not a fixed number -- the closed-form AX=XB solve is accurate given accurate corners;
-    what actually degraded it on this pose set was ``find_corners``' fixed 11x11 ``cornerSubPix``
-    window overrunning neighbouring corners on far rows only ~10-15 px apart (now sized from each
-    image's own detected spacing instead -- ``brick_builder.calib.camera._corner_subpix_window``).
-    The bound below is left at its pre-fix value with headroom rather than retightened, since the
-    post-fix number has not been re-measured (see the module-level caveat below), and is not a
-    claim that a few-mm mount offset is resolved.
+    """Measured 5.15 mm at seed 1, in the same range as the default/perturbed-fov cases' own
+    7.46/6.46 mm, not the outlier it was before ``find_corners``' corner-window fix (31.85 mm,
+    against 5.85/5.42 mm for the other two). ``solve_checkerboard_pose`` uses the fitted (not the
+    true) camera matrix to get each view's checkerboard pose, so corner-detection error reaches
+    both the intrinsics fit and, through it, the hand-eye solve; a fixed 11x11 ``cornerSubPix``
+    window overran neighbouring corners on this pose set's foreshortened far rows, only ~10-15 px
+    apart, degrading exactly that chain (``test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics``
+    below isolates the hand-eye solve itself from the intrinsics fit and confirms the solve was
+    never the weak step). This is not a claim that a genuine few-mm mount offset is resolved (the
+    module-level caveat below): the perturbation being tested here is itself only 5.4 mm.
     """
-    assert perturbed_pose_report.position_error_mm < 45.0
+    assert perturbed_pose_report.position_error_mm < 12.0
 
 
 def test_perturbed_pose_recovery_rotation_error_is_a_few_degrees(perturbed_pose_report: sim.RecoveryReport):
-    assert perturbed_pose_report.rotation_error_deg < 6.0
+    """Measured 0.451 deg at seed 1, down from 1.515 deg before ``find_corners``' corner-window
+    fix."""
+    assert perturbed_pose_report.rotation_error_deg < 2.0
 
 
 def test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics(
@@ -184,15 +180,17 @@ def test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics(
     Re-detects the same rendered corners and re-solves each used view's checkerboard pose with
     the known-true camera matrix (instead of this pose set's own fitted one), then re-runs
     hand-eye, and checks the result against the injected perturbation itself
-    (``_perturbed_pose_camera_cfg`` vs the un-perturbed ``CameraConfig()``) rather than a fixed
-    constant: a bound with no reference to the perturbation being tested (the previous ``< 10.0``
-    mm / ``< 3.0`` deg here was looser than the roughly 5.4 mm / 2.6 deg perturbation itself) would
+    (``_perturbed_pose_camera_cfg`` vs the un-perturbed ``CameraConfig()``, roughly 5.4 mm / 2.6
+    deg) rather than a fixed constant: a bound with no reference to the perturbation being tested
+    (a former ``< 10.0`` mm / ``< 3.0`` deg here was looser than the perturbation itself) would
     still pass if this solve returned the *unperturbed* pose -- the fixed-recovery outcome this
-    test exists to rule out. Recovering under 90% of the injected perturbation is a real, if
-    modest, floor: it is not a claim that this pipeline resolves a genuine few-mm mount offset
-    (the module-level caveat below), only that the closed-form solve itself, given accurate
-    intrinsics, moves substantially toward the true pose rather than sitting at (or past) the
-    unperturbed one.
+    test exists to rule out. Measured 0.762 mm / 0.320 deg -- about 14%/12% of the injected
+    perturbation left, comfortably inside the 30% floor below, and confirming the closed-form
+    solve itself was never the weak step once given accurate corners (see
+    ``test_perturbed_pose_recovery_position_error_is_bounded``, whose 31.85 mm pre-fix number came
+    from corner-detection error reaching the *fitted* intrinsics this test bypasses). Not a claim
+    that this pipeline resolves a genuine few-mm mount offset (the module-level caveat below): the
+    perturbation itself is only 5.4 mm, and CAD-nominal prior uncertainty is of the same order.
     """
     calib_set = perturbed_pose_calibration_set
     cfg = calib_set.camera_cfg
@@ -218,11 +216,15 @@ def test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics(
     position_perturbation_mm = float(np.linalg.norm(t_true - t_nominal) * 1000.0)
     rotation_perturbation_deg = calib.angle_between_rotations_deg(r_nominal, r_true)
 
-    assert position_error_mm < 0.9 * position_perturbation_mm, (
+    # 30% of the injected perturbation, not 90%: measured 14%/12% left at seed 1 (docstring
+    # above), so 30% keeps real margin for run-to-run pose-set variance while staying far below
+    # the loophole a looser-than-the-perturbation bound left open (returning the unperturbed pose
+    # scores 100%).
+    assert position_error_mm < 0.3 * position_perturbation_mm, (
         f"{position_error_mm:.2f} mm recovered vs. a {position_perturbation_mm:.2f} mm "
         "perturbation -- no better than returning the unperturbed pose"
     )
-    assert rotation_error_deg < 0.9 * rotation_perturbation_deg, (
+    assert rotation_error_deg < 0.3 * rotation_perturbation_deg, (
         f"{rotation_error_deg:.3f} deg recovered vs. a {rotation_perturbation_deg:.3f} deg "
         "perturbation -- no better than returning the unperturbed pose"
     )

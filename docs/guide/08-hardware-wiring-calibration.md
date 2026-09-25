@@ -326,23 +326,26 @@ well-conditioned) at a default, a perturbed-pose (a few mm/degrees) and a pertur
 
 | Case | poses (found/requested) | reprojection RMS [px] | focal error [%] | position error [mm] | rotation error [deg] |
 |---|---|---|---|---|---|
-| default | 16/65 | 0.668 | 1.26 | 5.85 | 4.050 |
-| perturbed pose (+4/-3/+2 mm, ~2°) | 35/65 | 1.021 | 6.15 | 31.85 | 1.515 |
-| perturbed fov (100° diagonal) | 22/65 | 0.742 | 0.32 | 5.42 | 0.968 |
+| default | 16/65 | 0.594 | 1.05 | 7.46 | 1.498 |
+| perturbed pose (+4/-3/+2 mm, ~2°) | 35/65 | 0.528 | 0.59 | 5.15 | 0.451 |
+| perturbed fov (100° diagonal) | 22/65 | 1.003 | 0.40 | 6.46 | 2.027 |
 
-(`tsai`, seeds 0/1/2; the 180° flip check correctly reports "not flipped" in all three. This table
-predates a corner-detection fix and has not yet been re-run against it -- see `docs/guide/03`'s
-wrist-camera section for the full account and why the perturbed-pose row is expected to improve.)
-The perturbed-pose case's reprojection RMS and focal error are both worse than the other two
-cases' (1.021 px/6.15% against 0.668-0.742 px/0.32-1.26%). The root cause is not the intrinsics
-fit's own conditioning, and a genuine `cv2.calibrateHandEye` binding would not change it: given
-clean corners both the intrinsics fit and the closed-form hand-eye solve are accurate. It traces
-to `find_corners`' checkerboard corner refinement using a single fixed search window that overruns
-neighbouring corners on this pose set's foreshortened far rows; `find_corners` now sizes that
-window from each image's own detected corner spacing instead.
+(`tsai`, seeds 0/1/2; the 180° flip check correctly reports "not flipped" in all three -- 1.5°,
+0.5°, 2.0° to the expected pose, in table order.) No case's reprojection RMS or focal error stands
+out from the other two's here. An earlier measurement had the perturbed-pose case visibly worse on
+both (1.021 px/6.15%, against 0.668-0.742 px/0.32-1.26% for the other two), attributed at the time
+to the checkerboard intrinsics fit; that attribution was wrong, and so was the remedy it proposed (a
+genuine `cv2.calibrateHandEye` binding or a better-conditioned intrinsics fit) -- given clean
+corners both the intrinsics fit and the closed-form hand-eye solve are accurate. The actual cause
+was `find_corners`' checkerboard corner refinement using a single fixed search window that overran
+neighbouring corners on that pose set's foreshortened far rows; `find_corners` now sizes that
+window from each image's own detected corner spacing instead, which brought the perturbed-pose row
+back in line with the other two above (`docs/guide/03`'s wrist-camera section has the full account,
+including the isolated hand-eye-solve measurement that confirms the solve itself was never the
+weak step).
 
 **This does not yet demonstrate resolving a real few-mm mount offset.** Every case's recovered
-position error in the (not yet re-measured) table above is at or above both the
+position error in the full-pipeline table above (5.15-7.46 mm) is at or above both the
 perturbation being tested (5.4 mm) and the CAD-nominal mount pose's own prior uncertainty
 (`configs/params/default.yaml`, `camera.mount_x_mm` etc., "about 3-5 mm"). What is validated: the
 pipeline runs end to end, recovers a camera in roughly the right place and orientation, and the

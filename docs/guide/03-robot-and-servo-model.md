@@ -298,47 +298,52 @@ truth:
 
 | Case | poses (found/requested) | reprojection RMS [px] | focal error [%] | position error [mm] | rotation error [deg] |
 |---|---|---|---|---|---|
-| default | 16/65 | 0.668 | 1.26 | 5.85 | 4.050 |
-| perturbed pose (+4/-3/+2 mm, ~2°) | 35/65 | 1.021 | 6.15 | 31.85 | 1.515 |
-| perturbed fov (100° diagonal) | 22/65 | 0.742 | 0.32 | 5.42 | 0.968 |
+| default | 16/65 | 0.594 | 1.05 | 7.46 | 1.498 |
+| perturbed pose (+4/-3/+2 mm, ~2°) | 35/65 | 0.528 | 0.59 | 5.15 | 0.451 |
+| perturbed fov (100° diagonal) | 22/65 | 1.003 | 0.40 | 6.46 | 2.027 |
 
 (`.venv/bin/python -m pytest tests/calib/test_camera_sim.py -m slow`; seeds 0/1/2 respectively,
 `tsai` hand-eye method, 65 poses requested per case — `format_report_table`'s own output, pasted
-in here, not retyped by hand. This table predates the corner-detection fix described below and has
-not yet been re-run against it; the fix should lower every one of these numbers, most visibly the
-perturbed-pose row's, but by how much is not yet measured.)
+in here, not retyped by hand.)
 
-The 180° flip check correctly reports "not flipped" in every case (nowhere near ambiguous;
+The 180° flip check correctly reports "not flipped" in every case (1.5°/178.5°,
+0.5°/179.7°, 2.0°/178.3° to the expected/expected-flipped pose respectively, default/perturbed-
+pose/perturbed-fov in table order — nowhere near ambiguous;
 `test_flipped_images_are_detected_by_the_180_degree_flip_check` renders a flipped set and confirms
-the check does fire). The perturbed-pose case's reprojection RMS and focal error are both worse
-than the other two cases' (1.021 px/6.15%, against 0.668-0.742 px/0.32-1.26%). The root cause is
-not the intrinsics fit's own conditioning: given clean corners, `cv2.calibrateCamera` and the
-closed-form `AX = XB` hand-eye solve are both accurate (a real
-`cv2.calibrateHandEye` binding would not change this — see `HAS_CV2_HAND_EYE_BINDING`, which is a
-separate, honestly-documented gap). It traces to `find_corners`' `cv2.cornerSubPix` refinement: a
-single fixed 11x11-pixel search window, which also runs on real photographs, is too large on this
-pose set's foreshortened far rows, where adjacent squares are only about 10-15 px apart — the
-window then reaches past the neighbouring corner and the refined estimate is pulled toward it,
-by up to several pixels on the worst-affected rows. `solve_checkerboard_pose` uses that same
-corner-detection error (through whichever camera matrix it is given, fitted or true) to get each
-view's checkerboard pose, so it reaches the intrinsics fit and, through it, the hand-eye solve.
-`find_corners` now sizes its `cornerSubPix` window from each image's own detected corner spacing
-instead of a single fixed value (`brick_builder.calib.camera._corner_subpix_window`), capped below
-half the closest spacing per OpenCV's own guidance; this removes the failure mode on far rows
-without giving up the wider, steadier window near rows that can support it.
-`test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics` isolates the hand-eye
-solve from the intrinsics fit and checks its result against the injected perturbation itself; at
-this close a hover with the tool tilted, only a fraction of poses keep the board's outermost corner
-row clear of the gripper's own silhouette (`render_calibration_set`'s docstring); the script and
-the test both oversample to compensate rather than trusting every rendered pose to be usable.
+the check does fire). No case's reprojection RMS or focal error stands out from the other two's
+(0.528-1.003 px, 0.40-1.05%): earlier measurements had the perturbed-pose case visibly worse on
+both (1.021 px/6.15%, against 0.668-0.742 px/0.32-1.26% for the other two), which the docs at the
+time attributed to `cv2.calibrateCamera`'s intrinsics fit. That attribution was wrong, and so was
+its proposed remedy (a real `cv2.calibrateHandEye` binding or a better-conditioned intrinsics fit):
+given clean corners, both the intrinsics fit and the closed-form `AX = XB` hand-eye solve are
+accurate (`HAS_CV2_HAND_EYE_BINDING`'s own gap is real but separate, and does not bear on this).
+The actual cause was `find_corners`' `cv2.cornerSubPix` refinement: a single fixed 11x11-pixel
+search window, which also runs on real photographs, was too large on that pose set's foreshortened
+far rows, where adjacent squares are only about 10-15 px apart — the window reached past the
+neighbouring corner and pulled the refined estimate toward it by up to several pixels on the
+worst-affected rows. `solve_checkerboard_pose` uses that same corner-detection error (through
+whichever camera matrix it is given, fitted or true) to get each view's checkerboard pose, so it
+reached the intrinsics fit and, through it, the hand-eye solve. `find_corners` now sizes its
+`cornerSubPix` window from each image's own detected corner spacing instead of a single fixed
+value (`brick_builder.calib.camera._corner_subpix_window`), capped below half the closest spacing
+per OpenCV's own guidance, which is what brought the perturbed-pose row back in line with the
+other two above. `test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics`
+isolates the hand-eye solve from the intrinsics fit and checks its result against the injected
+perturbation itself (measured: 0.762 mm / 0.320 deg recovered against a 5.385 mm / 2.638 deg
+perturbation, about 14%/12% remaining) — confirming the closed-form solve itself was never the
+weak step. At this close a hover with the tool tilted, only a fraction of poses keep the board's
+outermost corner row clear of the gripper's own silhouette (`render_calibration_set`'s docstring);
+the script and the test both oversample to compensate rather than trusting every rendered pose to
+be usable.
 
 **This does not yet demonstrate resolving a real few-mm mount offset.** Every case's recovered
-position error in the (not yet re-measured) table above is at or above both the pose
+position error in the full-pipeline table above (5.15-7.46 mm) is at or above both the pose
 perturbation being tested (5.4 mm) and the CAD-nominal mount pose's own prior uncertainty
-(`configs/params/default.yaml`'s `camera.mount_x_mm` etc., "about 3-5 mm"). What this table shows
-is that the pipeline runs end to end and recovers a camera in roughly the right place and
-orientation, with a working 180°-flip check — not that it can yet resolve a genuine few-mm mount
-offset from the CAD-nominal prior.
+(`configs/params/default.yaml`'s `camera.mount_x_mm` etc., "about 3-5 mm") — even though, isolated
+from the intrinsics fit, the hand-eye solve itself recovers the perturbation far more precisely
+(0.762 mm, above). What this table shows is that the pipeline runs end to end and recovers a
+camera in roughly the right place and orientation, with a working 180°-flip check — not that it
+can yet resolve a genuine few-mm mount offset from the CAD-nominal prior.
 
 **Lens.** The specified lens is the "~120°" wide-angle class, stated range 100-130° on the sensor
 **diagonal**. `WRIST_CAM_DIAGONAL_FOV_RANGE_DEG = (100.0, 130.0)` is that range (for domain
