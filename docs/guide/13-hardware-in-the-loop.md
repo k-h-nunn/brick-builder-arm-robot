@@ -11,7 +11,7 @@ digital twin computes is data the host sends it in one binary **target bundle**.
 
 | Rung | What runs where | Status |
 |---|---|---|
-| Software in the loop | `control_lib` called by ctypes inside the simulator's process | passes: tick for tick identical to the Python loop, placement seeds 0-9 and pick-and-place seeds 0-9 |
+| Software in the loop | `control_lib` called by ctypes inside the simulator's process | passes: progress index and step boundaries identical, joint targets within 2.6e-15 rad (criterion 1e-6), placement seeds 0-9 and pick-and-place seeds 0-9 |
 | Native process | the same library in a C `main`, wire protocol over a pipe or loopback TCP, host in lock step | passes: bit-identical to software in the loop on the same 20 episodes, both transports |
 | Processor in the loop | the library on an ESP32-P4, UART0, simulated plant on the host | application built (`firmware/p4_control`); not flashed, not run |
 | Bus in the loop | the real STS3215 driver behind `bb_bus`, servos on the bench | not started; `bb_bus` has a loopback stub |
@@ -142,8 +142,9 @@ CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python -m brick_builder.hil.equi
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python -m brick_builder.hil.equivalence \
     --seeds 0-9 --pick --against c,process,process:tcp --out results/hil/equivalence_pick.json
 
-# the fast checks: kinematics, framing, the decoders on a damaged stream, and the native
-# process against the library on a synthetic bundle, with damaged and lost frames
+# the fast checks: kinematics, framing, the decoders on a damaged stream, the three port
+# details, and the native process against the library on a synthetic bundle, with damaged and
+# lost frames in both directions
 .venv/bin/python -m pytest tests/hil -q
 ```
 
@@ -209,7 +210,17 @@ target cell with no failure reported. The joint-target difference is the last bi
 kinematics; the progress index, the step boundaries, the number of 50 Hz writes and the end
 condition are the same on every tick of all 20 episodes. Bit-identical means the joint targets,
 the tracking errors and the corrections compare equal as doubles, tick for tick. Wall time for
-the 20 episodes, four sides each, one process: 4481 s.
+the 20 episodes, four sides each, one process: 4481 s (placement 1295 s, pick and place 3186 s).
+
+Provenance: the 20 episodes ran on the working tree before it was committed. Library sources
+(among them `bb_servo.c` and `bb_bundle.h`) were edited after the placement run had loaded the
+library, and `bb_control.c`, `bb_session.c` and the host modules in `brick_builder/hil` after
+both runs had. Placement seed 1 and pick-and-place seed 4 were run again on commit
+28fb383 with the same command (`results/hil/equivalence_placement_head.json`,
+`results/hil/equivalence_pick_head.json`, 369 s): all six rows equal the published ones in every
+compared field (progress index, step boundaries, vision and 50 Hz tick counts, maximum joint
+target and tracking error differences, first divergent tick, outcome, lateral and depth error,
+bit identity). The other 18 episodes have not been run on the committed code.
 
 Controller time per vision tick on the development laptop (x86-64, `-O2`), from STATUS:
 
@@ -220,8 +231,9 @@ Controller time per vision tick on the development laptop (x86-64, `-O2`), from 
 | Native process, loopback TCP | 24-49 | 546 |
 
 Ranges are over the 20 episodes. The upper means and the worst ticks in process (6111 us) and
-over TCP (546 us) are from pick seeds 7-9, run at nice 19 while the laptop's load average was
-18-20: scheduling, not arithmetic. The other episodes have means of 21-53 us.
+over TCP (546 us) are from pick-and-place seeds 7-9, whose wall times were 494-549 s against
+217-248 s for seeds 0-6 on the same code; the runs were at nice 19 on a laptop shared with other
+jobs. The other episodes have means of 21-53 us.
 
 ### Divergence root cause
 
@@ -251,8 +263,17 @@ joint targets within 2.2e-15 rad.
 - The runner against the library on a synthetic bundle (`tests/hil`): bit-identical over a pipe
   and over TCP. A corrupted or a truncated frame injected between ticks is dropped and the run
   stays bit-identical; a SCENE_STATE that is corrupted or never sent ends in `ControllerError`
-  after the host's timeout, and no tick is run on it. A bundle with one flipped byte is refused
-  (`BB_ERR_CRC`).
+  after the host's timeout, and no tick is run on it. A TARGETS or TICK_LOG reply that is
+  corrupted or lost on its way back ends in the same `ControllerError`. A bundle with one flipped
+  byte is refused (`BB_ERR_CRC`).
+- The three [port details](#port-details), on synthetic bundles (`tests/hil`): a held brick
+  shifted in the jaws changes nothing before the first swap and the tracking error after it, and
+  tick 0 matches the Python `VisualServo` without a brick reference to 1e-9 mm; with the
+  references listed in alternating order, a hidden or unlisted placed brick gives an unknown
+  (NaN) tracking error and a hidden second reference does not; a blind tick keeps the last
+  matched frame. Each test fails on a library with the corresponding detail reverted (brick
+  reference from frame 0, placed brick by index into the current frame's step, matched frame from
+  the current tick) and passes on the committed one.
 - `firmware/p4_control` builds with ESP-IDF v5.5.5 for `esp32p4`: 257 776 B application image,
   93 504 B of internal RAM statically used; sizes in
   [Export and firmware](07-export-and-firmware.md#controller-firmware-firmwarep4_control).
@@ -271,7 +292,10 @@ joint targets within 2.2e-15 rad.
   oldest; STATUS counts them. Only the loopback stub is affected.
 - **The first-step brick reference.** Reproduced from the Python loop, not changed there: on the
   first measured step of a placement the loop lines up the tool without the in-hand reading.
-  Whether that is intended is a question for `action/place.py`.
-- A fast test on a recorded bundle. The synthetic bundle is parsed and run in `tests/hil`;
-  recorded bundles are exercised end to end by the equivalence run only.
+  Open: whether the first measured step should carry the in-hand reading. Changing it belongs in
+  `action/place.py` and would change every published controller measurement; the reference is
+  kept as is.
+- A fast test on a recorded bundle. Synthetic bundles are parsed and run in `tests/hil`,
+  including the three port details; recorded bundles are exercised end to end by the
+  equivalence run only.
 - The gravity feedforward and the learned inverse, as above.

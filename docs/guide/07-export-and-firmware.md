@@ -140,10 +140,16 @@ A board with an earlier revision needs `CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y` in
 ### Flash and run
 
 ```bash
+export IDF_TOOLS_PATH=<where the ESP-IDF tools are installed>   # the same as for the build
 . <esp-idf>/export.sh
 cd firmware/p4_control
-idf.py -p /dev/ttyACM0 flash      # the port the board's USB-UART enumerates as
+idf.py set-target esp32p4         # once per checkout; builds nothing yet
+idf.py -p <port> flash            # builds if needed; <port>: the board's USB-UART device
 ```
+
+`export.sh` looks for the ESP-IDF Python environment under `IDF_TOOLS_PATH`; without the export
+line it looks under `~/.espressif` and stops with "ESP-IDF Python virtual environment ... not
+found" when the tools were installed elsewhere.
 
 There is no `idf.py monitor` step: UART0 carries protocol frames only. The processor-in-the-loop
 commands are in [Hardware in the loop](13-hardware-in-the-loop.md#processor-in-the-loop).
