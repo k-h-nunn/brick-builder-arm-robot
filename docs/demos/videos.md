@@ -297,7 +297,8 @@ As the placement video, with these changes:
 | Bottom-row panels | "Scene model segmentation" (the convolutional scene model's output, display only) beside "Ground truth segmentation" |
 | Command | Title line under the panels |
 | Press force [N] | Live value; a dash when the arm is not pushing down on the brick |
-| Scene-state error [mm] | A dash in a step that has returned no measurement; the trace keeps the measured values |
+| Scene-state error [mm] | A dash in a step that has returned no measurement; a gap in the trace over that step |
+| Prediction error [mm] | A dash in a step that has returned no prediction |
 
 ## Results
 
@@ -308,6 +309,10 @@ depth error 0.00 mm. Second brick on the first (`lower_bodies` = the first brick
 Release, Retract and Verify returned no scene-state measurement on any tick of this run, and
 the Scene-state error [mm] readout shows a dash through them; see
 [Closed-loop control, Two-brick recording](../guide/12-closed-loop-control.md#two-brick-recording).
+The file on disk was recorded before the script drew the Prediction error [mm] dash and the
+trace gap: its Prediction error [mm] readout holds the last value through unmeasured steps
+(0.09 mm at cycle 2's Grasp, 0.19 mm at Verify), and the Scene-state error trace runs flat
+across them.
 
 Task `stack_2` on seeds 0-9, both cycles pick-and-place, each in its own world, ground truth
 driving: second brick seated 10/10, whole build 9/10 (Wilson 95 % 60-98 %); see

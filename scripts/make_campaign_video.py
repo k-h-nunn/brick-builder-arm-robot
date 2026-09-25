@@ -53,8 +53,8 @@ from brick_builder.demo.video import (  # noqa: E402
     CamKey, Recorder, Tick, arm_points, panel_size_for, quality_by_name, studio_look,
 )
 from brick_builder.demo.video_panels import (  # noqa: E402
-    BOX, DIM_TEXT, LABEL_FRAC, STRIP_BOX, TEXT, LayoutError, Overlay, Rect, check_layout,
-    fit_caption,
+    BASELINE, BOX, DIM_TEXT, LABEL_FRAC, REFERENCE, STRIP_BOX, TEXT, LayoutError, Overlay, Rect,
+    check_layout, fit_caption,
 )
 from make_demo_video import (  # noqa: E402
     CL_AZIMUTH, CL_DISTANCE, CL_ELEVATION, CL_LOOKAT, CL_MIN_SPAN, CL_READOUTS, CL_TITLE,
@@ -81,9 +81,12 @@ READOUTS = tuple(replace(r, text=True) if r.key == "press_n" else r for r in CL_
 """The closed-loop readouts, the press force as a live value: a dash when the arm is not
 pushing down on the brick, instead of the last press held on screen."""
 
-ERROR_LABEL = next(r.label for r in READOUTS if r.key == "err_mm")
-"""Scene-state error readout: its number is a dash in a step with no measurement yet, and its
-trace keeps the measured history."""
+PER_STEP = {"err_mm": "err_live", "predict_mm": "predict_live"}
+"""Per-step readouts and their flags: a step with no measurement yet shows a dash for the
+number and a gap in the trace, not an earlier step's value."""
+
+AUTO_SCALE = frozenset(r.label for r in READOUTS if r.hi is None)
+"""Readouts whose trace scale follows the largest value shown."""
 
 ARM_INSTANCE = 10_000
 """Instance id the main view's segmentation pass gives the arm's bodies, for the QA check that
@@ -141,12 +144,8 @@ class TitleOverlay(Overlay):
     yet, and the strip takes its box back when the card goes.
     """
 
-    blank: frozenset = frozenset()
-    """Readout labels drawn with a dash for a number on this frame."""
-
     def draw(self, picture, *, title=None, subtitle=None, readouts=(), **kw):
-        readouts = tuple(replace(r, value=None) if r.label in self.blank else r
-                         for r in readouts)
+        readouts = tuple(_unmeasured(r) for r in readouts)
         if not title:
             return super().draw(picture, title=None, subtitle=subtitle, readouts=readouts, **kw)
         from PIL import Image, ImageDraw
@@ -174,6 +173,68 @@ class TitleOverlay(Overlay):
         check_layout(rects, self.safe)
         out = Image.alpha_composite(base, layer).convert("RGB")
         return np.asarray(out, dtype=np.uint8), rects
+
+    def _draw_trace(self, draw, rect: Rect, readout, colour) -> None:
+        """Time trace with a gap over the ticks that carry no measurement (NaN)."""
+        values = np.asarray(list(readout.trace), dtype=float)
+        if values.size < 2 or np.isfinite(values).all():
+            return super()._draw_trace(draw, rect, readout, colour)
+        width = self._trace_width()
+        plot_h = self._usable_height(rect)
+        span = max(readout.hi - readout.lo, 1e-9)
+
+        def y_of(value: float) -> float:
+            return rect.y1 - float(np.clip((value - readout.lo) / span, 0.0, 1.0)) * plot_h
+
+        draw.line([(rect.x0, rect.y1), (rect.x1, rect.y1)], fill=BASELINE, width=max(width - 1, 2))
+        for f in readout.marks:
+            x = rect.x0 + float(np.clip(f, 0.0, 1.0)) * (rect.x1 - rect.x0)
+            draw.line([(x, rect.y1), (x, rect.y1 - plot_h)], fill=BASELINE, width=1)
+        xs = np.linspace(rect.x0, rect.x1, values.size)
+        finite = np.isfinite(values)
+        edges = np.flatnonzero(np.diff(np.concatenate(([0], finite.astype(int), [0]))))
+        for start, stop in zip(edges[::2], edges[1::2]):
+            points = [(float(xs[i]), y_of(float(values[i]))) for i in range(start, stop)]
+            if len(points) >= 2:
+                draw.line(points, fill=colour, width=width, joint="curve")
+            else:
+                (x, y), r = points[0], width / 2
+                draw.ellipse((x - r, y - r, x + r, y + r), fill=colour)
+        for value in readout.lines():
+            y = y_of(value)
+            dash, gap = 4 * width, 3 * width
+            x = rect.x0
+            while x < rect.x1:
+                draw.line([(x, y), (min(x + dash, rect.x1), y)], fill=REFERENCE,
+                          width=max(width - 1, 2))
+                x += dash + gap
+
+
+def _unmeasured(readout):
+    """Readout with a NaN value drawn as a dash, and its auto scale taken over the measured
+    values only."""
+    if readout.value is not None and readout.value != readout.value:
+        readout = replace(readout, value=None)
+    values = np.asarray(list(readout.trace), dtype=float)
+    if values.size and not np.isfinite(values).all():
+        finite = values[np.isfinite(values)]
+        if finite.size < 2:
+            return replace(readout, trace=())
+        if readout.label in AUTO_SCALE:
+            hi = max(float(finite.max()) * 1.08, readout.lo + 1e-6)
+            if readout.references:
+                hi = max(hi, max(readout.references) * 1.15)
+            readout = replace(readout, hi=hi)
+    return readout
+
+
+def tick_data(last: dict) -> dict:
+    """One tick's readings: a per-step readout the current step has not measured is NaN."""
+    data = {k: v for k, v in last.items() if k not in PER_STEP.values()}
+    for key, flag in PER_STEP.items():
+        if not last.get(flag):
+            data[key] = float("nan")
+    return data
 
 
 def arm_body_names(model, root: str = "base") -> list[str]:
@@ -239,8 +300,6 @@ class CommandRecorder(Recorder):
     def compose(self, tick, video_t):
         from PIL import Image, ImageDraw
 
-        self.overlay.blank = (frozenset() if tick.data.get("err_live", True)
-                              else frozenset({ERROR_LABEL}))
         composed, rects, span, overrun, ray = super().compose(tick, video_t)
         ov = self.overlay
         base = Image.fromarray(np.ascontiguousarray(composed), mode="RGB").convert("RGBA")
@@ -301,8 +360,9 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
     With `panels` set to `None` nothing is drawn, and every control tick, every observation the
     loop makes and every physics step is the same as with it: that is the probe. `segments`
     collects, per step in the order run, `[step, ticks, measured ticks, last measured error]`.
-    `err_live` in each tick's data is false until the current step has returned a scene-state
-    error, so the readout shows a dash rather than an earlier step's value.
+    The scene-state and prediction errors are NaN in a tick's data until the current step has
+    measured them (`tick_data`), so the readouts show a dash and the trace a gap rather than an
+    earlier step's value.
     """
     from brick_builder.control.pick_place import gripper_press_force
 
@@ -317,7 +377,7 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
 
     hold_tcp = episode.world.feedback(episode.ideal.frames[0].commands[0].grip).tcp_pos.copy()
     grip0 = episode.ideal.frames[0].commands[0].grip
-    last["err_live"] = False
+    last["err_live"] = last["predict_live"] = False
     state, rgb = episode.world.observe_rgb()
     if panels is not None:
         panels.update(rgb, episode.ideal.frames[0].label, truth(scene), window=truth.window)
@@ -327,13 +387,13 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
     for _ in range(max(int(round(lead_seconds / CONTROL_DT)), 1)):
         episode.world.command(hold_tcp, 0.0, grip0)
         contact()
-        yield Tick(scene=scene, phase=episode.ideal.frames[0].step, data=dict(last))
+        yield Tick(scene=scene, phase=episode.ideal.frames[0].step, data=tick_data(last))
 
     step = None
     for rec in episode.run():
         if rec.step != step:
             step = rec.step
-            last["err_live"] = False
+            last["err_live"] = last["predict_live"] = False
         if segments is not None:
             if not segments or segments[-1][0] != rec.step:
                 segments.append([rec.step, 0, 0, float("nan")])
@@ -350,10 +410,11 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
             last["err_live"] = True
         if rec.predict_mm == rec.predict_mm:
             last["predict_mm"] = float(rec.predict_mm)
+            last["predict_live"] = True
         contact()
-        yield Tick(scene=scene, phase=rec.step, data=dict(last))
+        yield Tick(scene=scene, phase=rec.step, data=tick_data(last))
 
-    last["err_live"] = False
+    last["err_live"] = last["predict_live"] = False
     if on_hold is not None:
         on_hold()
     park = episode.ideal.frames[-1].commands[-1]
@@ -362,7 +423,7 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
     for _ in range(max(int(round(hold_seconds / CONTROL_DT)), 1)):
         episode.world.command(park_pos, park.spin + episode.correction[2], park.grip)
         contact()
-        yield Tick(scene=scene, phase="Verify", data=dict(last))
+        yield Tick(scene=scene, phase="Verify", data=tick_data(last))
 
 
 class DisplayPanels(Panels):
