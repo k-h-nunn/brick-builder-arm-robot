@@ -18,6 +18,12 @@ model's decode) round-trips.
 
 Cache: `<cache_dir>/targets/<family>/seed<seed>_<source>_<sha8>.npz`.
 
+Generate the cache from the command line (one process):
+
+    python -m brick_builder.rl.scene_target.targets --source ideal --seeds 0-9,20-49
+    python -m brick_builder.rl.scene_target.targets --source learned \
+        --weights brick_builder/perception/weights/vision_model.pt --seeds 0-9,20-49
+
 Generators:
 
 - **Viewing pose (L0a, L0b)**: a kinematic twin path. Target pose relative to the nominal plate
@@ -48,7 +54,7 @@ from .codec import SceneDistance, SlotFrame, reference_mask
 __all__ = [
     "GENERATOR_VERSION", "MIN_REFERENCES", "RejectedPose", "TargetSequence",
     "cache_path", "default_cache_dir", "encode_frames", "from_ideal_sequence",
-    "load_or_generate", "min_jerk", "record_placement", "viewing_pose_draw",
+    "load_or_generate", "min_jerk", "parse_seeds", "record_placement", "viewing_pose_draw",
     "viewing_pose_sequence",
 ]
 
@@ -465,3 +471,68 @@ def record_placement(level: str, *, cell=(4, 3), source=None, source_info=None, 
             "weights_sha256": getattr(source_info, "weights_sha256", ""),
             "generator": "record_ideal", "generator_version": GENERATOR_VERSION}
     return from_ideal_sequence(ideal, meta=meta)
+
+
+# ---------------------------------------------------------------------------------- command ---
+
+
+def parse_seeds(text: str) -> list[int]:
+    """`"0-9,20-49"` -> `[0, ..., 9, 20, ..., 49]`."""
+    out: list[int] = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            out.extend(range(int(a), int(b) + 1))
+        else:
+            out.append(int(part))
+    return out
+
+
+def main(argv=None) -> int:
+    """Generate and cache viewing-pose target sequences."""
+    import argparse
+
+    from .world import NominalTwin, build_source
+
+    p = argparse.ArgumentParser(description="Viewing-pose target sequences")
+    p.add_argument("--source", default="ideal", choices=["ideal", "learned"])
+    p.add_argument("--weights", default=None, help="checkpoint of the learned source (explicit path)")
+    p.add_argument("--threads", type=int, default=2)
+    p.add_argument("--seeds", default="0-9,20-49")
+    p.add_argument("--cache-dir", default=None)
+    args = p.parse_args(argv)
+
+    kwargs: dict = {}
+    if args.source == "learned":
+        kwargs = {"threads": args.threads}
+        if args.weights:
+            kwargs["weights"] = args.weights
+    _, info = build_source(args.source, kwargs)
+    print(f"source {info.name} | weights {info.weights_path or '-'} | sha256 "
+          f"{info.weights_sha256 or '-'}", flush=True)
+    twin = NominalTwin()
+    frame_ms = []
+    try:
+        for seed in parse_seeds(args.seeds):
+            seq, st = load_or_generate(
+                seed, source_name=args.source, source_kwargs=kwargs, cache_dir=args.cache_dir,
+                source_info=info, source_factory=lambda: build_source(args.source, kwargs)[0],
+                twin_factory=lambda: twin)
+            cost = "cached" if st["cached"] else f"{st['frame_ms']:.1f} ms per frame"
+            if not st["cached"]:
+                frame_ms.append(st["frame_ms"])
+            print(f"seed {seed} | T {seq.T} | draw {seq.meta.get('draw')} | min references "
+                  f"{seq.meta.get('min_references')} | {cost} | {st['path']}", flush=True)
+    finally:
+        twin.close()
+    if frame_ms:
+        print(f"generated {len(frame_ms)} | frame cost [ms] mean {np.mean(frame_ms):.1f} "
+              f"max {np.max(frame_ms):.1f}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

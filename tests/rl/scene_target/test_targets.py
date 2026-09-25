@@ -45,6 +45,11 @@ def test_path_draws_stay_inside_their_ranges(seed):
     np.testing.assert_array_equal(again.target, d.target)
 
 
+def test_seed_ranges_parse():
+    assert TG.parse_seeds("0-9,20-49") == list(range(10)) + list(range(20, 50))
+    assert TG.parse_seeds("3, 7,1000-1001") == [3, 7, 1000, 1001]
+
+
 def test_frame_commands_follow_the_path():
     d = viewing_pose_draw(4)
     poses = d.frame_poses()
