@@ -247,10 +247,11 @@ checkpoints, same set:
 
 No colour drops by more than a point, but the white-subset pixel gate (>= +5 points, over all 230
 white bricks) is not met: +2.5 points. The cell this fix specifically targets -- white, far, pale
-table -- has the same recall count before and after: 35 of 57 bricks found by both checkpoints
-(+0.000). Matched by brick identity (frame and instance id, not just count), that 35 is not the
-same 35: 2 bricks the shipped checkpoint misses are found by the candidate, and 2 different
-bricks the shipped checkpoint finds are missed by the candidate; 33 bricks are found by both. The
+table -- has the same recall count before and after: 35 of 57 bricks found by the shipped
+checkpoint, 35 of 57 by the candidate (+0.000). Matched by brick identity (frame and instance id,
+not just count), those are not the same 35: 2 bricks the shipped checkpoint misses are found by
+the candidate, and 2 different bricks the shipped checkpoint finds are missed by the candidate;
+33 bricks are found by both checkpoints. The
 +0.008 mean-IoU shift is not confined to those 33 always-found bricks either -- summed over just
 that group the candidate's IoU total is 0.56 higher (+0.0099 mean-IoU on its own), and the four
 bricks that swapped from found to missed or back pull the observed shift down to +0.008. The
