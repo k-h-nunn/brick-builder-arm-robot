@@ -110,7 +110,7 @@ of the end point: a press run halts once the brick is home.
 
 ### Tilted press vs. flat press
 
-![Tilted press against a flat press, for all three curve shapes](../media/bricks/rocking_vs_flat.png)
+![Tilted press against a flat press, for all three curve shapes](../media/bricks/tilted_press_vs_flat.png)
 
 Not special-cased: tilting puts the sockets at different depths at the same instant. The four
 rows of a 2x4 seat one after another, over 2.2 mm, versus all at once for a flat press. The first
@@ -178,7 +178,7 @@ Workflow:
    curve; `trace.at_depths(grid)` gives the simulated result; `bench.quasi_static_band(params,
    stud_h)` gives the comparable part of the stroke.
    `brick_builder.bricks.media.make_force_vs_depth_figure(path)` draws all three shapes;
-   `bench.measure_rocking_ratio(params)` runs the flat-against-tilted pair.
+   `bench.measure_tilted_press_ratio(params)` runs the flat-against-tilted pair.
 4. Re-run the bench tests: `.venv/bin/python -m pytest -q tests/bricks`.
 
 Two numbers matter before tuning: snap update cost is about 100 microseconds/physics step for

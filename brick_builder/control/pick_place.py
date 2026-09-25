@@ -1,4 +1,4 @@
-"""Pick a DUPLO brick out of the tray with the stock jaws and seat it on the baseplate.
+"""Pick a DUPLO brick from the supply with the stock jaws and seat it on the baseplate.
 
 Everything here runs on the arm as it comes out of the kit: a base, a shoulder, an upper arm, a
 lower arm, a wrist, and a gripper with one fixed jaw and one moving jaw.  Nothing is attached to
@@ -116,7 +116,7 @@ PressStrategy = Literal["gripped", "release", "gripped_then_push"]
 # --------------------------------------------------------------------------- tool geometry ---
 
 
-def press_foot_offset() -> np.ndarray:
+def jaw_tip_offset() -> np.ndarray:
     """Where the fixed jaw's tip sits relative to the TCP, in the TCP frame [m].
 
     With the jaws brought together the fixed jaw reaches 7.2 mm lower than the moving one, so it
@@ -154,7 +154,7 @@ def tcp_for_foot(foot_xy, foot_z: float, spin: float) -> np.ndarray:
     """TCP position that puts the fixed jaw's tip at ``foot_xy`` and height ``foot_z``."""
 
     rot = _tool_down_rot(spin)
-    offset = rot @ press_foot_offset()
+    offset = rot @ jaw_tip_offset()
     return np.array([foot_xy[0] - offset[0], foot_xy[1] - offset[1], foot_z - offset[2]])
 
 
@@ -246,8 +246,8 @@ class ArmDriver:
         if not ok and tilt == 0.0:
             # `_pose_ik` is tuned for an environment, where a tick moves the target a couple of
             # millimetres and two damped-least-squares steps are always enough.  A scripted
-            # sequence crosses the whole workspace - the tray is 190 mm from the home pose - and
-            # over the tray the short solve stalls several millimetres short and never recovers,
+            # sequence crosses the whole workspace - the supply is 190 mm from the home pose - and
+            # over the supply the short solve stalls several millimetres short and never recovers,
             # because a rejected solve leaves the joint goal exactly where it was.  The full
             # Levenberg-Marquardt solve costs about a millisecond and only runs when the cheap
             # one has already given up, which on a clean run is under 2 % of ticks.
@@ -345,7 +345,7 @@ class PickPlaceConfig:
 
     Measured at the brick's top outer edge, where the tapering gap is narrowest, so it is a
     guarantee for the whole height of the brick.  4 mm leaves the tool about 37.6 mm wide at tip
-    height around a 31.8 mm brick, which clears the neighbouring tray brick.
+    height around a 31.8 mm brick, which clears the neighbouring supply brick.
     """
 
     squeeze: float = 0.006
@@ -452,13 +452,13 @@ class Step:
 
 
 class PickPlace:
-    """Drive one brick from the tray to a cell on the plate, and report what happened.
+    """Drive one brick from the supply to a cell on the plate, and report what happened.
 
-    ``brick`` is the body name of the brick to pick (``"tray_brick_0"`` in the default scene),
+    ``brick`` is the body name of the brick to pick (``"supply_brick_0"`` in the default scene),
     ``target`` is ``(cx, cy, layer)`` in plate stud coordinates - the centre of the brick's
     footprint, so a 2-wide footprint sits at a half-integer.
 
-    ``pick_at`` is where the arm *believes* the brick is - the taught tray slot, or whatever a
+    ``pick_at`` is where the arm *believes* the brick is - the taught supply slot, or whatever a
     camera reported.  Leaving it ``None`` reads the brick's true pose out of the simulator, which
     is fine for a demonstration but is a privileged signal, so anything that measures a success
     rate should pass the slot instead and let the brick be somewhere else.
@@ -473,7 +473,7 @@ class PickPlace:
         self,
         scene: Scene,
         *,
-        brick: str = "tray_brick_0",
+        brick: str = "supply_brick_0",
         target: tuple[float, float, int] = (3.5, 3.5, 0),
         cfg: PickPlaceConfig = PickPlaceConfig(),
         aim_error: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0),
@@ -746,7 +746,7 @@ class PickPlace:
         )
 
     def _brick_is_held(self) -> bool:
-        """Is the brick still between the jaws, rather than on the floor of the tray?"""
+        """Is the brick still between the jaws, rather than back on the table?"""
         pos = self.scene.body_pose(self.brick)[0]
         tcp_pos, tcp_rot = self.scene.tcp_pose()
         local = tcp_rot.T @ (pos - tcp_pos)
@@ -906,7 +906,7 @@ def verify_placement(
 
 @dataclass
 class RunResult:
-    """One complete pick and place, from the tray to the plate and back to the home pose."""
+    """One complete pick and place, from the supply to the plate and back to the home pose."""
 
     placement: PlacementCheck
     ticks: int
@@ -934,7 +934,7 @@ class RunResult:
 def run_once(
     scene: Scene,
     *,
-    brick: str = "tray_brick_0",
+    brick: str = "supply_brick_0",
     target: tuple[float, float, int] = (3.5, 3.5, 0),
     cfg: PickPlaceConfig = PickPlaceConfig(),
     aim_error=(0.0, 0.0, 0.0, 0.0),
@@ -984,26 +984,34 @@ def run_once(
 # ------------------------------------------------------------------------------ the bench ---
 
 
+SUPPLY_COLOURS = ("blue", "yellow", "green", "orange", "white", "red")
+"""The colour cycle spare bricks are drawn from, one per supply slot."""
+
+
 def make_scene(
     *,
     pad_friction: float = 0.5,
     brick: tuple[int, int] = (2, 4),
-    tray_bricks: int = 2,
+    supply_bricks: int = 2,
     snap: SnapParams = SnapParams(),
     cameras: tuple[str, ...] = (),
 ) -> Scene:
-    """The world this sequence runs in: the arm, an empty plate, and a tray of spare bricks.
+    """The world this sequence runs in: the arm, an empty plate, and loose spare bricks.
 
     ``pad_friction`` is the sliding friction between the bare jaw faces and the brick, which is
     the number the whole friction grasp turns on and the one nobody has measured on hardware yet.
+    ``supply_bricks`` is the number of loose spare bricks on the table (the real hardware has no
+    tray; it stays off, :attr:`~brick_builder.scene.compose.SceneConfig.tray`'s own default).
     """
 
+    supply = tuple(
+        (brick[0], brick[1], SUPPLY_COLOURS[k % len(SUPPLY_COLOURS)])
+        for k in range(supply_bricks)
+    )
     return build_scene(SceneConfig(
         held=None,
         placed=[],
-        tray=True,
-        tray_bricks=tray_bricks,
-        tray_brick=brick,
+        supply=supply,
         snap=snap,
         cameras=cameras,
         arm=ArmConfig(pad_friction=pad_friction),
@@ -1019,7 +1027,7 @@ def bench(
     seed0: int = 0,
     dr_level: float = 0.0,
     brick: tuple[int, int] = (2, 4),
-    tray_jitter: float = 0.002,
+    supply_jitter: float = 0.002,
     cfg: PickPlaceConfig | None = None,
     scene: Scene | None = None,
     correction: JointCorrectionConfig | None = None,
@@ -1027,11 +1035,11 @@ def bench(
     """Run ``trials`` randomized pick-and-places and report what fraction of them worked.
 
     One world is built and reset between trials, which is what makes a few hundred runs
-    affordable.  The arm always aims at the tray's *taught* slot, never at where the brick
+    affordable.  The arm always aims at the supply's *taught* slot, never at where the brick
     actually is, so the jitter below is an error it has to survive rather than one it is told
     about.  Each trial redraws
 
-    - where the brick really is in the tray (``tray_jitter`` metres and a couple of degrees of
+    - where the brick really is in the supply (``supply_jitter`` metres and a couple of degrees of
       yaw, uniform), which the arm does not know about;
     - ``place_error`` metres of lateral error in where the arm believes the target cell is, at a
       uniformly random direction - a magnitude, not a box, so "2 mm" means 2 mm;
@@ -1061,9 +1069,9 @@ def bench(
                 rng, level=dr_level, groups=("dynamics", "command")
             ))
         reset_scene(scene, rng)
-        adr = scene.free_joint_adr("tray_brick_0")
+        adr = scene.free_joint_adr("supply_brick_0")
         slot = scene.data.qpos[adr:adr + 3].copy()      # the taught slot, before the jitter
-        scene.data.qpos[adr:adr + 2] += rng.uniform(-tray_jitter, tray_jitter, 2)
+        scene.data.qpos[adr:adr + 2] += rng.uniform(-supply_jitter, supply_jitter, 2)
         yaw = float(rng.uniform(-math.radians(2.0), math.radians(2.0)))
         scene.data.qpos[adr + 3:adr + 7] = [math.cos(0.5 * yaw), 0.0, 0.0, math.sin(0.5 * yaw)]
         mujoco.mj_forward(scene.model, scene.data)
@@ -1071,7 +1079,7 @@ def bench(
 
         angle = float(rng.uniform(0.0, 2.0 * math.pi))
         aim = (0.0, 0.0, place_error * math.cos(angle), place_error * math.sin(angle))
-        result = run_once(scene, brick="tray_brick_0", cfg=cfg, aim_error=aim, pick_at=slot,
+        result = run_once(scene, brick="supply_brick_0", cfg=cfg, aim_error=aim, pick_at=slot,
                           rng=rng, correction=correction)
         rows.append({
             "trial": k,

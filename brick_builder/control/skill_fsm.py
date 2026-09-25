@@ -5,7 +5,7 @@
 :class:`~brick_builder.control.primitives.ToolTarget` interface the environments consume:
 
 ``look``    hold a pose from which the wrist camera can see the plate, so a perception producer
-            has a still frame to work from.  Skipped when no look pose is configured -- the press
+            has a still frame to work from.  Skipped when no viewing pose is configured -- the press
             environment is blind by design and starts straight at ``align``.
 ``align``   a straight-line move to the hover point above the target cell.
 ``press``   :class:`~brick_builder.control.primitives.PressScripted`.

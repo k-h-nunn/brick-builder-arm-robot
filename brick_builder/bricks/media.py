@@ -15,7 +15,7 @@ from dataclasses import replace
 from brick_builder.bricks.bench import (
     BenchConfig,
     PressBench,
-    measure_rocking_ratio,
+    measure_tilted_press_ratio,
     predicted_press_force,
     quasi_static_band,
 )
@@ -161,7 +161,7 @@ def make_force_vs_depth_figure(
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     handles = [
-        plt.Line2D([], [], color="#444444", lw=2.0, label="simulated (collet model)"),
+        plt.Line2D([], [], color="#444444", lw=2.0, label="simulated (per-stud friction model)"),
         plt.Line2D([], [], color="#444444", lw=3.2, alpha=0.25, label="configured  n·f·(1+β)·g(d)"),
     ]
     ax.legend(handles=handles, loc="lower right", fontsize=8, frameon=False)
@@ -180,20 +180,21 @@ def make_force_vs_depth_figure(
     return out
 
 
-def make_rocking_vs_flat_figure(
+def make_tilted_press_vs_flat_figure(
     out_path,
     params: "SnapParams | None" = None,
     tilt_deg: float = 2.0,
     curves: tuple = CURVES,
 ) -> dict:
-    """Press the same brick flat and rocked under each curve shape, and plot all three.
+    """Press the same brick flat and with the tilted press under each curve shape, and plot all
+    three.
 
     Every run is the same brick, the same studs and the same gauge; only the tool's grip, the
     motion and `SnapParams.curve` differ. The top row is the pair of force traces for each
     shape, the bottom row is the three peak ratios, which is bench test 4. The point the
-    figure makes is that rocking only pays when the curve has an entry bump to stage: with
-    "ramp" and "plateau" the press ends with every stud sliding at once whatever the tool did,
-    and the ratio is about 1.
+    figure makes is that the tilted press only pays when the curve has an entry bump to stage:
+    with "ramp" and "plateau" the press ends with every stud sliding at once whatever the tool
+    did, and the ratio is about 1.
 
     Returns one entry per shape, plus the default shape's numbers at the top level so older
     callers keep working.
@@ -206,7 +207,7 @@ def make_rocking_vs_flat_figure(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    results = {c: measure_rocking_ratio(replace(params, curve=c), tilt_deg=tilt_deg)
+    results = {c: measure_tilted_press_ratio(replace(params, curve=c), tilt_deg=tilt_deg)
                for c in curves}
 
     fig = plt.figure(figsize=(7.6, 5.4), dpi=150)
@@ -219,7 +220,7 @@ def make_rocking_vs_flat_figure(
         ax = fig.add_subplot(gs[0, i], sharey=axes[0] if axes else None)
         axes.append(ax)
         ax.plot(r["flat"].t, r["flat"].force, color="#999999", lw=1.6)
-        ax.plot(r["rock"].t, r["rock"].force, color=colour, lw=1.8)
+        ax.plot(r["tilted_press"].t, r["tilted_press"].force, color=colour, lw=1.8)
         ax.set_ylim(-2.0, top)
         ax.set_title(f"{curve}   ratio {r['ratio']:.2f}", fontsize=10, color=colour)
         ax.set_xlabel("time (s)", fontsize=8)
@@ -233,8 +234,9 @@ def make_rocking_vs_flat_figure(
             ax.annotate("flat", xy=(r["flat"].t[int(np.argmax(r["flat"].force))],
                                     r["flat"].peak_force),
                         xytext=(4, 2), textcoords="offset points", fontsize=8, color="#777777")
-            ax.annotate("rocking", xy=(r["rock"].t[int(np.argmax(r["rock"].force))],
-                                       r["rocking_peak"]),
+            ax.annotate("tilted press",
+                        xy=(r["tilted_press"].t[int(np.argmax(r["tilted_press"].force))],
+                            r["tilted_press_peak"]),
                         xytext=(4, -10), textcoords="offset points", fontsize=8, color=colour)
         else:
             ax.tick_params(labelleft=False)
@@ -256,22 +258,19 @@ def make_rocking_vs_flat_figure(
                     va="center", fontsize=9, color="#333333")
     bx.set_yticks(ypos, names, fontsize=9)
     bx.set_xlim(0.0, max(1.25, max(ratios) * 1.2))
-    bx.set_xlabel("rocking peak force / flat peak force", fontsize=9)
+    bx.set_xlabel("tilted press peak force / flat peak force", fontsize=9)
     bx.grid(alpha=0.25, axis="x")
     bx.set_axisbelow(True)
     for side in ("top", "right", "left"):
         bx.spines[side].set_visible(False)
     bx.tick_params(labelsize=8, left=False)
-    fig.suptitle(
-        f"Rocking a 2x4 on at {tilt_deg:g}\u00b0 of tilt: only an entry bump makes it pay",
-        fontsize=11,
-    )
+    fig.suptitle(f"Tilted press vs. flat press, 2x4 brick, {tilt_deg:g}\u00b0 tilt", fontsize=11)
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
 
     out = {
         "curves": {
-            c: {k: v for k, v in r.items() if k not in ("flat", "rock")}
+            c: {k: v for k, v in r.items() if k not in ("flat", "tilted_press")}
             for c, r in results.items()
         }
     }
@@ -279,9 +278,9 @@ def make_rocking_vs_flat_figure(
     out.update(
         {
             "flat_peak": first["flat_peak"],
-            "rocking_peak": first["rocking_peak"],
+            "tilted_press_peak": first["tilted_press_peak"],
             "ratio": first["ratio"],
-            "rocking_depth_spread": first["rocking_depth_spread"],
+            "tilted_press_depth_spread": first["tilted_press_depth_spread"],
             "flat_depth_spread": first["flat_depth_spread"],
             "peak_wrist_torque": first["peak_wrist_torque"],
         }

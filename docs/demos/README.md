@@ -25,7 +25,7 @@ CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python -m brick_builder.demo <na
 | `scene` | The default scene (arm, 8x8 baseplate, a held 2x4), overview camera. `--record out.mp4` instead records it settling under gravity. | ~1 s |
 | `teleop` | A scripted jog through `BrickBuilder/Reach-v0`'s own 8-number action space — see [why it is always scripted](#teleop) below. | ~5-10 s |
 | `press` | One press: the scripted baseline by default, or `--checkpoint <path> --actor torch\|c` for a trained residual policy. | ~5 s |
-| `rocking` | The tilted-press strategy (`PressConfig(rocking=True)`): tilt, seat one stud row, level out. | ~10 s |
+| `tilted-press` | The tilted-press strategy (`PressConfig(tilted_press=True)`): tilt, seat one stud row, level out. | ~10 s |
 | `force-map` | The static press-force heatmap over the workspace (`brick_builder.robot.force_map`). | ~20 s |
 | `policy` | Plays a trained checkpoint (default: `runs/reach_smoke/checkpoint.pt` against `BrickBuilder/Reach-v0`). | ~5 s |
 | `tokens` | The full `ObjectToken` readout (x, y, yaw, confidence, age) burned onto the wrist-camera video, for either producer. | ~5-10 s |
@@ -77,10 +77,10 @@ Keyboard teleop needs a real display and an OpenCV build with GUI support; the p
 than a live keyboard-controlled window. `--interactive` attempts the real thing and prints why it
 fell back.
 
-### `rocking`, `tokens`
+### `tilted-press`, `tokens`
 
 ```bash
-.venv/bin/python -m brick_builder.demo rocking --record rocking.mp4 --level 2
+.venv/bin/python -m brick_builder.demo tilted-press --record tilted_press.mp4 --level 2
 .venv/bin/python -m brick_builder.demo tokens --record tokens.mp4 --producer surrogate
 ```
 
@@ -104,11 +104,11 @@ stage. `--only` sections follow these stages: `scene`/`bricks`/`robot` (A-B), `c
 
 - Force-vs-depth plot from the press bench: [`force_vs_depth.png`](../media/bricks/force_vs_depth.png);
   see [bench test 1](../guide/02-simulator-and-bricks.md#bench-tests).
-- Tilted-press vs. flat-press force trace: [`rocking_vs_flat.png`](../media/bricks/rocking_vs_flat.png).
+- Tilted-press vs. flat-press force trace: [`tilted_press_vs_flat.png`](../media/bricks/tilted_press_vs_flat.png).
 - Exploded collision-vs-visual geometry view:
   [`exploded_collision_vs_visual.png`](../media/bricks/exploded_collision_vs_visual.png).
 - GIFs of a clean seat, a misaligned failure, a pull-off, a peel, and a 3-layer stack — still not
-  produced; the `press`/`rocking` demos above cover the seat and the tilted-press strategy,
+  produced; the `press`/`tilted-press` demos above cover the seat and the tilted-press strategy,
   the rest is `brick_builder/bricks`'s own figure function to add.
 
 ### Stage C — RL loop (Deliverable 1)

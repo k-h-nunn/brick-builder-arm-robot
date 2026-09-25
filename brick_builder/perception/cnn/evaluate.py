@@ -436,11 +436,11 @@ def evaluate_episode(source, colour_source=None, seed: int = 11, max_frames: int
     )
 
     rng = np.random.default_rng(seed)
-    scene = make_scene(tray_bricks=2, cameras=())
+    scene = make_scene(supply_bricks=2, cameras=())
     jitter_plate(scene, rng, max_xy=0.01, max_yaw_deg=5.0)
     randomize_appearance(scene, rng)
     diagonal, post = sample_camera_model(rng)          # one camera model for the whole run
-    runner = PickPlace(scene, brick="tray_brick_0", target=(3.5, 3.5, 0),
+    runner = PickPlace(scene, brick="supply_brick_0", target=(3.5, 3.5, 0),
                        rng=np.random.default_rng(seed + 1))
     renderer = SceneRenderer(scene.model, width=RENDER_SIZE[0], height=RENDER_SIZE[1])
     plate_bid = mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_BODY, scene.plate.name)

@@ -84,7 +84,7 @@ class Inventory:
                 h, w = kind
                 plural = "" if have == 1 else "s"
                 problems.append(
-                    f"the tray only has {have} {colour} {h}x{w} brick{plural}, "
+                    f"the available bricks are {have} {colour} {h}x{w} brick{plural}, "
                     f"but this command needs {need}"
                 )
         return problems

@@ -6,7 +6,7 @@ completely headless -- `MUJOCO_GL=egl` and matplotlib's `Agg` backend, exactly w
 already sets -- because the acceptance criterion is "each demo runs headless with `--record` and
 writes a playable mp4/PNG," not "each demo opens a window."
 
-Subcommands: ``scene``, ``teleop``, ``press``, ``rocking``, ``force-map``, ``policy``,
+Subcommands: ``scene``, ``teleop``, ``press``, ``tilted-press``, ``force-map``, ``policy``,
 ``tokens``. Each module's own docstring documents its
 demo-specific arguments (everything after the subcommand name, e.g.
 ``python -m brick_builder.demo policy --checkpoint runs/reach/checkpoint.pt``).
@@ -21,7 +21,7 @@ DEMOS: dict[str, str] = {
     "scene": "brick_builder.demo.scene_demo",
     "teleop": "brick_builder.demo.teleop_demo",
     "press": "brick_builder.demo.press_demo",
-    "rocking": "brick_builder.demo.rocking_demo",
+    "tilted-press": "brick_builder.demo.tilted_press_demo",
     "force-map": "brick_builder.demo.force_map_demo",
     "policy": "brick_builder.demo.policy_demo",
     "tokens": "brick_builder.demo.tokens_demo",

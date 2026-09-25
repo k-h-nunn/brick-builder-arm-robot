@@ -1,4 +1,4 @@
-"""Tests for `brick_builder.perception.views`: the three fixed LOOK poses, the crop/resize pixel
+"""Tests for `brick_builder.perception.views`: the three fixed viewing poses, the crop/resize pixel
 mapping, and the moving attention window (both the 3D-ROI form and the slot-state form).
 """
 
@@ -49,7 +49,7 @@ def scene():
     return build_scene(cfg)
 
 
-# ------------------------------------------------------------------------------ fixed LookPoses ---
+# ------------------------------------------------------------------------------ fixed ViewingPoses ---
 
 
 def test_plate_view_has_tcp_and_solves(scene):

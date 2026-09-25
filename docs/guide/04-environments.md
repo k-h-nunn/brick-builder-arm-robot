@@ -236,7 +236,7 @@ direction.
 | phase | what it does |
 |---|---|
 | `descend` | the 10 mm/s ramp. Ends `seated` when the measured tool reaches the seated height, or `lift` when the descent stalls under load well above it. |
-| `rock` | optional (`PressConfig.rocking`): the same ramp held at 4° until one stud row engages, then levelled out. |
+| `tilted_press` | optional (`PressConfig.tilted_press`): the same ramp held at 4° until one stud row engages, then levelled out. |
 | `lift` | a 2 mm hop to unload the brick before it is skimmed sideways. |
 | `search` | an outward spiral at the skim height; ends the moment the tool drops into the sockets. |
 | `seated` | done, holding the pressed pose. |

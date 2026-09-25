@@ -22,7 +22,7 @@ from). The brick is not on the stud grid -- it is teleported to a continuous pos
 plate, in the studs-block-it "resting on top of the studs" regime `bricks/generator.py` describes,
 not a snapped, grid-aligned placement.
 
-The LOOK pose and refresh rule
+The viewing pose and refresh rule
 -------------------------------
 ``LOOK_TCP`` is a fixed tool-down pose the arm starts every episode at (`SceneConfig.home_tcp`). A
 token is captured there at reset (age 0) and again whenever the arm's *read* TCP pose (not
@@ -235,7 +235,7 @@ class AlignFromTokensEnv(ArmEnv):
         )
 
     def _measure_px_per_m(self) -> float:
-        """Pixels per metre at the LOOK pose, at the brick's assumed resting height.
+        """Pixels per metre at the viewing pose, at the brick's assumed resting height.
 
         A one-off geometric calibration (not simulator truth about the *brick*): it only uses the
         fixed, known LOOK camera pose, exactly the way a real system would calibrate "how many
@@ -350,7 +350,7 @@ class AlignFromTokensEnv(ArmEnv):
         Only actually resets the ramp (latching a fresh start point and restarting its clock) when
         the estimate moved by more than a token's own noise floor, or on the very first call.
         Otherwise the target/spin are updated in place and the ramp already under way keeps
-        running: while the tool sits at the LOOK pose, *every* tick's refresh sees essentially the
+        running: while the tool sits at the viewing pose, *every* tick's refresh sees essentially the
         same estimate (the arm has not moved the brick), and resetting on every one of those would
         freeze the ramp at ``elapsed == 0`` forever -- it would never get anywhere to leave the
         LOOK-pose tolerance band that gates the next refresh, a self-inflicted deadlock this guard
@@ -581,8 +581,8 @@ def measure_success_vs_noise_age_producer(
 
 
 def make_align_figures(out_dir: str = "docs/media/envs", width: int = 800, height: int = 600) -> dict:
-    """Render this module's two figures: the LOOK-pose wrist view, and success vs. noise/
-    age/producer. This is the entry point `scripts/make_media.py` calls.
+    """Render this module's two figures: the viewing-pose wrist view, and success vs. noise/
+    age/token source. This is the entry point `scripts/make_media.py` calls.
     """
     import matplotlib
 
@@ -596,7 +596,7 @@ def make_align_figures(out_dir: str = "docs/media/envs", width: int = 800, heigh
     out_dir.mkdir(parents=True, exist_ok=True)
     out = {}
 
-    # -- 1. the LOOK pose, wrist camera --------------------------------------------------------
+    # -- 1. the viewing pose, wrist camera --------------------------------------------------------
     env = AlignFromTokensEnv(horizon=5, seed=0)
     env.reset(seed=0)
     renderer = SceneRenderer(env.scene.model, width=width, height=height)
@@ -604,11 +604,7 @@ def make_align_figures(out_dir: str = "docs/media/envs", width: int = 800, heigh
         frame = renderer.render(env.scene.data, WRIST_CAM)
         fig, ax = plt.subplots(figsize=(width / 130, height / 130), dpi=130)
         ax.imshow(frame.rgb)
-        ax.set_title(
-            "AlignFromTokens LOOK pose: wrist_cam view of the target brick near the plate centre\n"
-            "(the fixed jaw fills the right of frame at every wrist-cam pose -- WP-SCENE)",
-            fontsize=8,
-        )
+        ax.set_title("Wrist camera viewing pose", fontsize=8)
         ax.axis("off")
         fig.tight_layout()
         path = out_dir / "align_look_pose.png"
@@ -625,22 +621,22 @@ def make_align_figures(out_dir: str = "docs/media/envs", width: int = 800, heigh
 
     noise = results["noise"]
     axes[0].plot(list(noise.keys()), list(noise.values()), "o-")
-    axes[0].set_xlabel("token noise (mm, surrogate producer)")
-    axes[0].set_ylabel("success rate")
+    axes[0].set_xlabel("Token noise [mm]")
+    axes[0].set_ylabel("Success rate")
     axes[0].set_ylim(-0.05, 1.05)
     axes[0].set_title("vs. noise")
 
     age = results["age"]
     axes[1].plot(list(age.keys()), list(age.values()), "o-", color="tab:orange")
-    axes[1].set_xlabel("token age (s) before the first reading")
+    axes[1].set_xlabel("Token age [s]")
     axes[1].set_ylim(-0.05, 1.05)
-    axes[1].set_title("vs. age (static target: mostly a time-budget cost)")
+    axes[1].set_title("vs. age")
 
     prod = results["producer"]
     names = list(prod.keys())
     axes[2].bar(names, [prod[n]["success_rate"] for n in names], color="tab:green")
     axes[2].set_ylim(-0.05, 1.05)
-    axes[2].set_title("vs. producer")
+    axes[2].set_title("vs. token source")
 
     fig.suptitle("AlignFromTokens: scripted go-to-token controller success", fontsize=10)
     fig.tight_layout()

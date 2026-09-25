@@ -19,14 +19,14 @@ import numpy as np
 from ..control.pick_place import CONTROL_DT, ArmDriver
 from ..perception.ideal_scene_model import IdealSceneModel
 from ..perception.scene_model import SceneState
-from ..perception.views import LookPose, render_view
+from ..perception.views import ViewingPose, render_view
 from ..render.renderer import SceneRenderer
 from ..robot.patch_so101 import WRIST_CAM, WRIST_CAM_DIAGONAL_FOV_DEG, fovy_from_diagonal_fov
 from ..scene.compose import Scene
 
 WRIST_RENDER = (512, 512)
 
-WRIST_FULL = LookPose(
+WRIST_FULL = ViewingPose(
     name="wrist",
     camera=WRIST_CAM,
     render_size=WRIST_RENDER,

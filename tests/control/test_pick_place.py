@@ -18,15 +18,15 @@ from brick_builder.control.pick_place import (
     bench,
     cell_world,
     gripper_press_force,
+    jaw_tip_offset,
     make_scene,
-    press_foot_offset,
     run_once,
     tcp_for_brick,
     tcp_for_foot,
     verify_placement,
 )
 from brick_builder.robot.patch_so101 import jaw_geometry
-from brick_builder.scene.compose import TRAY_BRICK_SPACING, grasp_pose
+from brick_builder.scene.compose import SUPPLY_SPACING, grasp_pose
 
 
 @pytest.fixture(scope="module")
@@ -37,7 +37,7 @@ def world():
 
 @pytest.fixture(scope="module")
 def world_2x2():
-    """The same world with 2x2 bricks in the tray.
+    """The same world with 2x2 bricks in the supply.
 
     Four studs need half the force of eight and a 32 mm footprint has nowhere near the leverage
     of a 64 mm one to stand itself up on one row of studs, so a 2x2 is the size the blind
@@ -56,9 +56,9 @@ def scene_2x2(world_2x2):
 
 
 def taught_slot(scene, brick: str) -> np.ndarray:
-    """Where the tray slot is, which is what the arm aims at.
+    """Where the supply slot is, which is what the arm aims at.
 
-    `reset_scene` puts a tray brick exactly on its taught slot; `bench` is what adds the +-2 mm
+    `reset_scene` puts a supply brick exactly on its taught slot; `bench` is what adds the +-2 mm
     of jitter the arm is not told about. Reading it here and passing it as `pick_at` is the
     zero-unknown-offset case.
     """
@@ -90,7 +90,7 @@ def test_the_fixed_jaw_is_what_reaches_lowest_when_the_jaws_are_together():
         f"{fixed_tip * 1e3:.1f} mm in the gripper frame; they are too close to the same height "
         "for the fixed jaw to be the only thing that touches"
     )
-    offset = press_foot_offset()
+    offset = jaw_tip_offset()
     assert offset[2] == pytest.approx(0.008, abs=1e-6), "the tip should reach 8 mm below the TCP"
     assert abs(offset[0]) > 0.02, "the foot is off to one side of the tool axis, and by a lot"
 
@@ -105,31 +105,31 @@ def test_the_two_tool_transforms_invert_the_grasp_and_the_foot():
 
     foot = np.array([0.17, -0.02, 0.028])
     tcp = tcp_for_foot(foot[:2], foot[2], 0.0)
-    assert tcp[2] - press_foot_offset()[2] == pytest.approx(foot[2], abs=1e-12)
+    assert tcp[2] - jaw_tip_offset()[2] == pytest.approx(foot[2], abs=1e-12)
 
 
-def test_the_tray_leaves_the_stock_jaws_room_to_get_around_one_brick(scene):
+def test_the_supply_spacing_leaves_the_stock_jaws_room_to_get_around_one_brick(scene):
     """The bricks are spaced by what the jaws are wide, not by what looks tidy."""
     geo = jaw_geometry()
     fixed_outer = geo.fixed_boxes[0][0][0] - geo.fixed_boxes[0][1][0]
     tool_reach = abs(fixed_outer - geo.fixed_inner_x)
-    spacing = TRAY_BRICK_SPACING * scene.cfg.spec.pitch
+    spacing = SUPPLY_SPACING * scene.cfg.spec.pitch
     brick_width = 2 * scene.cfg.spec.pitch - scene.cfg.spec.clearance
     assert spacing - brick_width > 2.0 * tool_reach, (
         f"{1e3 * spacing:.1f} mm spacing only leaves "
         f"{1e3 * (spacing - brick_width) / 2:.1f} mm either side of a brick, and the jaw needs "
         f"{1e3 * tool_reach:.1f} mm"
     )
-    first = scene.body_pose("tray_brick_0")[0]
-    second = scene.body_pose("tray_brick_1")[0]
-    assert abs(first[0] - second[0]) == pytest.approx(spacing, abs=1e-6)
+    first = scene.body_pose("supply_brick_0")[0]
+    second = scene.body_pose("supply_brick_1")[0]
+    assert np.linalg.norm(first[:2] - second[:2]) == pytest.approx(spacing, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------- the whole run ---
 
 
 def test_the_scripted_sequence_runs_end_to_end_and_its_record_is_consistent(scene):
-    """The whole sequence, on the real simulator, with a 2x4 and an unknown tray offset.
+    """The whole sequence, on the real simulator, with a 2x4 and an unknown supply offset.
 
     What is asserted is that it ran and that its own record is true, not that the brick seated:
     a blind press with a correct servo model seats a 2x4 in 0-17 % of runs (the numbers are in
@@ -139,7 +139,7 @@ def test_the_scripted_sequence_runs_end_to_end_and_its_record_is_consistent(scen
     """
     phases = []
     result = run_once(
-        scene, brick="tray_brick_0", target=(3.5, 3.5, 0),
+        scene, brick="supply_brick_0", target=(3.5, 3.5, 0),
         on_step=lambda step: phases.append(step.phase),
     )
     assert result.failure is None, result.failure
@@ -156,7 +156,7 @@ def test_the_scripted_sequence_runs_end_to_end_and_its_record_is_consistent(scen
 
     # The record has to agree with the simulator read back afterwards, whatever the outcome was.
     placement = result.placement
-    again = verify_placement(scene, "tray_brick_0", (3.5, 3.5, 0))
+    again = verify_placement(scene, "supply_brick_0", (3.5, 3.5, 0))
     assert again.connected == placement.connected
     assert again.at_target_cell == placement.at_target_cell
     assert again.n_engaged == placement.n_engaged
@@ -167,11 +167,11 @@ def test_the_scripted_sequence_runs_end_to_end_and_its_record_is_consistent(scen
 
 
 def test_a_2x2_with_no_unknown_offset_seats_and_stays_seated(scene_2x2):
-    """The seating case the blind sequence does handle: a 2x2, aimed at the taught tray slot,
+    """The seating case the blind sequence does handle: a 2x2, aimed at the taught supply slot,
     with no error the arm was not told about. Fixed seed, and it is the run this asserts."""
     result = run_once(
-        scene_2x2, brick="tray_brick_0", target=(3.5, 3.5, 0),
-        pick_at=taught_slot(scene_2x2, "tray_brick_0"), rng=np.random.default_rng(1),
+        scene_2x2, brick="supply_brick_0", target=(3.5, 3.5, 0),
+        pick_at=taught_slot(scene_2x2, "supply_brick_0"), rng=np.random.default_rng(1),
     )
     assert result.failure is None, result.failure
     placement = result.placement
@@ -181,12 +181,12 @@ def test_a_2x2_with_no_unknown_offset_seats_and_stays_seated(scene_2x2):
     assert placement.n_engaged == 4, placement.n_engaged
 
     # Still there once nothing is holding it is the other half of the criterion.
-    assert verify_placement(scene_2x2, "tray_brick_0", (3.5, 3.5, 0)).success
+    assert verify_placement(scene_2x2, "supply_brick_0", (3.5, 3.5, 0)).success
 
 
-def test_the_run_is_a_generator_that_hands_a_film_crew_the_scene_and_the_phase(scene):
+def test_the_run_is_a_generator_that_hands_a_recorder_the_scene_and_the_phase(scene):
     """What a video script needs: one step per control tick, in order, with the live scene."""
-    job = PickPlace(scene, brick="tray_brick_0", cfg=PickPlaceConfig(press_strategy="gripped"))
+    job = PickPlace(scene, brick="supply_brick_0", cfg=PickPlaceConfig(press_strategy="gripped"))
     seen = []
     last_tick = 0
     for step in job.run():
@@ -236,7 +236,7 @@ def test_verify_placement_tells_a_seated_brick_from_one_cell_over():
 
 def test_the_press_force_is_zero_when_nothing_is_touching_the_brick(scene):
     """A force measurement that reads non-zero at rest would make every other number a guess."""
-    assert gripper_press_force(scene, "tray_brick_0") == 0.0
+    assert gripper_press_force(scene, "supply_brick_0") == 0.0
 
 
 def test_the_driver_runs_the_same_multi_rate_loop_the_environments_do(scene):
@@ -264,22 +264,22 @@ def test_cell_world_lands_on_the_plate_grid(scene):
 def test_a_second_brick_goes_on_top_of_the_first_and_neither_comes_off(scene_2x2):
     """Two bricks, one on the plate and one on top of it, both seated, in one world. 2x2s at the
     taught slot, for the reason `test_a_2x2_with_no_unknown_offset_seats_and_stays_seated` gives."""
-    first = run_once(scene_2x2, brick="tray_brick_0", target=(3.5, 3.5, 0),
-                     pick_at=taught_slot(scene_2x2, "tray_brick_0"),
+    first = run_once(scene_2x2, brick="supply_brick_0", target=(3.5, 3.5, 0),
+                     pick_at=taught_slot(scene_2x2, "supply_brick_0"),
                      rng=np.random.default_rng(1))
     assert first.placement.success, first.placement
 
-    second = run_once(scene_2x2, brick="tray_brick_1", target=(3.5, 3.5, 1),
-                      pick_at=taught_slot(scene_2x2, "tray_brick_1"),
+    second = run_once(scene_2x2, brick="supply_brick_1", target=(3.5, 3.5, 1),
+                      pick_at=taught_slot(scene_2x2, "supply_brick_1"),
                       rng=np.random.default_rng(1))
     assert second.failure is None, second.failure
     assert second.placement.success, second.placement
-    assert verify_placement(scene_2x2, "tray_brick_0", (3.5, 3.5, 0)).success, (
+    assert verify_placement(scene_2x2, "supply_brick_0", (3.5, 3.5, 0)).success, (
         "putting the second brick on shook the first one loose"
     )
     links = {(c.upper, c.lower) for c in scene_2x2.snap.connections()}
-    assert ("tray_brick_0", scene_2x2.plate.name) in links, links
-    assert ("tray_brick_1", "tray_brick_0") in links, links
+    assert ("supply_brick_0", scene_2x2.plate.name) in links, links
+    assert ("supply_brick_1", "supply_brick_0") in links, links
 
 
 # ------------------------------------------------------------------------------ the numbers ---

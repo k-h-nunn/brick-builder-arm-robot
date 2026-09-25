@@ -324,7 +324,9 @@ class SceneConfig:
     held: HeldBrick | None = field(default_factory=HeldBrick)
     grasp_mode: Literal["weld", "friction"] = "weld"
     snap: SnapParams = SnapParams()
-    snap_model: Literal["collet", "detent"] = "collet"
+    snap_model: Literal["per_stud_friction", "detent"] = "per_stud_friction"
+    """Which snap-fit model bricks connect with. ``"collet"`` is accepted as a deprecated alias
+    for ``"per_stud_friction"`` in parameter files and normalized on the way in."""
     tray: bool = False
     cameras: tuple[str, ...] = (WRIST_CAM, OVERVIEW_CAM)
     spec: BrickSpec = DUPLO
@@ -832,7 +834,8 @@ def build_scene(cfg: SceneConfig = SceneConfig()) -> Scene:
     problems = validate_structure(cfg.placed, grid_shape=cfg.plate_studs)
     if problems:
         raise ValueError("invalid structure: " + "; ".join(problems))
-    if cfg.snap_model not in ("collet", "detent"):
+    snap_model = "per_stud_friction" if cfg.snap_model == "collet" else cfg.snap_model
+    if snap_model not in ("per_stud_friction", "detent"):
         raise ValueError(f"unknown snap_model {cfg.snap_model!r}")
     if cfg.grasp_mode not in ("weld", "friction"):
         raise ValueError(f"unknown grasp_mode {cfg.grasp_mode!r}")
@@ -892,7 +895,7 @@ def build_scene(cfg: SceneConfig = SceneConfig()) -> Scene:
     _add_cameras(world, cfg, grasp)
 
     # 2. the snap model, on the finished spec and before compiling.
-    snap = ColletSnap(cfg.snap) if cfg.snap_model == "collet" else DetentSnap(cfg.snap)
+    snap = ColletSnap(cfg.snap) if snap_model == "per_stud_friction" else DetentSnap(cfg.snap)
     bricks = list(placed) + list(tray_bricks) + ([held] if held is not None else [])
     set_brick_friction(bricks + [plate], cfg.brick_friction)
     snap.declare(world, bricks, [plate])

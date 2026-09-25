@@ -50,7 +50,7 @@ portable to the firmware.  Every primitive takes ``dt`` as a constructor argumen
 """
 
 PHASES: tuple[str, ...] = (
-    "idle", "descend", "rock", "check", "lift", "search", "seated", "stuck",
+    "idle", "descend", "tilted_press", "check", "lift", "search", "seated", "stuck",
 )
 """Every value :attr:`PressScripted.phase` can take, in the order they normally occur."""
 
@@ -261,10 +261,10 @@ class PressConfig:
     saturated_time: float = 0.30      # s of saturated load before the press gives up
     max_time: float = 5.0             # s before the press gives up whatever else is happening
 
-    rocking: bool = False
-    rock_tilt: float = math.radians(4.0)
-    rock_engage: float = 0.0015       # m of descent that counts as "one stud row is in"
-    rock_level_time: float = 0.30     # s to bring the tool back to level
+    tilted_press: bool = False
+    tilted_press_tilt: float = math.radians(4.0)
+    tilted_press_engage: float = 0.0015  # m of descent that counts as "one stud row is in"
+    tilted_press_level_time: float = 0.30  # s to bring the tool back to level
 
 
 class PressScripted:
@@ -279,8 +279,9 @@ class PressScripted:
 
     ``descend``  the 10 mm/s ramp, sideways-soft.  Ends at ``check`` when the descent stalls
                  under load.
-    ``rock``     only when ``PressConfig.rocking``: the same ramp held at ``rock_tilt`` until one
-                 stud row engages, then the tool is levelled out over ``rock_level_time``.
+    ``tilted_press``  only when ``PressConfig.tilted_press``: the same ramp held at
+                 ``tilted_press_tilt`` until one stud row engages, then the tool is levelled out
+                 over ``tilted_press_level_time``.
     ``check``    stop pushing, settle at the seated height, and read the height back.  This is
                  the only place the press decides whether the brick went in; see :meth:`_check`.
     ``lift``     a 2 mm hop to unload the brick before it is skimmed sideways.
@@ -325,7 +326,7 @@ class PressScripted:
         self._ref = np.asarray(fb.tcp_pos, dtype=float).copy()
         self._spiral_centre = self._ref[:2].copy()
         self._spin = float(fb.tcp_spin)
-        self._tilt = self.cfg.rock_tilt if self.cfg.rocking else 0.0
+        self._tilt = self.cfg.tilted_press_tilt if self.cfg.tilted_press else 0.0
         self._zbuf[:] = float(fb.tcp_pos[2])
         self._zfill = 0
         self._t = 0.0
@@ -337,7 +338,7 @@ class PressScripted:
         self.done = False
         self.seated = False
         self.press_time = 0.0
-        self.phase = "rock" if self.cfg.rocking else "descend"
+        self.phase = "tilted_press" if self.cfg.tilted_press else "descend"
 
     def _enter(self, phase: str, ref: np.ndarray | None = None) -> None:
         """Switch phase, restarting the phase clock and (optionally) re-latching the ramp origin.
@@ -369,7 +370,7 @@ class PressScripted:
         if not self.done:
             self.press_time += self.dt
 
-        if self.phase in ("descend", "rock"):
+        if self.phase in ("descend", "tilted_press"):
             pos, tilt = self._descend(z, peak >= cfg.stall_load)
         elif self.phase == "check":
             pos, tilt = self._check(z)
@@ -395,14 +396,16 @@ class PressScripted:
         pos = np.array([self._ref[0], self._ref[1], cmd_z])
         tilt = self._tilt
 
-        if self.phase == "rock":
+        if self.phase == "tilted_press":
             # Seat one stud row first: hold the tilt until the tool has actually gone down, then
-            # level out over `rock_level_time` while the ramp keeps pressing.
-            if self._level_at is None and (self._ref[2] - z >= cfg.rock_engage or self._t >= 1.5):
+            # level out over `tilted_press_level_time` while the ramp keeps pressing.
+            if self._level_at is None and (
+                self._ref[2] - z >= cfg.tilted_press_engage or self._t >= 1.5
+            ):
                 self._level_at = self._t
             if self._level_at is not None:
-                frac = min((self._t - self._level_at) / cfg.rock_level_time, 1.0)
-                tilt = cfg.rock_tilt * (1.0 - frac)
+                frac = min((self._t - self._level_at) / cfg.tilted_press_level_time, 1.0)
+                tilt = cfg.tilted_press_tilt * (1.0 - frac)
                 self._tilt = tilt
                 if frac >= 1.0:
                     self._enter("descend", pos)
@@ -616,7 +619,7 @@ def _spiral_path(cfg: PressConfig) -> tuple[list[float], list[float]]:
 
 
 PHASE_COLOURS: dict[str, str] = {
-    "rock": "#fff1e5", "check": "#ffe8cc", "lift": "#fff8c5", "search": "#ddf4ff",
+    "tilted_press": "#fff1e5", "check": "#ffe8cc", "lift": "#fff8c5", "search": "#ddf4ff",
     "seated": "#dafbe1", "stuck": "#ffebe9",
 }
 """Background colour per press phase, shared by every figure that draws a press over time."""

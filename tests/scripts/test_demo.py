@@ -21,9 +21,9 @@ import brick_builder.demo as demo_pkg
 import brick_builder.demo.force_map_demo as force_map_demo
 import brick_builder.demo.policy_demo as policy_demo
 import brick_builder.demo.press_demo as press_demo
-import brick_builder.demo.rocking_demo as rocking_demo
 import brick_builder.demo.scene_demo as scene_demo
 import brick_builder.demo.teleop_demo as teleop_demo
+import brick_builder.demo.tilted_press_demo as tilted_press_demo
 import brick_builder.demo.tokens_demo as tokens_demo
 
 
@@ -34,7 +34,7 @@ def _assert_playable(path: Path) -> None:
 
 def test_registry_lists_every_spec_demo() -> None:
     assert set(demo_pkg.DEMOS) == {
-        "scene", "teleop", "press", "rocking", "force-map", "policy", "tokens",
+        "scene", "teleop", "press", "tilted-press", "force-map", "policy", "tokens",
     }
 
 
@@ -63,9 +63,9 @@ def test_press_demo_scripted_baseline_seats_a_2x4_at_level_0(tmp_path: Path) -> 
     _assert_playable(out)
 
 
-def test_rocking_demo_runs(tmp_path: Path) -> None:
-    out = tmp_path / "rocking.mp4"
-    rocking_demo.run(record=str(out), seed=0, extra=["--level", "1"])
+def test_tilted_press_demo_runs(tmp_path: Path) -> None:
+    out = tmp_path / "tilted_press.mp4"
+    tilted_press_demo.run(record=str(out), seed=0, extra=["--level", "1"])
     _assert_playable(out)
 
 

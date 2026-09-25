@@ -520,7 +520,7 @@ def fovy_from_diagonal_fov(diagonal_deg: float, width: float, height: float) -> 
     so ``tan(diag/2)**2 == tan(fovx/2)**2 + tan(fovy/2)**2`` with
     ``tan(fovx/2) == aspect * tan(fovy/2)`` (``aspect = width / height``), giving
     ``tan(fovy/2) == tan(diag/2) / sqrt(1 + aspect**2)``. Works for any aspect ratio -- 4:3, 16:9,
-    or a square render at the fixed look poses `brick_builder.perception.views` defines.
+    or a square render at the fixed viewing poses `brick_builder.perception.views` defines.
     """
     aspect = float(width) / float(height)
     half_diag = math.radians(diagonal_deg) / 2.0

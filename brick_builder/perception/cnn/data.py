@@ -295,7 +295,7 @@ def window_for_roi(
     margin: float = 0.25,
     name: str = "train",
 ):
-    """A `views.LookPose` framing `roi_world` from wherever the wrist camera currently is, at a
+    """A `views.ViewingPose` framing `roi_world` from wherever the wrist camera currently is, at a
     chosen diagonal field of view.
 
     `views.attention_view` does the same thing at the nominal field of view only; this re-does its
@@ -306,7 +306,7 @@ def window_for_roi(
     import mujoco
 
     from ..backproject import camera_geometry
-    from ..views import LookPose, attention_crop
+    from ..views import ViewingPose, attention_crop
     from ...robot.patch_so101 import WRIST_CAM, fovy_from_diagonal_fov
 
     fovy = fovy_from_diagonal_fov(diagonal_fov_deg, *RENDER_SIZE)
@@ -327,7 +327,7 @@ def window_for_roi(
         x0 = int(np.clip(x0 + shift[0], 0, RENDER_SIZE[0] - side))
         y0 = int(np.clip(y0 + shift[1], 0, RENDER_SIZE[1] - side))
         crop = (x0, y0, x0 + side, y0 + side)
-    return LookPose(
+    return ViewingPose(
         name=name, camera=WRIST_CAM, render_size=RENDER_SIZE, crop=crop, fovy_deg=fovy,
         output_size=OUTPUT_SIZE, tcp=None,
     )
@@ -463,28 +463,13 @@ def _random_structure(rng: np.random.Generator, touching_same_colour: bool):
     return placed
 
 
-def _hide_tray(scene) -> None:
-    """Take the tray out of every render without taking it out of the physics.
-
-    Moving its visual geoms into the collision group is enough: `SceneRenderer` hides that group,
-    so the loose bricks look like they are standing on the bare table (they are 2 mm higher than
-    they would be, which is well inside the pose jitter the scenes already carry).
-    """
-    import mujoco
-
-    from ...bricks.generator import COLLISION_GROUP
-
-    for g in range(scene.model.ngeom):
-        name = mujoco.mj_id2name(scene.model, mujoco.mjtObj.mjOBJ_GEOM, g) or ""
-        if name.startswith("tray_") and "brick" not in name:
-            scene.model.geom_group[g] = COLLISION_GROUP
-
-
 def _scatter_loose_bricks(scene, rng: np.random.Generator, centre_xy) -> None:
-    """Put the tray's bricks down at random spots and angles around the supply area."""
+    """Put the supply's bricks down at random spots and angles around the supply area."""
     import mujoco
 
-    names = [n for n in scene.bricks if n.startswith("tray_brick_")]
+    from ...scene.compose import SUPPLY_PREFIX
+
+    names = [n for n in scene.bricks if n.startswith(("tray_brick_", SUPPLY_PREFIX))]
     spots: list[np.ndarray] = []
     for name in names:
         for _ in range(40):
@@ -502,23 +487,25 @@ def _scatter_loose_bricks(scene, rng: np.random.Generator, centre_xy) -> None:
 
 
 def _supply_scene(rng: np.random.Generator, frames: int) -> Iterator[Sample]:
-    """Loose bricks in the supply area, tray shown or hidden."""
+    """Loose bricks in the supply area, with the tray optionally shown."""
     from ...render.renderer import SceneRenderer
     from ...robot.patch_so101 import ArmConfig
     from ...scene.compose import SceneConfig, build_scene, reset_scene, settle
 
     with_tray = bool(rng.random() < 0.5)
-    cfg = SceneConfig(
-        held=None, placed=[], tray=True, tray_bricks=int(rng.integers(2, 5)),
-        cameras=(), arm=ArmConfig(),
-    )
+    n = int(rng.integers(2, 5))
+    if with_tray:
+        cfg = SceneConfig(held=None, placed=[], tray=True, tray_bricks=n,
+                          cameras=(), arm=ArmConfig())
+        centre = np.asarray(cfg.tray_xy, dtype=float)
+    else:
+        supply = tuple((2, 4, str(rng.choice(BRICK_COLOURS))) for _ in range(n))
+        cfg = SceneConfig(held=None, placed=[], supply=supply, cameras=(), arm=ArmConfig())
+        centre = np.asarray(cfg.supply_xy, dtype=float)
     scene = build_scene(cfg)
-    if not with_tray:
-        _hide_tray(scene)
     jitter_plate(scene, rng)
     reset_scene(scene, rng)
     randomize_appearance(scene, rng)
-    centre = np.asarray(cfg.tray_xy, dtype=float)
     if not with_tray:
         _scatter_loose_bricks(scene, rng, centre)
         settle(scene, 0.25)
@@ -723,23 +710,28 @@ def _approach_scene(rng: np.random.Generator, frames: int) -> Iterator[Sample]:
 
     from ...render.renderer import SceneRenderer
     from ...scene.compose import (
-        SceneConfig, build_scene, grasp_pose, jaw_angle_for_clearance, reset_scene, settle,
-        tool_down_ik,
+        SUPPLY_PREFIX, SceneConfig, build_scene, grasp_pose, jaw_angle_for_clearance, reset_scene,
+        settle, tool_down_ik,
     )
 
-    cfg = SceneConfig(held=None, placed=[], tray=True, tray_bricks=int(rng.integers(2, 4)),
-                      cameras=())
+    brick_shape = (2, 4)
+    n = int(rng.integers(2, 4))
+    with_tray = bool(rng.random() < 0.5)
+    if with_tray:
+        cfg = SceneConfig(held=None, placed=[], tray=True, tray_bricks=n, cameras=())
+        centre = np.asarray(cfg.tray_xy, dtype=float)
+    else:
+        supply = tuple((*brick_shape, str(rng.choice(BRICK_COLOURS))) for _ in range(n))
+        cfg = SceneConfig(held=None, placed=[], supply=supply, cameras=())
+        centre = np.asarray(cfg.supply_xy, dtype=float)
     scene = build_scene(cfg)
-    if rng.random() < 0.5:
-        _hide_tray(scene)
     reset_scene(scene, rng)
     meta_vis = randomize_appearance(scene, rng)
-    centre = np.asarray(cfg.tray_xy, dtype=float)
     _scatter_loose_bricks(scene, rng, centre)
     settle(scene, 0.25)
 
-    names = [n for n in scene.bricks if n.startswith("tray_brick_")]
-    grasp = grasp_pose(cfg.tray_brick[0], cfg.tray_brick[1], scene.cfg.spec)
+    names = [n for n in scene.bricks if n.startswith(("tray_brick_", SUPPLY_PREFIX))]
+    grasp = grasp_pose(brick_shape[0], brick_shape[1], scene.cfg.spec)
     grip_open = jaw_angle_for_clearance(grasp.contact_point, 0.004)
     renderer = SceneRenderer(scene.model, width=RENDER_SIZE[0], height=RENDER_SIZE[1])
     try:
@@ -779,11 +771,11 @@ def _episode_scene(rng: np.random.Generator, frames: int) -> Iterator[Sample]:
     from ...control.pick_place import PickPlace, make_scene
     from ...render.renderer import SceneRenderer
 
-    scene = make_scene(tray_bricks=int(rng.integers(2, 4)), cameras=())
+    scene = make_scene(supply_bricks=int(rng.integers(2, 4)), cameras=())
     jitter_plate(scene, rng, max_xy=0.01, max_yaw_deg=5.0)
     meta_vis = randomize_appearance(scene, rng)
     target = (float(rng.integers(1, 7)) + 0.5, float(rng.integers(1, 7)) + 0.5, 0)
-    runner = PickPlace(scene, brick=f"tray_brick_{int(rng.integers(0, 2))}", target=target,
+    runner = PickPlace(scene, brick=f"supply_brick_{int(rng.integers(0, 2))}", target=target,
                        rng=np.random.default_rng(int(rng.integers(1 << 30))))
     renderer = SceneRenderer(scene.model, width=RENDER_SIZE[0], height=RENDER_SIZE[1])
     plate_xy = _plate_centre(scene)[:2]

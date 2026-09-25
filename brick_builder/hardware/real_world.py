@@ -36,7 +36,7 @@ import numpy as np
 
 from ..perception.backproject import CameraGeometry
 from ..perception.scene_model import SceneState
-from ..perception.views import LookPose, crop_and_resize, cropped_camera_geometry
+from ..perception.views import ViewingPose, crop_and_resize, cropped_camera_geometry
 from ..robot.kinematics import ArmKinematics
 from ..robot.patch_so101 import (
     ARM_JOINTS,
@@ -54,7 +54,7 @@ N_ARM = 5
 """Joints the inverse kinematics solves for; the gripper moves no tool axis."""
 
 UVC_RESOLUTION = (640, 480)
-"""The wrist module's recommended operating resolution, and what the parameter file ships."""
+"""The wrist module's target operating resolution, and what the parameter file ships."""
 
 WINDOW_SIZE = 256
 """The scene model's input resolution -- the same 256 the simulator's wrist window uses."""
@@ -128,7 +128,7 @@ class CameraIntrinsics:
         )
 
 
-def camera_window(intr: CameraIntrinsics, output_size: int = WINDOW_SIZE) -> LookPose:
+def camera_window(intr: CameraIntrinsics, output_size: int = WINDOW_SIZE) -> ViewingPose:
     """The 256x256 window cut out of an undistorted frame: the largest centred square, resized.
 
     A 4:3 sensor is not square and the scene model's input is, so something has to be thrown away.
@@ -141,7 +141,7 @@ def camera_window(intr: CameraIntrinsics, output_size: int = WINDOW_SIZE) -> Loo
     x0 = (intr.width - side) // 2
     y0 = (intr.height - side) // 2
     fovy = math.degrees(2.0 * math.atan(0.5 * intr.height / intr.fy))
-    return LookPose(
+    return ViewingPose(
         name="wrist_real", camera=WRIST_CAM, render_size=(intr.width, intr.height),
         crop=(x0, y0, x0 + side, y0 + side), fovy_deg=fovy, output_size=output_size, tcp=None,
     )
@@ -329,7 +329,7 @@ class SimulatedCamera:
         from ..render.renderer import SceneRenderer
 
         self.scene = scene
-        self.window = WRIST_FULL if output_size == WRIST_FULL.output_size else LookPose(
+        self.window = WRIST_FULL if output_size == WRIST_FULL.output_size else ViewingPose(
             name="wrist", camera=WRIST_CAM, render_size=WRIST_RENDER,
             crop=(0, 0, WRIST_RENDER[0], WRIST_RENDER[1]), fovy_deg=WRIST_FULL.fovy_deg,
             output_size=output_size, tcp=None,

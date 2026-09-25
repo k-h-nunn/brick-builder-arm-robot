@@ -253,18 +253,18 @@ def test_the_default_spiral_covers_its_disc_inside_one_episode_and_the_specs_doe
     assert len(fine_y) == len(fine_x)
 
 
-def test_rocking_tilts_first_and_levels_out_after_one_row_engages():
-    cfg = PressConfig(rocking=True)
+def test_the_tilted_press_tilts_first_and_levels_out_after_one_row_engages():
+    cfg = PressConfig(tilted_press=True)
     press = PressScripted(0.0, cfg)
     press.reset(fb(0.02))
-    assert press.phase == "rock"
+    assert press.phase == "tilted_press"
     first = press.update(fb(0.02))
-    assert first.tilt == pytest.approx(cfg.rock_tilt)
+    assert first.tilt == pytest.approx(cfg.tilted_press_tilt)
 
-    # The tool goes down by rock_engage: one stud row is in, so level out.
+    # The tool goes down by tilted_press_engage: one stud row is in, so level out.
     tilts = []
-    for _ in range(int((cfg.rock_level_time + 0.1) / CONTROL_DT)):
-        tilts.append(press.update(fb(0.02 - cfg.rock_engage - 1e-4)).tilt)
+    for _ in range(int((cfg.tilted_press_level_time + 0.1) / CONTROL_DT)):
+        tilts.append(press.update(fb(0.02 - cfg.tilted_press_engage - 1e-4)).tilt)
     assert tilts[0] > tilts[-1]
     assert tilts[-1] == pytest.approx(0.0, abs=1e-9)
     assert press.phase == "descend"

@@ -163,12 +163,12 @@ def test_run_reports_skipped_scene_fields_when_present(tmp_path, monkeypatch):
 
     fake_pp = types.SimpleNamespace(bench=fake_bench, PickPlaceConfig=object())
     monkeypatch.setattr(pap, "_load_pick_place", lambda: fake_pp)
-    monkeypatch.setattr(pap, "_build_scene", lambda params, pp: (None, ["press_shoe"]))
+    monkeypatch.setattr(pap, "_build_scene", lambda params, pp: (None, ["unknown_field"]))
     ctx = _ctx(tmp_path)
     pap.run(ctx)
     data = json.loads((ctx.out_dir / "data.json").read_text())
     assert data["available"] is True
-    assert data["skipped_fields"] == ["press_shoe"]
+    assert data["skipped_fields"] == ["unknown_field"]
     assert data["successes"] == 2
     # Grouped by category, not by the per-trial exact shortfall -- see _failure_category.
     assert data["failure_counts"] == {"partial seat": 1}

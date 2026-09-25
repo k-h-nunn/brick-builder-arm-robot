@@ -112,7 +112,7 @@ minimum-cost match against the previous frame's rows when there is not
 
 ### `views.py`: the window a scene state is computed in
 
-Every `SceneState` carries the `views.LookPose` (`window`) its 256x256 frame was cropped from.
+Every `SceneState` carries the `views.ViewingPose` (`window`) its 256x256 frame was cropped from.
 Three fixed, pre-measured poses/crops exist (`PLATE_VIEW`, the whole 8x8 build plate;
 `PLATE_VIEW_DENSE`, a denser 4x4-stud window; `TRAY_VIEW`, the loose-brick tray). The wrist camera
 moves every tick under closed-loop control, so `attention_view` picks the smallest square crop

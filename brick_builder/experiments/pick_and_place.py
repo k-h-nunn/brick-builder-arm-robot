@@ -3,7 +3,7 @@
     python -m brick_builder.experiments pick-and-place --params my_params.yaml --trials 20
 
 Runs ``brick_builder.control.pick_place``'s scripted pick-and-place sequence ``trials`` times with
-randomized tray jitter and placement error, and reports the success rate with a 95% Wilson
+randomized supply jitter and placement error, and reports the success rate with a 95% Wilson
 interval and a breakdown of why the runs that failed did.
 
 ``brick_builder/control/pick_place.py`` is still under active development elsewhere in this
@@ -110,8 +110,8 @@ def _build_scene(params, pp):
     from ..scene.compose import build_scene
 
     scene_cfg, skipped = params_mod.to_scene_config(
-        params, held=None, placed=[], tray=True, tray_bricks=2,
-        tray_brick=(2, 4), cameras=(),
+        params, held=None, placed=[],
+        supply=((2, 4, "blue"), (2, 4, "yellow")), cameras=(),
     )
     return build_scene(scene_cfg), skipped
 
@@ -304,7 +304,7 @@ def _report_result(ctx, result, trials, place_error_mm, friction, skipped) -> No
     sections = [
         report_header(
             ctx, "pick-and-place: full sequence, randomized trials",
-            f"Runs brick_builder.control.pick_place.bench for {trials} randomized trials (tray "
+            f"Runs brick_builder.control.pick_place.bench for {trials} randomized trials (supply "
             f"jitter, {place_error_mm:g} mm of placement error), using this file's arm, snap-fit "
             f"and friction parameters, and reports the success rate with a Wilson interval and "
             f"why the failures failed."

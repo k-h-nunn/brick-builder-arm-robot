@@ -841,9 +841,9 @@ def to_scene_config(params: ParamFile, base: Any = None, **overrides: Any) -> tu
 
     Imported lazily (``scene.compose`` pulls in the whole robot+bricks+kinematics stack) and
     built entirely through :func:`filter_dataclass_kwargs`, per this module's own docstring:
-    fields such as ``SceneConfig.press_shoe`` are still in flux elsewhere in the codebase, and
-    this function must keep working whether a given field exists or not. ``overrides`` lets a
-    caller add fields this module does not know about (e.g. ``held=...``, ``tray=True``) without
+    ``SceneConfig`` still gains fields elsewhere in the codebase, and this function must keep
+    working whether a given field exists or not. ``overrides`` lets a
+    caller add fields this module does not know about (e.g. ``held=...``, ``supply=...``) without
     having to reconstruct the result afterwards; they go through the same filter. Returns
     ``(scene_config, skipped_field_names)``.
     """
