@@ -598,9 +598,8 @@ pipeline runs end to end, recovers a camera in roughly the right place and orien
 
 ## Not yet written
 
-- `scripts/hardware/force_ramp.py` and `camera_calibration.py`: the procedures are in the table
-  above and the driver exposes what each needs (`Bus.cycle` with a per-joint torque limit,
-  `CameraIntrinsics`), but the two command-line wrappers do not exist yet.
-- Chessboard image generation for a camera-calibration self-check, and the hand-eye fit itself.
+- `scripts/hardware/force_ramp.py`: the procedure is in the table above and the driver exposes
+  what it needs (`Bus.cycle` with a per-joint torque limit), but the command-line wrapper does not
+  exist yet.
 - Watchdog and emergency-stop wiring. The driver's soft stop is a software stop on a live bus; it
   is not a substitute for cutting power.

@@ -54,6 +54,7 @@ applied to whichever tasks the round measured.
 | `placement` | 1 | brick already held | baseplate 4-8 mm, 2-3 deg | one brick |
 | `pick_and_place` | 1 | brick loose on the table | the above, and the brick 8-15 mm, 10-20 deg | one brick |
 | `build_2` | 2 | as above, twice | the above, per cycle | both bricks |
+| `stack_2` | 2 | as above, twice; the second brick on the first | the above, per cycle | both bricks, cell and layer |
 
 `build_2` is one English command, compiled by `brick_builder.language`:
 
@@ -64,9 +65,8 @@ put a blue 2x2 at column 5 row 4 then put a blue 2x2 left of the blue brick
 which becomes two placements, `2x2 (4,3,0) blue` and `2x2 (2,3,0) blue`, executed as consecutive
 pick-and-place cycles. After each cycle `Goal.remaining_steps` is recomputed against what is
 really on the plate; a brick that did not land on its cell leaves its own step outstanding and
-that cycle is run once more. Both bricks are on the bottom layer and both are blue 2x2, because
-the seat height the geometry places on is the plate's own top face and the supply row offers a
-blue 2x2. The compiler has no pronouns, so the second brick names the first by colour.
+that cycle is run once more. Both bricks are blue 2x2, because the supply row offers a blue 2x2.
+The compiler has no pronouns, so the second brick names the first by colour.
 
 The second brick goes to the left-hand neighbour (column 3, row 4; 154 mm from the base). The
 right-hand neighbour (column 7, row 4; 218 mm) lies outside the 100-200 mm band over which the
@@ -80,6 +80,30 @@ Jacobians are measured in (`TrackingEpisode(..., placed=...)`). All three have t
 recording made against a bare plate matches nothing where the run has just put a brick, and a
 twin that lacks a brick the recording lines itself up on drops that reference silently.
 
+`build_2`'s second cell, (2, 3), has two flush neighbours: the first brick at +x and the yellow 2x4
+at +y. `action.place.Geometry` aligns that cycle from a hover raised from 20.0 to 25.7 mm above the
+seat, clear of the neighbours' stud tops, with the aim offset 0.3 mm away from them
+(`PlaceConfig.neighbour_clear`, `PlaceConfig.neighbour_bias`;
+[Closed-loop control, Flush neighbour](12-closed-loop-control.md#flush-neighbour)). Recorded target
+sequences in `ideals/` are keyed by task, cycle, seed, source, cell, layer and align hover (e.g.
+`build_2_c1_s3_ideal_x2y3z0_h25.7`), so the published campaign's files (`build_2_c1_s0_ideal.pkl`)
+are not reused; they are recorded again under the new name. The `build_2` rows under Results were
+measured without the raised hover and the aim offset. With them, on seeds 0-9 (ground-truth scene
+model, analytic inverse, re-plan off), the second brick seats on 1/10 (seed 8; Wilson 95 % 2-40 %);
+the fixed analytic baseline in round 0 (re-plan on, without them) seated it on 1/10 (seed 1).
+
+`stack_2` is the stacked build:
+
+```
+put a blue 2x2 at column 5 row 4 then put a blue 2x2 on top of the blue brick
+```
+
+which becomes `2x2 (4,3,0) blue` and `2x2 (4,3,1) blue`. The second cycle seats one brick height
+up, on the first brick's studs
+([Closed-loop control, Stacked placements](12-closed-loop-control.md#stacked-placements)).
+`stack_2` is last in `TASKS`, so the older tasks keep their performing-seed offsets, and it is not
+in `scripts/run_campaign.py`'s default `--tasks`.
+
 ### Scoring
 
 `control.pick_place.verify_placement` reads the simulator after the arm has left: every stud
@@ -92,6 +116,13 @@ Each episode's record carries the task, the seed, the models' version ids, per b
 flag and the lateral and depth errors, the vision ticks per step, the failure class, the median
 tracking and prediction errors, the damage state the monitor reached, and the wall clock. Success
 rates carry Wilson 95 % intervals (`eval.wilson`).
+
+Every brick is also scored on its target layer, layer 0 included: `at_target_layer` holds when the
+brick's bottom face is within half a brick height (9.6 mm) of the layer's height. A brick sent to
+the plate that ends on top of another brick fails it, and so does a brick sent to layer 1 that ends
+on the plate; a brick seated on another layer has the failure class `seated on the wrong layer`.
+The episode CSV carries the check as `brick{i}_at_layer`; a file written before that column existed
+reads back as on the layer.
 
 ## Commands
 
@@ -277,8 +308,19 @@ campaign would ship.
 - `build_2` was evaluated in the first and the last round only (`--sparse-tasks build_2`), so its
   curve has two points where the other two tasks have one per round. It was performed in every
   round, so the training set grew with it throughout.
-- `build_2`'s two bricks go side by side on the bottom layer. A stacked build needs a seat height
-  above the plate's top face, which `action.place.Geometry` has no way to express.
+- `build_2`'s two bricks go side by side on the bottom layer. The stacked build is `stack_2`, which
+  the campaign's rounds did not perform or evaluate. Measured on its own on seeds 0-9 with the
+  ground-truth scene model, the analytic inverse and re-plan off, each cycle a pick-and-place in
+  its own world: the second brick seats on 10/10 (Wilson 95 % 72-100 %) and both bricks on 9/10
+  (60-98 %)
+  ([Closed-loop control, Two-brick builds](12-closed-loop-control.md#two-brick-builds-seeds-0-9)).
+  `stack_2` with the convolutional scene model as the control input (`--source cnn`) was not
+  evaluated. Headless runs of the two-brick recording's world with that model driving (cycle 1 a
+  placement from the jaws, cycle 2 a pick-and-place;
+  `scripts/make_campaign_video.py --task stack_2 --seed S --cnn-drives [--targets truth] --probe`,
+  one run per seed) built both bricks on none of the seeds tried: seeds 0 and 1 with ground-truth
+  target sequences, seeds 0, 1, 2, 3 and 5 with target sequences recorded through the model
+  ([Closed-loop control, Two-brick recording](12-closed-loop-control.md#two-brick-recording)).
 - The build's two cells are flush neighbours, and the second brick is pressed against a wall that
   is already there. That is what the build measures beyond two pick-and-places, and it is where
   it fails: see the table.
@@ -294,5 +336,7 @@ campaign would ship.
 - More performing episodes per round. The log is the thing the curve is a function of, and a
   round of three episodes per task is a few thousand ticks.
 - A round that trains on the convolutional scene model's own states rather than the simulator's.
+  [Campaign on the scene model](16b-campaign-on-the-scene-model.md) has a two-round attempt; it
+  logs a predictor checkpoint and does not reach a trained inverse.
 - The predictor in the loop as a signal rather than a report: `PlaceConfig.predictor` selects
   which one-step prediction the error is measured against, and nothing reads it.

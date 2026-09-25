@@ -309,6 +309,14 @@ commanded half a millimetre wider than the brick so they never touch. Compliant 
 of give under 5 N — time constant and torque scale randomized, standing in for a grip without
 tuning finger contact. Deliverable 1 is about the press.
 
+`SceneConfig.weld_slip_force` (default `None`) gives the weld a force ceiling: past it,
+`_release_overloaded_weld` sets `eq_active` to 0 and the grip lets go instead of holding at any
+load. `weld_slip_ceiling(cfg)` derives one from the stock jaws: two contacts at the arm's measured
+grip force (`ARM_GRIP_FORCE_N`, 17.0 N) times `cfg.brick_friction`, the ABS-on-ABS coefficient
+below (6.8-17.0 N over its 0.2-0.5 range, 11.9 N at the 0.35 default). The ceiling acts only where
+a scene is stepped through `Scene.step` or `push_held_brick`; the default weld-mode environments
+and control loops step MuJoCo directly and never reach it.
+
 `grasp_mode="friction"` closes the jaws 6 mm past the brick's face (about 19 N of pinch), relying
 on friction between the bare printed jaw faces and the brick — the only grip the arm has: the
 SO-101 gripper is a fixed jaw and a moving jaw, both printed, nothing attached to either.

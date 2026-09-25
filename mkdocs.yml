@@ -61,6 +61,7 @@ nav:
       - Simulator page: guide/14-simulator-gui.md
       - Reinforcement learning: guide/15-reinforcement-learning.md
       - Closed-loop campaign: guide/16-closed-loop-campaign.md
+      - Campaign on the scene model: guide/16b-campaign-on-the-scene-model.md
       - Lab notebook template: experiments/TEMPLATE.md
   - Demos:
       - Gallery: demos/README.md
