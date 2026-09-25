@@ -353,7 +353,10 @@ def record_for(spec: TaskSpec, cycle: int, seed: int, *, source=None, cache: Pat
 
     from ..action.place import PlaceConfig, record_ideal
 
-    name = ideal_key(spec, cycle, seed, "ideal" if source is None else "cnn")
+    # `cnn_matched`: the reference bodies of a scene-model recording are named by matching its
+    # slots to ground truth (`place.match_slots`). A `cnn` recording cached before that named
+    # them by slot index and is not read back.
+    name = ideal_key(spec, cycle, seed, "ideal" if source is None else "cnn_matched")
     path = None if cache is None else Path(cache) / f"{name}.pkl"
     if path is not None and path.exists():
         with path.open("rb") as fh:

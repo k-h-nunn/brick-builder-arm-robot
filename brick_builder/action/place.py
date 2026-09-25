@@ -306,14 +306,78 @@ class StepReport:
     converged: bool
 
 
-def reference_bodies(twin_scene, state: SceneState, *, exclude: str | None = None) -> dict:
+MATCH_CENTRE = 0.08
+"""Largest centre distance between a source slot and the ground-truth blob it is named after
+[normalized window units; 0.08 is 10 px of the 256 px frame]."""
+
+MATCH_MASS_RATIO = 1.6
+"""Largest mass ratio, either way, between a source slot and its ground-truth blob. Two
+equal bricks the source reports as one blob are twice either one, and match neither."""
+
+MATCH_COLOUR = 0.30
+"""Largest mean-colour distance [2 rgb - 1 units]; the tolerance `DigitalTwin.calibrate` gives
+the servo's own colour match."""
+
+
+def match_slots(state: SceneState, truth: SceneState, *, centre_tol: float = MATCH_CENTRE,
+                mass_ratio: float = MATCH_MASS_RATIO,
+                colour_tol: float = MATCH_COLOUR) -> dict[int, int]:
+    """Source slot to instance id, by appearance, for two states of one frame.
+
+    `truth` is the ground-truth state of that frame (`WorldAdapter.observe_labelled`), whose
+    `slot_ids` are instance ids. `state` is any source's; its `slot_ids` are its own tokens
+    and name nothing outside it. Slots are paired by what both publish -- centre, mass and mean
+    colour -- one to one (`linear_sum_assignment` on the sum of the three distances, each over
+    its tolerance), and a pair outside any tolerance is left unpaired: a blob the source merged,
+    split or lost names no body. Background slots (`slot_ids < 0`, and instance ids 0 and -1 in
+    `truth`) take part on neither side.
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    src = [k for k in range(state.K)
+           if not state.is_empty(k) and int(state.slot_ids[k]) >= 0 and state.mass(k) > 0.0]
+    ref = [j for j in range(truth.K)
+           if not truth.is_empty(j) and int(truth.slot_ids[j]) > 0 and truth.mass(j) > 0.0]
+    if not src or not ref:
+        return {}
+    log_ratio = math.log(mass_ratio)
+    invalid = 1e6
+    cost = np.full((len(src), len(ref)), invalid)
+    for a, k in enumerate(src):
+        c_k, m_k, col_k = np.array(state.centre(k)), state.mass(k), np.array(state.colour(k))
+        for b, j in enumerate(ref):
+            d_c = float(np.linalg.norm(c_k - np.array(truth.centre(j))))
+            d_m = abs(math.log(m_k / truth.mass(j)))
+            d_col = float(np.linalg.norm(col_k - np.array(truth.colour(j))))
+            if d_c <= centre_tol and d_m <= log_ratio and d_col <= colour_tol:
+                cost[a, b] = d_c / centre_tol + d_m / log_ratio + d_col / colour_tol
+    rows, cols = linear_sum_assignment(cost)
+    return {src[a]: int(truth.slot_ids[ref[b]])
+            for a, b in zip(rows, cols) if cost[a, b] < invalid}
+
+
+def reference_bodies(twin_scene, state: SceneState, *, exclude: str | None = None,
+                     truth: SceneState | None = None) -> dict:
     """Which objects are visible in a reference frame, as `title -> body name`.
 
     Read off the twin, which knows which of its own slots is which object, and only from the
     frame the twin actually recorded -- so a step over the supply area lines up on loose bricks
     and a step over the plate lines up on the plate. `exclude` drops the brick in the hand: it
     rides with the camera, so lining up on it would be chasing your own hand.
+
+    Only the ground-truth source's `slot_ids` are instance ids. For any other source `truth`,
+    the ground-truth state of the same frame, is required, and each of `state`'s slots is named
+    after the ground-truth blob `match_slots` pairs it with; the size and border filters below
+    read the source's own slot, because that slot is what the servo will look for.
     """
+    if truth is None or truth is state:
+        if state.source != "ideal":
+            raise ValueError(
+                f"slot ids of a {state.source!r} state are not instance ids; pass `truth`, the "
+                "ground-truth state of the same frame")
+        identity = {k: int(state.slot_ids[k]) for k in range(state.K)}
+    else:
+        identity = match_slots(state, truth)
     titles = {
         twin_scene.plate.name: "baseplate",
         SUPPLY_BODY: "brick to pick up",
@@ -333,7 +397,7 @@ def reference_bodies(twin_scene, state: SceneState, *, exclude: str | None = Non
             continue
         if state.border_fraction(k) > 0.25:
             continue
-        name = ids.get(int(state.slot_ids[k]))
+        name = ids.get(identity.get(k, -1))
         if name is None or name == exclude:
             continue
         out[titles.get(name, name)] = name
@@ -634,13 +698,16 @@ def record_ideal(cfg: PlaceConfig, *, seed: int = 0, target=TARGET_CELL,
 
     script = Script(world, geometry, cfg)
     frames: list[ReferenceFrame] = []
+    # Ground truth of each frame, in step with `frames`: it names the bodies and is not kept.
+    truths: list[SceneState] = []
     pending: list[Command] = []
     bodies: dict[int, dict] = {}
     held_by_step: dict[int, str | None] = {}
     held_name = scene.held_name if not cfg.pick else SUPPLY_BODY
 
     def snapshot(k: int) -> ReferenceFrame:
-        state = world.observe()
+        state, truth = world.observe_labelled()
+        truths.append(truth)
         return ReferenceFrame(k=k, t=world.t, step=script.step, step_index=script.step_index,
                               state=state,
                               label=None if label_hook is None else label_hook(scene))
@@ -671,14 +738,15 @@ def record_ideal(cfg: PlaceConfig, *, seed: int = 0, target=TARGET_CELL,
             pending[-1].spin - pending[0].spin,
         ])
 
-    frames = [f for f in frames if f.commands]
-    for i, f in enumerate(frames):
+    kept = [(f, t) for f, t in zip(frames, truths) if f.commands]
+    frames = [f for f, _ in kept]
+    for i, (f, truth) in enumerate(kept):
         f.k = i
         # The brick is excluded only while it is IN the hand. Once it is let go it is part of
         # the build, and whether it sits where the target puts it relative to the
         # baseplate is exactly what the rest of the sequence is about.
         f.bodies = reference_bodies(
-            scene, f.state, exclude=held_name if _in_hand(f.step) else None)
+            scene, f.state, exclude=held_name if _in_hand(f.step) else None, truth=truth)
         if cfg.pick and f.step in ("Approach", "Grasp"):
             # Reaching for the brick, the brick is the only thing worth lining up on. Everything
             # else in view -- the spare beside it, the baseplate across the table -- is a

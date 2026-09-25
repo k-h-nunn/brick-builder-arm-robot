@@ -5,7 +5,9 @@ Three pieces, deliberately small:
 - `adapter.WorldAdapter` -- the *only* thing here that touches the running simulator, and it
   offers exactly four things: read the servo bus, write joint targets, grab the wrist camera
   frame as a `SceneState`, step time. No body poses, no contact state, no snap state, no
-  `MjData`. Everything in `servo.py`/`place.py` talks to the world through it.
+  `MjData`. Everything in `servo.py`/`place.py` talks to the world through it. Its back door,
+  for scoring and recording only, is not on the control path (`observe_labelled` hands
+  `record_ideal` ground truth beside the source's state, to name the reference bodies).
 - `twin.DigitalTwin` -- a *separate* scene built from the goal and nominal parameters. Posed at
   a step's goal pose it renders the wrist view the controller *expects to see*, and the same
   `IdealSceneModel` turns that into the **intended** `SceneState`. Feed-forward, outside the
@@ -24,7 +26,7 @@ from .twin import DigitalTwin, TwinStep
 from .sequence import Command, IdealSequence, ReferenceFrame
 from .place import (
     STEP_TITLES, Geometry, PlaceConfig, Script, StepReport, TickRecord, TrackingEpisode,
-    record_ideal, reference_bodies,
+    match_slots, record_ideal, reference_bodies,
 )
 from .worlds import build_pick_world, build_world, displacement, nominal_cfg
 
@@ -34,6 +36,6 @@ __all__ = [
     "DigitalTwin", "TwinStep",
     "Command", "IdealSequence", "ReferenceFrame",
     "STEP_TITLES", "Geometry", "PlaceConfig", "Script", "StepReport", "TickRecord",
-    "TrackingEpisode", "record_ideal", "reference_bodies",
+    "TrackingEpisode", "match_slots", "record_ideal", "reference_bodies",
     "build_pick_world", "build_world", "displacement", "nominal_cfg",
 ]

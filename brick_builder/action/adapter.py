@@ -41,6 +41,9 @@ from wherever the arm happens to be rather than driving the arm somewhere."""
 VISION_EVERY = 5
 """Control ticks between vision ticks: 5 x 20 ms = 10 Hz, the rate the loop acts at."""
 
+TRUTH_K = 16
+"""Slots in the ground-truth state `observe_labelled` returns beside the source's own."""
+
 
 class WorldAdapter:
     """One running world, seen through four verbs."""
@@ -62,6 +65,7 @@ class WorldAdapter:
         # so either can drive the loop and the video says which one did.
         self._vision = source if source is not None else IdealSceneModel(
             K=K, build_decode=build_decode)
+        self._truth: IdealSceneModel | None = None
         self._frames = 0
 
     # -- write ---------------------------------------------------------------------------------
@@ -156,3 +160,28 @@ class WorldAdapter:
     @property
     def driver_for_scoring(self):
         return self._driver
+
+    def observe_labelled(self) -> tuple[SceneState, SceneState]:
+        """Wrist frame as the source's slot states and as ground truth; recording only.
+
+        The second state is `IdealSceneModel` run on the same render, so its `slot_ids` are
+        the renderer's instance ids; `record_ideal` names each reference frame's bodies from it
+        (`place.reference_bodies`). With the ground-truth source driving, both are the same
+        object. `TrackingEpisode` never calls this: the guard test in `tests/action` checks it.
+        """
+        frame, _ = render_view(self._scene, WRIST_FULL, self._renderer)
+        state = self._vision.observe(
+            frame.rgb, window=WRIST_FULL, instance=frame.instance, depth=frame.depth,
+            t=self.t,
+        )
+        self._frames += 1
+        if isinstance(self._vision, IdealSceneModel):
+            return state, state
+        if self._truth is None:
+            # K large enough that no visible body is folded into the background slot.
+            self._truth = IdealSceneModel(K=TRUTH_K, build_decode=False)
+        truth = self._truth.observe(
+            frame.rgb, window=WRIST_FULL, instance=frame.instance, depth=frame.depth,
+            t=self.t,
+        )
+        return state, truth
