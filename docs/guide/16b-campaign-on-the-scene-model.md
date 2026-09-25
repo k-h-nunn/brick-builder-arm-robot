@@ -180,39 +180,69 @@ part of the loop. `TrackingEpisode` always measures the twin's own expectation w
 of `--source`.
 
 What changes under `--source cnn` is the recorded reference labels `build_step` is asked to line
-up on. `record_ideal` names each step's reference bodies with `reference_bodies()`
-(`place.py:317`), which reads a state's `slot_ids` as renderer instance ids -- true of the
-simulator's own `SceneState`, not of the convolutional model's: its `slot_ids` are plain slot
-indices, with a comment on that line in `postprocess.py:209` saying so. Under `--source cnn` the
-recorded sequence carries the scene model's states throughout (`record_for` records the target
-sequence through the same source that will drive the run), so `reference_bodies()` reads slot
-indices as if they were instance ids and names the wrong body, or none, at essentially every step.
+up on. Before the change in Reference bodies matched to ground truth, `record_ideal` named each
+step's reference bodies with `reference_bodies()` (now `place.py:359`), which then read every
+state's `slot_ids` as renderer instance ids -- true of the simulator's own `SceneState`, not of
+the convolutional model's: its `slot_ids` are plain slot indices, with a comment on that line in
+`postprocess.py:209` saying so. Under `--source cnn` the recorded sequence carries the scene
+model's states throughout (`record_for` records the target sequence through the same source that
+will drive the run), so `reference_bodies()` read slot indices as if they were instance ids.
 
-The recorded caches show this only partially. A ground-truth `pick_and_place` recording's
-`Approach` step names `{'brick to pick up': 'supply_brick_0'}` in 520 of 620 frames across the ten
-seeds -- every frame after the first ten of each 62-frame step. The matching `--source cnn`
-recordings name the same body in 353 of 620 Approach frames and an empty set in the other 267,
-never any other body: `place.py`'s pick-and-place filter keeps only entries that already equal
-`SUPPLY_BODY` at `Approach`/`Grasp` (`place.py:595-603`), so whatever else the slot-id/instance-id
-mismatch mislabels there is dropped rather than shown. A body is named only in a frame where the
-scene model's slot tracker happens to hold that body's blob in the slot whose index equals the
-body's instance id (1 the arm, 2 the baseplate, 3 the held brick, 4 onwards the other bricks,
-`compose.py`'s `build_scene`); which slot a blob takes depends on the order the tracker handed
-slots out, so the label comes and goes along the recording.
+The rule this gave, before the change: a body was named in every frame where the scene model's
+slot whose index equals that body's instance id (2 the baseplate, 3 the held brick, 4 onwards the
+placed bricks and then the loose bricks, `compose.py`'s `build_scene`) held any blob that passed
+the size and border filters, whichever body that blob belonged to. The rule therefore named bodies
+that are not in view whenever such a slot held another body's blob, and left out bodies that are
+in view whenever their slot was empty or its blob failed the filters. Which blob a slot holds
+depends on the order the tracker handed slots out, so the labels come and go along the recording.
 
-`placement` recordings carry the same slot-id/instance-id mismatch, but under `--source cnn` most
-of their per-step body sets are not empty: `Align` is empty in none of 400 cnn frames, `Transport`
-in 14 of 80, `Press the brick down` in 144 of 728, `Verify` in 8 of 150 -- 166 of 1597 frames
-overall, about 10 %. Some non-empty sets are arbitrary (`Transport {'plate'}`,
-`Align {'placed brick 1'}`), a direct instance of the mismatch reading a real body's name off a
-slot index that only coincides with that body's instance id by chance. Why `placement`'s
-`build_step` calls do not raise despite these wrong, non-empty sets is not analyzed further here.
+Measured on the seeds 0-9 recordings of Label check (`closed_loop_cnn_v2/ideals/`, the slot-index
+reading, against ground-truth recordings of the same frames; a scratch script pairs each naming
+slot with a ground-truth blob by `match_slots`), `pick_and_place`: of the 5070 names the old rule
+gave, 945 were read off the named body's own blob, 2107 off another body's blob and 2018 off a
+blob `match_slots` pairs with no ground-truth body (merged, split, or outside its gates). 1196 of
+the 5070 name a body ground truth does not show in that frame, on 1130 of 2810 frames. The four
+largest groups and the `Approach` one; the other 281 are spread over `Transport`, `Release`,
+`Retract`, `Verify` and placed brick 1 at `Lift`:
+
+| Step | Body named, not in the ground-truth frame | Frames | Blob in that body's slot |
+|---|---|---|---|
+| `Align` | spare brick | 200 | 160 no ground-truth body, 40 the brick in the hand |
+| `Press the brick down` | spare brick | 404 | 313 no ground-truth body, 76 the brick in the hand, 15 placed brick 0 |
+| `Lift` | baseplate | 143 | 84 spare brick, 32 the brick in the hand, 27 no ground-truth body |
+| `Lift` | placed brick 0 | 111 | 63 the brick in the hand, 47 spare brick, 1 no ground-truth body |
+| `Approach` | brick to pick up | 57 | 46 no ground-truth body, 11 placed brick 0 |
+
+The recorded caches of the earlier `closed_loop_cnn` run show the `Approach` part of this. A
+ground-truth `pick_and_place` recording's `Approach` step names
+`{'brick to pick up': 'supply_brick_0'}` in 520 of 620 frames across the ten seeds -- every frame
+after the first ten of each 62-frame step. The matching `--source cnn` recordings name the same
+body in 353 of 620 Approach frames and an empty set in the other 267, never any other body:
+`place.py`'s pick-and-place filter keeps only entries that equal `SUPPLY_BODY` at
+`Approach`/`Grasp` (`place.py:750-758`, unchanged), so every other name the slot-index reading
+gave there is dropped. What remains is a name read off whichever blob sat in the slot whose index
+is the brick to pick up's instance id, which is not always that brick's blob (the last row of the
+table above).
+
+`placement` recordings were read by the same rule, but under `--source cnn` most of their per-step
+body sets are not empty: `Align` is empty in none of 400 cnn frames, `Transport` in 14 of 80,
+`Press the brick down` in 144 of 728, `Verify` in 8 of 150 -- 166 of 1597 frames overall, about
+10 %. In `placement` the rule never named a body that is not in view (0 of 1597 frames, Label
+check): every body it could name there -- the baseplate, the held brick and the two placed
+bricks -- is in every ground-truth frame, so a name read off any blob in those slots was a body
+in view, whichever blob it was read off. Only 393 of its 2621 names were read off the named
+body's own blob; 1060 were read off the held brick's, 592 off another placed brick's and 576 off
+a blob that pairs with no ground-truth body. What `placement` lost was references: at `Align`
+the rule named the baseplate alone on 240 of 400 frames, placed brick 0 alone on 40, placed
+brick 1 alone on 40 and the baseplate with placed brick 0 on 80, where ground truth names the
+baseplate and both placed bricks on all 400. Why `placement`'s `build_step` calls did not raise
+is not analyzed further here.
 
 `held` named as a reference at `Release`, `Retract` and `Verify` in ground-truth `placement`
 recordings, in all ten seeds, is not a mislabeling: the released brick keeps the MuJoCo body name
-`held` (`compose.py:917`), and `reference_bodies()` only excludes it while `_in_hand(step)`
-(`place.py:594`) -- true through `Grasp`/`Lift`/`Transport`/`Align`/`Press the brick down`, false
-once the brick is let go, so it names the released brick's own body.
+`held` (`compose.py:87`, `HELD_BODY`), and `reference_bodies()` only excludes it while
+`_in_hand(step)` (`place.py:765`) -- true through `Lift`/`Transport`/`Align`/`Press the brick
+down`, false once the brick is let go, so it names the released brick's own body.
 
 The pattern that stays fixed across both inverses in the table above (seven seeds crash at
 `Approach`, two at `Lift`, seed 7 is the one that completes) is the recorded label, not either
