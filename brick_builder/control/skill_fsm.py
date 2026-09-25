@@ -27,17 +27,23 @@ seated 2x4 straight back off the plate, which makes the test destroy what it is 
 (:attr:`SkillFSM.seated_by_height`): a seated 2x4 leaves it 2.0-2.3 mm above the seated height
 (almost all of that the soft weld's own stretch), a brick resting on the stud tops 4.6-6.5 mm,
 and the marginal cases in between.  It is not perfect: measured on this rig (2026-09-25, seed 7,
-20 seated-group trials, single attempt each, no case rejection), the verdict was right 37 times
-out of 40 overall -- Wilson interval [0.801, 0.974] -- and its false positives are all one shape,
-found by inspecting every disagreement: a case whose believed cell was close enough on paper (0.5
-mm, inside the 3 mm capture basin) that a genuinely seated outcome was expected, but servo noise
-near that edge left one or more studs shallow or unengaged, while the tool still settled inside
-``verify_height_tol`` of the seated height anyway (one run settled 0.51 mm high with a stud still
-3.9 mm shy of full depth; two settled at or below the seated height -- -0.33 mm -- with every stud
-at 0.00 mm, i.e. the brick missed the cell and the empty tool happened to stop within tolerance of
-where a seated one would).  So the height verdict's failure mode is specific: near the capture
-gate's own edge, "close enough to look seated" and "actually seated" can disagree, and there is no
-second signal here to catch that (see ``occupancy_check`` below).  Both numbers are reported;
+20 seated-group trials, single attempt each, no case rejection -- of which 9/20 actually landed a
+real seat, see :func:`verify_trials`), the verdict was right 37 times out of 40 overall -- Wilson
+interval [0.801, 0.974].  Every disagreement was inspected, and they are not one shape but two.
+Two of the three are the snap model's own connection gate, not a height problem: every stud of the
+held brick reads 4.70-4.74 mm of raw insertion depth (a fully seated depth) with the tool settled
+accordingly, but the brick sits 0.47-0.53 mm laterally off the stud axis -- just outside
+``SnapParams.capture_lateral`` (0.30 mm, ``bricks/snap_api.py``), the gate the snap model itself
+requires before it will report that depth as engaged or form a connection at all
+(``bricks/snap_detent.py``).  Below that gate the model reports zero depth and welds nothing, so
+both the "really seated" ground truth this module's tests use and :func:`ground_truth_occupancy`
+(below) call it not seated; the tool, which only ever feels where the brick physically stopped it,
+cannot tell the two cases apart by height, because a brick 0.5 mm off the stud axis stops the tool
+at the same height a centred one would.  The third disagreement is an ordinary shallow press, not
+a gate rejection: every stud engaged well inside the gate (lateral <= 0.08 mm) but stopped at
+3.90 mm, 0.15 mm short of the 4.05 mm ``really_seated`` threshold (0.6 mm short of the full 4.5 mm
+stud height).  So the height verdict's failure mode has two distinct causes, and neither is caught
+by a second reading of height alone (see ``occupancy_check`` below).  Both numbers are reported;
 :attr:`SkillFSM.verified` stays the spec's load-rise verdict so the finding is visible rather than
 quietly redefined.
 
@@ -52,11 +58,16 @@ that this module cannot itself audit.  With no callable given (the default), the
 ``None`` and nothing about the height-only behaviour changes.  :func:`ground_truth_occupancy` is
 the placeholder binding for a sim-only caller (a test, or a scripted demo with no scene model
 wired up yet) -- simulator ground truth, the same source the rest of this project's placeholder
-perception stands in with until a trained scene model replaces it.  It answers a coarser question
-than seating on purpose: "is anything resting in the cell at all" (any stud reading non-trivial
-insertion depth), not "is it seated," because that is the question a real occupancy sensor could
-answer too, and the two can disagree -- a brick resting on the stud tops is occupied but not
-seated, which is exactly the gap the false positives above fall into.
+perception stands in with until a trained scene model replaces it.  It deliberately reads the raw
+insertion depth of whichever stud sits nearest the held brick's own sockets -- the same per-socket
+pairing the snap model itself uses, but without that model's ``capture_lateral``/tilt connection
+gates -- so that it answers a coarser question than seating on purpose: "is anything resting in
+the cell at all," not "is it seated" or "is it connected," because that is the question a real
+occupancy sensor could answer too.  The two can disagree in both directions: a brick resting
+shallowly on the stud tops is occupied but not seated (the ordinary case this cross-check is for),
+and a brick pressed to a seating depth but rejected by the connection gate (the two-of-three false
+positives traced above) reads occupied here too -- unlike the connection model's own gated depth,
+which reports zero for that case and would call it empty.
 
 Everything here obeys the same two rules as ``primitives.py``: deployable signals only, and
 arithmetic simple enough to port to C.
@@ -431,17 +442,32 @@ def ground_truth_occupancy(scene, brick: str | None = None) -> bool | None:
     arrived).
 
     Deliberately coarser than :attr:`SkillFSM.seated_by_height`: "is anything resting in the cell
-    at all" (any stud reading more than a tenth of the stud height of insertion), not "is it
-    seated to depth."  A real occupancy sensor could answer the first question too, not the
-    second, and the two can disagree -- a brick resting on the stud tops reads occupied here while
-    :attr:`SkillFSM.seated_by_height` correctly calls it not seated, which is the module
-    docstring's whole point about why this cross-check does not get to override that verdict.
+    at all" (the nearest stud to each of the brick's own sockets reading more than a tenth of the
+    stud height of raw insertion depth), not "is it seated to depth" or "is it connected."  This
+    reads :meth:`~brick_builder.bricks.snap_api.SnapGeometry.pair_metrics` directly -- the same
+    per-socket, nearest-stud pairing the snap model itself uses -- rather than
+    ``SnapModel.stud_depths``, which is gated to zero for any pairing outside the connection
+    model's own ``capture_lateral``/tilt tolerances (``bricks/snap_detent.py``) and so answers
+    "is it connected," a strictly narrower question a real occupancy sensor has no way to answer
+    either.  The two questions can disagree in both directions -- a brick resting shallowly on the
+    stud tops is occupied but not seated, and a brick pressed to a seating depth but rejected by
+    the connection gate is occupied despite the snap model's own bookkeeping calling it empty (see
+    the module docstring's VERIFY section for a traced case of the second) -- which is exactly why
+    this cross-check does not get to override :attr:`SkillFSM.seated_by_height`.
     """
     brick = scene.held_name if brick is None else brick
     if brick is None:
         return None
-    depths = np.asarray(scene.snap.stud_depths(brick))
-    return bool(depths.size and float(depths.max()) > 0.1 * scene.cfg.spec.stud_h)
+    geom = scene.snap.geom
+    bi = geom.brick_names.index(brick)
+    sockets = np.nonzero(geom.socket_brick == bi)[0]
+    if sockets.size == 0:
+        return None
+    depth, lateral, _tilt, valid = geom.pair_metrics(scene.data, rows=sockets)
+    lateral = np.where(valid, lateral, np.inf)
+    nearest = np.argmin(lateral, axis=1)
+    best_depth = depth[np.arange(sockets.size), nearest]
+    return bool(best_depth.size and float(best_depth.max()) > 0.1 * geom.stud_h)
 
 
 def _ik(kin, target: ToolTarget, q0: np.ndarray) -> np.ndarray:
@@ -470,6 +496,7 @@ def verify_trials(
     loose_error: float = 0.008,
     cfg: FsmConfig = FsmConfig(),
     press: PressConfig = PressConfig(max_searches=0),
+    occupancy: bool = False,
 ) -> dict:
     """Run the whole skill on cases that do seat and cases that cannot, and report both verdicts.
 
@@ -483,13 +510,18 @@ def verify_trials(
     outcome disagrees with the group it was drawn for (``out["runs"][i]["really_seated"]`` says
     which, from the snap model's own stud depths, so the disagreement is visible rather than
     hidden).  At ``seated_error``, comfortably inside the 3 mm capture basin on paper, a single
-    attempt only actually seats a 2x4 something like one time in five on this rig (2026-09-25,
-    seed 7, 20 trials: 9/20), purely from run-to-run servo noise near the capture gate's own
-    edge.  That is expected, not a bug to sample away: the "seated" group's *name* describes the
-    believed error the arm is given, not a guarantee every draw lands a real seat, and the
-    accuracy this function measures is the height verdict's own accuracy on exactly the mix of
-    outcomes a fixed 0.5 mm belief error actually produces -- see the module docstring for what
-    that mix does to the verdict.
+    attempt only actually seats a 2x4 well under half the time on this rig (2026-09-25, seed 7, 20
+    trials: 9/20), purely from run-to-run servo noise near the capture gate's own edge.  That is
+    expected, not a bug to sample away: the "seated" group's *name* describes the believed error
+    the arm is given, not a guarantee every draw lands a real seat, and the accuracy this function
+    measures is the height verdict's own accuracy on exactly the mix of outcomes a fixed 0.5 mm
+    belief error actually produces -- see the module docstring for what that mix does to the
+    verdict.
+
+    ``occupancy=True`` binds each trial's :attr:`SkillFSM.occupancy_check` to
+    :func:`ground_truth_occupancy` on this same scene, so ``out["runs"][i]["seated_by_occupancy"]``
+    is populated instead of left ``None`` -- this does not consume any extra draws from ``rng``,
+    so it does not change which cases the two groups land on.
     """
     from brick_builder.scene.compose import (
         HeldBrick,
@@ -513,6 +545,8 @@ def verify_trials(
             start = np.array([believed[0], believed[1], seat_z + cfg.hover])
             reset_scene(scene, rng, arm_q=tool_down_ik(scene.kin, start, 0.0, q0=scene.home_q))
             fsm = SkillFSM(seat_z, believed, press=press, cfg=cfg)
+            if occupancy:
+                fsm.occupancy_check = lambda: ground_truth_occupancy(scene)
             report = run_skill(scene, fsm, max_ticks=500, seed=int(rng.integers(2**31)))
             report["group"] = tag
             depths = report["depths_before_verify"]
