@@ -18,7 +18,7 @@ optional, useful only for a human viewer or an accuracy evaluation, never for co
   an empty slot.
 - `t`: a timestamp (seconds, or any monotonic counter a producer chooses).
 - `source`: a short name for which producer/backend built this state.
-- `window`: the view (`views.LookPose`, generally an attention window -- see `views.py`) the
+- `window`: the view (`views.ViewingPose`, generally an attention window -- see `views.py`) the
   256x256 frame this state was computed from was cropped to. Needed to turn a slot's own
   normalized image coordinates back into a metric position later.
 - `slot_ids`: `[K]`, a persistent identity per slot this frame (`-1` for an unclaimed/empty slot)
@@ -42,7 +42,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 if TYPE_CHECKING:
-    from .views import LookPose
+    from .views import ViewingPose
 
 
 # --------------------------------------------------------------------------------- the schema ---
@@ -133,7 +133,7 @@ class SceneState:
     schema: SlotSchema
     t: float
     source: str
-    window: "LookPose"
+    window: "ViewingPose"
     slot_ids: np.ndarray
     frame_id: int = 0
     _decode_fn: Callable[[np.ndarray], np.ndarray] | None = field(default=None, repr=False, compare=False)
@@ -165,7 +165,7 @@ class SceneState:
     @property
     def res(self) -> int:
         """The square frame resolution this state's `window` was cropped/resized to (256 for every
-        `LookPose` this project defines) -- a convenience for viewer/
+        `ViewingPose` this project defines) -- a convenience for viewer/
         evaluation code (`readout.py`) that otherwise has to reach into `self.window.output_size`
         itself. Raises if this state has no `window` (a bare/synthetic state built without one,
         e.g. some tests)."""
@@ -261,7 +261,7 @@ class SceneModelSource(Protocol):
         self,
         rgb: np.ndarray,
         *,
-        window: "LookPose",
+        window: "ViewingPose",
         instance: np.ndarray | None = None,
         depth: np.ndarray | None = None,
         present_mask: np.ndarray | None = None,

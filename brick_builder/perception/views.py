@@ -1,4 +1,4 @@
-"""The camera views the robot uses: fixed LOOK poses, and a moving attention window.
+"""The camera views the robot uses: fixed viewing poses, and a moving attention window.
 
 Every view here is the wrist camera (`brick_builder.robot.patch_so101.WRIST_CAM` -- the one camera the
 real hardware carries) used the same way: move the tool to a pose (or don't -- see the attention
@@ -62,7 +62,7 @@ from ..scene.compose import Scene, reset_scene, tool_down_ik
 
 
 @dataclass(frozen=True)
-class LookPose:
+class ViewingPose:
     """A camera view: where to render from, a wide field of view, and a crop/resize recipe.
 
     `tcp`/`yaw`, when `tcp` is not `None`, are handed to `tool_down_ik` by `solve_look`/
@@ -114,11 +114,11 @@ PLATE_CROP = (159, 138, 369, 348)
 #: brick placed outside the 4-stud window.
 PLATE_CROP_DENSE = (213, 202, 314, 303)
 
-PLATE_VIEW = LookPose(
+PLATE_VIEW = ViewingPose(
     name="plate", camera=WRIST_CAM, render_size=PLATE_RENDER_SIZE, crop=PLATE_CROP,
     fovy_deg=PLATE_FOVY_DEG, tcp=PLATE_TCP, yaw=PLATE_YAW,
 )
-PLATE_VIEW_DENSE = LookPose(
+PLATE_VIEW_DENSE = ViewingPose(
     name="plate_dense", camera=WRIST_CAM, render_size=PLATE_RENDER_SIZE, crop=PLATE_CROP_DENSE,
     fovy_deg=PLATE_FOVY_DEG, tcp=PLATE_TCP, yaw=PLATE_YAW,
 )
@@ -134,22 +134,22 @@ TRAY_FOVY_DEG = fovy_from_diagonal_fov(WRIST_CAM_DIAGONAL_FOV_DEG, *TRAY_RENDER_
 #: resulting mild vertical stretch changes how round a stud looks, not backprojection accuracy.
 TRAY_CROP = (110, 202, 292, 300)
 
-TRAY_VIEW = LookPose(
+TRAY_VIEW = ViewingPose(
     name="tray", camera=WRIST_CAM, render_size=TRAY_RENDER_SIZE, crop=TRAY_CROP,
     fovy_deg=TRAY_FOVY_DEG, tcp=TRAY_TCP, yaw=TRAY_YAW,
 )
 
-VIEWS: dict[str, LookPose] = {"plate": PLATE_VIEW, "plate_dense": PLATE_VIEW_DENSE, "tray": TRAY_VIEW}
+VIEWS: dict[str, ViewingPose] = {"plate": PLATE_VIEW, "plate_dense": PLATE_VIEW_DENSE, "tray": TRAY_VIEW}
 
 
 # ------------------------------------------------------------------------------- driving a pose ---
 
 
-def solve_look(scene: Scene, pose: LookPose, iters: int = 300) -> np.ndarray:
+def solve_look(scene: Scene, pose: ViewingPose, iters: int = 300) -> np.ndarray:
     """The 5 arm joint angles for `pose`, seeded from `pose.seed_q`. Requires `pose.tcp`."""
     if pose.tcp is None:
         raise ValueError(
-            f"LookPose {pose.name!r} has tcp=None ('wherever the arm already is') -- there is "
+            f"ViewingPose {pose.name!r} has tcp=None ('wherever the arm already is') -- there is "
             "nothing to solve for; use attention_view for a moving camera instead"
         )
     return tool_down_ik(
@@ -158,7 +158,7 @@ def solve_look(scene: Scene, pose: LookPose, iters: int = 300) -> np.ndarray:
     )
 
 
-def goto_look(scene: Scene, pose: LookPose, rng: np.random.Generator, iters: int = 300) -> np.ndarray:
+def goto_look(scene: Scene, pose: ViewingPose, rng: np.random.Generator, iters: int = 300) -> np.ndarray:
     """Drives `scene` to `pose` (a `reset_scene` call) and applies its `fovy_deg`. Requires
     `pose.tcp` -- see `solve_look`."""
     q = solve_look(scene, pose, iters=iters)
@@ -167,7 +167,7 @@ def goto_look(scene: Scene, pose: LookPose, rng: np.random.Generator, iters: int
     return q
 
 
-def _apply_view_fovy(scene: Scene, pose: LookPose) -> None:
+def _apply_view_fovy(scene: Scene, pose: ViewingPose) -> None:
     cam_id = mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_CAMERA, pose.camera)
     if cam_id < 0:
         raise ValueError(f"unknown camera {pose.camera!r}")
@@ -231,13 +231,13 @@ def cropped_camera_geometry(
     )
 
 
-def full_frame_geometry(scene: Scene, pose: LookPose) -> CameraGeometry:
+def full_frame_geometry(scene: Scene, pose: ViewingPose) -> CameraGeometry:
     """Camera intrinsics/extrinsics at `pose`'s *pre-crop* render resolution, read off `scene`'s
     current configuration (not necessarily `pose.tcp` -- the caller may be mid-motion)."""
     return camera_geometry(scene.model, scene.data, pose.camera, *pose.render_size)
 
 
-def output_to_full(pose: LookPose, px: np.ndarray) -> np.ndarray:
+def output_to_full(pose: ViewingPose, px: np.ndarray) -> np.ndarray:
     """Maps pixel coordinate(s) `[..., 2]` (col, row) in the final image back to the pre-crop
     render's pixel coordinates, so `full_frame_geometry`'s intrinsics apply directly."""
     x0, y0, x1, y1 = pose.crop
@@ -247,7 +247,7 @@ def output_to_full(pose: LookPose, px: np.ndarray) -> np.ndarray:
     return np.stack([x0 + px[..., 0] * scale_x, y0 + px[..., 1] * scale_y], axis=-1)
 
 
-def full_to_output(pose: LookPose, px: np.ndarray) -> np.ndarray:
+def full_to_output(pose: ViewingPose, px: np.ndarray) -> np.ndarray:
     """Inverse of `output_to_full`: pre-crop pixel(s) -> final-image pixel coordinate(s).
 
     Not clamped to `[0, output_size)`: a point outside the crop maps outside that range, which is
@@ -261,7 +261,7 @@ def full_to_output(pose: LookPose, px: np.ndarray) -> np.ndarray:
 
 
 def px_per_stud_pitch(
-    scene: Scene, pose: LookPose, plate_xy: tuple[float, float], plane_z: float, pitch: float,
+    scene: Scene, pose: ViewingPose, plate_xy: tuple[float, float], plane_z: float, pitch: float,
 ) -> float:
     """Measures pixels-per-stud-pitch (16 mm for DUPLO) in the final `output_size` image, at
     `plate_xy`, by projecting two world points one pitch apart and mapping through the crop.
@@ -280,12 +280,12 @@ def px_per_stud_pitch(
 # --------------------------------------------------------------------------------- rendering ---
 
 
-def render_view(scene: Scene, pose: LookPose, renderer: SceneRenderer) -> tuple[Frame, CameraGeometry]:
+def render_view(scene: Scene, pose: ViewingPose, renderer: SceneRenderer) -> tuple[Frame, CameraGeometry]:
     """Renders `pose` from `scene`'s *current* configuration and returns the cropped/resized
     256x256 `Frame` (rgb, instance, depth) plus the `CameraGeometry` for that cropped image,
     ready for `backproject.py`.
 
-    Does not move the arm -- call `goto_look` first for a fixed `LookPose` with `tcp` set, or
+    Does not move the arm -- call `goto_look` first for a fixed `ViewingPose` with `tcp` set, or
     just render wherever the arm already is for an attention window. `renderer` must already be
     sized for `pose.render_size` (`SceneRenderer(scene.model, width=pose.render_size[0],
     height=pose.render_size[1])`); reusing one `SceneRenderer` (and so one GL context) across many
@@ -363,8 +363,8 @@ def attention_view(
     scene: Scene, roi_world: np.ndarray, *, camera: str = WRIST_CAM,
     render_size: tuple[int, int] = (512, 512), output_size: int = 256,
     margin: float = 0.25, min_crop_px: float = 48.0, name: str = "attention",
-) -> LookPose:
-    """A `LookPose` with `tcp=None` (it never moves the arm) whose crop keeps `roi_world` framed
+) -> ViewingPose:
+    """A `ViewingPose` with `tcp=None` (it never moves the arm) whose crop keeps `roi_world` framed
     from wherever the wrist camera currently is.
 
     `scene.data` must already reflect the pose to look from (after `mj_forward`/`mj_step`, the
@@ -382,7 +382,7 @@ def attention_view(
 
     geom_full = camera_geometry(scene.model, scene.data, camera, *render_size)
     crop = attention_crop(geom_full, roi_world, render_size, margin=margin, min_crop_px=min_crop_px)
-    return LookPose(
+    return ViewingPose(
         name=name, camera=camera, render_size=render_size, crop=crop, fovy_deg=fovy_deg,
         output_size=output_size, tcp=None,
     )
@@ -391,8 +391,8 @@ def attention_view(
 def window_from_slots(
     state: SceneState, slots_of_interest: Sequence[int], margin: float = 0.25, *,
     min_crop_px: float = 48.0, default_half_extent: float = 0.08,
-) -> LookPose:
-    """A `LookPose` (`tcp=None`: it does not move the arm) whose crop tightly frames the given
+) -> ViewingPose:
+    """A `ViewingPose` (`tcp=None`: it does not move the arm) whose crop tightly frames the given
     slots of `state`, computed ONLY from those slots' own published centre and extent (the
     second-moment ellipse's axis lengths) -- no decode, no ground truth. The slot-state
     counterpart to `attention_view`: a controller that only ever reads slot states (never a

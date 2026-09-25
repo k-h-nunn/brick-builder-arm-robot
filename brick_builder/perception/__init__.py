@@ -4,7 +4,7 @@ The controller-facing interface is `scene_model.SceneState`: a small set of per-
 (`PLACEHOLDER_SLOT_SCHEMA`), produced by `ideal_scene_model.IdealSceneModel` in simulation
 (ground truth), `conventional_scene_model.ColourSegmentationSceneModel` (classical, RGB-only) or
 `conventional_scene_model.LearnedSceneModel` (the trained convolutional model) from a rendered or
-camera frame taken inside a `views.LookPose` window. `sources.py` is the registry those three
+camera frame taken inside a `views.ViewingPose` window. `sources.py` is the registry those three
 publish themselves through, and the seam a source from another package registers itself at.
 `readout.py` (a per-pixel, decode-based reader) and `slot_ops.py` (slot-space comparison, editing
 and logging) sit on top; see each module's own docstring, and `docs/guide/06-perception.md`.
@@ -29,7 +29,7 @@ from .conventional_scene_model import (
 )
 from . import sources
 from .views import (
-    LookPose,
+    ViewingPose,
     PLATE_VIEW,
     PLATE_VIEW_DENSE,
     TRAY_VIEW,
@@ -59,7 +59,7 @@ __all__ = [
     "ConventionalGpuSceneModel",
     "LearnedSceneModel",
     "sources",
-    "LookPose",
+    "ViewingPose",
     "PLATE_VIEW",
     "PLATE_VIEW_DENSE",
     "TRAY_VIEW",
