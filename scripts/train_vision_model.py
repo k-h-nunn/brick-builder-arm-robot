@@ -58,6 +58,23 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--threads", type=int, default=6, help="torch intra-op threads")
     parser.add_argument("--device", default="cpu", choices=("cpu", "cuda"))
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--extra-split", action="append", default=[],
+                        help="an extra split (already generated under --cache) mixed into "
+                             "training in memory, on top of 'train'; repeatable")
+    parser.add_argument("--photometric-strength", type=float, default=1.0,
+                        help="scales the photometric jitter's half-widths; 1.0 reproduces the "
+                             "original fixed ranges, 2.0 doubles them")
+    parser.add_argument("--init-weights", type=Path, default=None,
+                        help="a shipped weights snapshot to fine-tune from, on a fresh --out "
+                             "(ignored once that --out already has a checkpoint.pt to resume)")
+    parser.add_argument("--ship-weights", dest="ship_weights", action="store_true",
+                        default=None,
+                        help="let a new best epoch overwrite the live "
+                             "brick_builder/perception/weights/vision_model.pt as it trains "
+                             "(default: on for a plain run, off whenever --out is not the "
+                             "default results/vision_model, so an experimental run cannot "
+                             "clobber the shipped checkpoint before its numbers are gated)")
+    parser.add_argument("--no-ship-weights", dest="ship_weights", action="store_false")
     args = parser.parse_args(argv)
 
     from brick_builder.perception.cnn import data as data_mod
@@ -66,6 +83,9 @@ def main(argv: list[str] | None = None) -> dict:
     cache = args.cache or data_mod.DEFAULT_CACHE
     out = args.out or DEFAULT_OUT
     Path(out).mkdir(parents=True, exist_ok=True)
+    ship_weights = args.ship_weights
+    if ship_weights is None:
+        ship_weights = Path(out).resolve() == Path(DEFAULT_OUT).resolve()
 
     summary: dict = {}
     if args.generate:
@@ -90,7 +110,10 @@ def main(argv: list[str] | None = None) -> dict:
         cfg = TrainConfig(
             cache=str(cache), out=str(out), minutes=args.minutes, epochs=args.epochs,
             batch_size=args.batch_size, lr=args.lr, width=args.width, threads=args.threads,
-            device=args.device, seed=args.seed,
+            device=args.device, seed=args.seed, extra_splits=tuple(args.extra_split),
+            photometric_strength=args.photometric_strength,
+            init_weights=str(args.init_weights) if args.init_weights else None,
+            save_shipped=ship_weights,
         )
         print(json.dumps(asdict(cfg), indent=1))
         summary["training"] = train(cfg)
