@@ -317,7 +317,7 @@ time attributed to `cv2.calibrateCamera`'s intrinsics fit. That attribution was 
 its proposed remedy (a real `cv2.calibrateHandEye` binding or a better-conditioned intrinsics fit):
 given clean corners, both the intrinsics fit and the closed-form `AX = XB` hand-eye solve are
 accurate (`HAS_CV2_HAND_EYE_BINDING`'s own gap is real but separate, and does not bear on this).
-The actual cause was `find_corners`' `cv2.cornerSubPix` refinement: a single fixed 11x11-pixel
+The actual cause was `find_corners`' `cv2.cornerSubPix` refinement: a single fixed 23x23-pixel
 search window, which also runs on real photographs, was too large on that pose set's foreshortened
 far rows, where adjacent squares are only about 10-15 px apart — the window reached past the
 neighbouring corner and pulled the refined estimate toward it by up to several pixels on the
@@ -651,7 +651,7 @@ entry, which stays 17 wide. The episode still randomizes over the dead band and
 `Scene.randomization` still records the value drawn; only the critic's dedicated summary vector
 does not carry it.
 
-Every group's sampler shares one `rng.Generator`, drawn group by group in a fixed order
+Every group's sampler shares one `np.random.Generator`, drawn group by group in a fixed order
 (`dynamics`, `command`, `snap`, `contact`, `plate`, `in_hand`, `visual`), so a new key anywhere in
 `RANGES` would normally consume one more `rng` call before later groups draw, shifting every
 later group's numbers for a fixed seed. `sample_command` draws `command.error_deadband_ticks`

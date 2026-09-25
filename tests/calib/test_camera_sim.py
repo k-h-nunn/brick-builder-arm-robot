@@ -138,7 +138,7 @@ def test_perturbed_pose_recovery_still_finds_enough_poses(perturbed_pose_report:
 
 def test_perturbed_pose_recovery_reprojection_error(perturbed_pose_report: sim.RecoveryReport):
     """Measured 0.528 px at seed 1, in the same range as the default/perturbed-fov cases' own
-    0.594/1.003 px, not the outlier a fixed 11x11 ``cornerSubPix`` window once made it (1.021 px,
+    0.594/1.003 px, not the outlier a fixed 23x23 px ``cornerSubPix`` window once made it (1.021 px,
     against 0.668/0.742 px for the other two): ``find_corners`` now sizes that window from each
     image's own detected corner spacing (``brick_builder.calib.camera._corner_subpix_window``),
     which removed the excess error a fixed window left on this pose set's foreshortened far rows."""
@@ -156,7 +156,7 @@ def test_perturbed_pose_recovery_position_error_is_bounded(perturbed_pose_report
     7.46/6.46 mm, not the outlier it was before ``find_corners``' corner-window fix (31.85 mm,
     against 5.85/5.42 mm for the other two). ``solve_checkerboard_pose`` uses the fitted (not the
     true) camera matrix to get each view's checkerboard pose, so corner-detection error reaches
-    both the intrinsics fit and, through it, the hand-eye solve; a fixed 11x11 ``cornerSubPix``
+    both the intrinsics fit and, through it, the hand-eye solve; a fixed 23x23 px ``cornerSubPix``
     window overran neighbouring corners on this pose set's foreshortened far rows, only ~10-15 px
     apart, degrading exactly that chain (``test_perturbed_pose_hand_eye_solve_is_accurate_given_the_true_intrinsics``
     below isolates the hand-eye solve itself from the intrinsics fit and confirms the solve was
