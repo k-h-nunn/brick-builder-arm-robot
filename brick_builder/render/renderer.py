@@ -30,10 +30,26 @@ COLLISION_GEOM_GROUP = 3
 
 @dataclass
 class Frame:
-    """One rendered observation."""
+    """One rendered observation.
+
+    Two invalid-value conventions, one per channel. `instance` is categorical, so its sentinel
+    is an out-of-range integer, `-1` (background/no instance). `depth` is a continuous physical
+    measurement, so `0.0` (or any other finite number) would still parse as a plausible reading;
+    its sentinel is instead `float("nan")` (`brick_builder.render.domain_rand.DEPTH_INVALID`),
+    which cannot collide with a real depth and which ordinary arithmetic (mean, `+`, `*`,
+    `np.clip`) propagates instead of silently blending away.
+
+    `SceneRenderer.render` below never itself produces a NaN depth: every pixel this pass reads
+    back, background included, has a real, finite metric depth (the far clipping plane's own
+    distance, for a pixel with no geometry in front of it -- see `_depth_to_metres`). The NaN
+    convention is for a *post-process* step that can genuinely have no reading for a pixel, such
+    as the lens-distortion remap in `brick_builder.render.domain_rand.apply_postprocess` pulling
+    from outside this pristine frame's bounds; that module owns the sentinel's definition and
+    the reasoning behind it.
+    """
 
     rgb: np.ndarray        # uint8 [H, W, 3]
-    depth: np.ndarray      # float32 [H, W], metres
+    depth: np.ndarray      # float32 [H, W], metres; NaN = no valid reading (see above)
     instance: np.ndarray   # int32 [H, W]; -1 = background, else the caller's instance id
     body_ids: dict         # the body-name -> instance-id map active when this frame was rendered
 
