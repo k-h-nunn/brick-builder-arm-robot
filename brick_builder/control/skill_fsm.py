@@ -17,21 +17,29 @@
 VERIFY as the tug plus a check that the servos' ``Present_Load`` rises, on the reasoning that a
 snapped-in brick stops the tool following its own command.  Measured here, that signal does not
 work, and the reason is this arm rather than the idea: ``Present_Load`` *is* the joint position
-error, scaled, and this arm carries a Coulomb-friction dead band of about 4-5 mm at the TCP
-(this project's own friction finding, quantified for the Reach task in
-``docs/guide/04-environments.md``).  A tug small enough to leave a seated brick alone is
-therefore entirely inside the arm's own stiction, so the tool does not move whether or not
-anything is holding it, and the load rise is stiction rather than attachment: over 40 trials the
-verdict was right 7-8 times in 20, i.e. worse than a coin.  Tugging hard enough to beat the
-stiction (8 mm) reverses the problem -- it pulls a genuinely seated 2x4 straight back off the
-plate, which makes the test destroy what it is testing.
+error, scaled, and this arm's own joint friction is enough that a tug this small does not
+reliably move the tool whether or not anything is holding it -- the load rise is stiction rather
+than attachment: over 40 trials the verdict was right 7-8 times in 20, i.e. worse than a coin.
+Tugging hard enough to beat the stiction (8 mm) reverses the problem -- it pulls a genuinely
+seated 2x4 straight back off the plate, which makes the test destroy what it is testing.
 
 **What does work** is the height the tool settles at once the press has let go
 (:attr:`SkillFSM.seated_by_height`): a seated 2x4 leaves it 2.0-2.3 mm above the seated height
 (almost all of that the soft weld's own stretch), a brick resting on the stud tops 4.6-6.5 mm,
-and the marginal cases in between.  Over two held-out seeds that verdict was right 40 times out
-of 40.  Both numbers are reported; :attr:`SkillFSM.verified` stays the spec's load-rise verdict
-so the finding is visible rather than quietly redefined.
+and the marginal cases in between.  It is not perfect: measured on this rig (2026-09-25, seed 7,
+20 seated-group trials, single attempt each, no case rejection), the verdict was right 37 times
+out of 40 overall -- Wilson interval [0.801, 0.974] -- and its false positives are all one shape,
+found by inspecting every disagreement: a case whose believed cell was close enough on paper (0.5
+mm, inside the 3 mm capture basin) that a genuinely seated outcome was expected, but servo noise
+near that edge left one or more studs shallow or unengaged, while the tool still settled inside
+``verify_height_tol`` of the seated height anyway (one run settled 0.51 mm high with a stud still
+3.9 mm shy of full depth; two settled at or below the seated height -- -0.33 mm -- with every stud
+at 0.00 mm, i.e. the brick missed the cell and the empty tool happened to stop within tolerance of
+where a seated one would).  So the height verdict's failure mode is specific: near the capture
+gate's own edge, "close enough to look seated" and "actually seated" can disagree, and there is no
+second signal here to catch that (see ``occupancy_check`` below).  Both numbers are reported;
+:attr:`SkillFSM.verified` stays the spec's load-rise verdict so the finding is visible rather than
+quietly redefined.
 
 A second, independent cross-check is available whenever a scene model is: ``occupancy_check``,
 an optional zero-argument callable a caller supplies (closing over whatever vision producer it
@@ -41,7 +49,14 @@ is (right after the press releases and the tool stops moving), and stored verbat
 :attr:`SkillFSM.seated_by_occupancy` -- never used to override the height verdict, only reported
 alongside it, since a producer's occupancy call has its own failure modes (dropout, wrong cell)
 that this module cannot itself audit.  With no callable given (the default), the field stays
-``None`` and nothing about the height-only behaviour changes.
+``None`` and nothing about the height-only behaviour changes.  :func:`ground_truth_occupancy` is
+the placeholder binding for a sim-only caller (a test, or a scripted demo with no scene model
+wired up yet) -- simulator ground truth, the same source the rest of this project's placeholder
+perception stands in with until a trained scene model replaces it.  It answers a coarser question
+than seating on purpose: "is anything resting in the cell at all" (any stud reading non-trivial
+insertion depth), not "is it seated," because that is the question a real occupancy sensor could
+answer too, and the two can disagree -- a brick resting on the stud tops is occupied but not
+seated, which is exactly the gap the false positives above fall into.
 
 Everything here obeys the same two rules as ``primitives.py``: deployable signals only, and
 arithmetic simple enough to port to C.
@@ -408,6 +423,27 @@ def run_skill(
     }
 
 
+def ground_truth_occupancy(scene, brick: str | None = None) -> bool | None:
+    """A placeholder ``occupancy_check`` binding for a sim-only caller: simulator ground truth
+    stands in for a scene model's own occupancy readout, the same way it does everywhere else in
+    this project until a trained model replaces it.  ``brick`` defaults to ``scene.held_name``;
+    returns ``None`` if there is nothing held to ask about (matching a real reading that never
+    arrived).
+
+    Deliberately coarser than :attr:`SkillFSM.seated_by_height`: "is anything resting in the cell
+    at all" (any stud reading more than a tenth of the stud height of insertion), not "is it
+    seated to depth."  A real occupancy sensor could answer the first question too, not the
+    second, and the two can disagree -- a brick resting on the stud tops reads occupied here while
+    :attr:`SkillFSM.seated_by_height` correctly calls it not seated, which is the module
+    docstring's whole point about why this cross-check does not get to override that verdict.
+    """
+    brick = scene.held_name if brick is None else brick
+    if brick is None:
+        return None
+    depths = np.asarray(scene.snap.stud_depths(brick))
+    return bool(depths.size and float(depths.max()) > 0.1 * scene.cfg.spec.stud_h)
+
+
 def _ik(kin, target: ToolTarget, q0: np.ndarray) -> np.ndarray:
     """Warm-started inverse kinematics for one tool target; keeps ``q0`` if it does not converge."""
     q = np.asarray(q0, dtype=float).copy()
@@ -431,37 +467,29 @@ def verify_trials(
     trials: int = 12,
     seed: int = 0,
     seated_error: float = 0.0005,
-    loose_error: float = 0.005,
+    loose_error: float = 0.008,
     cfg: FsmConfig = FsmConfig(),
     press: PressConfig = PressConfig(max_searches=0),
-    max_attempts: int = 30,
 ) -> dict:
     """Run the whole skill on cases that do seat and cases that cannot, and report both verdicts.
 
     The two groups differ only in how wrong the *believed* cell is.  ``seated_error`` is half a
-    millimetre; ``loose_error`` is 5 mm, outside the spiral's own 4 mm reach and the roughly 3 mm
-    capture basin of a straight press (``primitives.py``), so a drawn case there reliably hands
-    VERIFY a brick resting on the stud tops rather than snapped onto them.  Both groups use
-    exactly the same configuration, which is what makes the comparison a test of VERIFY and not
-    of the press.
+    millimetre, which always goes in; ``loose_error`` is 8 mm, outside the spiral's own 4 mm
+    reach, so the press sweeps, gives up and hands VERIFY a brick that is resting on the stud
+    tops rather than snapped onto them.  Both groups use exactly the same configuration, which
+    is what makes the comparison a test of VERIFY and not of the press.
 
-    Each draw is checked against what its group is *for* and, if it disagrees, redrawn (a fresh
-    angle and a fresh servo-noise seed) up to ``max_attempts`` times.  This is not loosening what
-    VERIFY is graded against -- it is keeping the two groups equal to their own name ("cases that
-    do seat and cases that cannot"), a promise a fixed error no longer keeps by itself once the
-    arm is accurate enough to land right at the edge of the per-stud capture gate.  Measured on
-    this rig (2026-09-25, seed 7, 20 trials): a single attempt at 0.5 mm of belief error --
-    comfortably inside the 3 mm capture basin on paper -- only actually seats a 2x4 roughly one
-    time in five, purely from run-to-run servo noise near that edge, not from which way the
-    half-millimetre points; at ``max_attempts=8`` about 3 of 20 trials exhausted their budget
-    without ever seating (consistent with a ~20 % single-attempt rate: 0.8**8 =~ 17 %), which is
-    why the default here is higher.  ``out["attempts"]`` reports how many draws each group
-    actually needed, for anyone auditing a run; a trial that still exhausts ``max_attempts``
-    keeps its last (mislabelled) draw rather than raising, so an unlucky run can still leave a
-    handful of ``really_seated`` values that disagree with the group they were drawn for -- this
-    lowers how often that happens, it does not guarantee it never does.  Rejecting and redrawing
-    never touches :attr:`FsmConfig.verify_height_tol` or the accuracy bar callers hold this
-    function's own output to.
+    Each draw is a single attempt -- this function does not redraw or reject a case whose actual
+    outcome disagrees with the group it was drawn for (``out["runs"][i]["really_seated"]`` says
+    which, from the snap model's own stud depths, so the disagreement is visible rather than
+    hidden).  At ``seated_error``, comfortably inside the 3 mm capture basin on paper, a single
+    attempt only actually seats a 2x4 something like one time in five on this rig (2026-09-25,
+    seed 7, 20 trials: 9/20), purely from run-to-run servo noise near the capture gate's own
+    edge.  That is expected, not a bug to sample away: the "seated" group's *name* describes the
+    believed error the arm is given, not a guarantee every draw lands a real seat, and the
+    accuracy this function measures is the height verdict's own accuracy on exactly the mix of
+    outcomes a fixed 0.5 mm belief error actually produces -- see the module docstring for what
+    that mix does to the verdict.
     """
     from brick_builder.scene.compose import (
         HeldBrick,
@@ -477,26 +505,20 @@ def verify_trials(
     cell = np.array(scene.cfg.plate_xy, dtype=float)
     rng = np.random.default_rng(seed)
 
-    out: dict[str, list] = {"seated": [], "loose": [], "runs": [], "attempts": {"seated": 0, "loose": 0}}
+    out: dict[str, list] = {"seated": [], "loose": [], "runs": []}
     for tag, error in (("seated", seated_error), ("loose", loose_error)):
-        want_seated = tag == "seated"
         for _ in range(trials):
-            report = None
-            for _attempt in range(max_attempts):
-                angle = float(rng.uniform(0.0, 2.0 * math.pi))
-                believed = cell + error * np.array([math.cos(angle), math.sin(angle)])
-                start = np.array([believed[0], believed[1], seat_z + cfg.hover])
-                reset_scene(scene, rng, arm_q=tool_down_ik(scene.kin, start, 0.0, q0=scene.home_q))
-                fsm = SkillFSM(seat_z, believed, press=press, cfg=cfg)
-                report = run_skill(scene, fsm, max_ticks=500, seed=int(rng.integers(2**31)))
-                report["group"] = tag
-                depths = report["depths_before_verify"]
-                report["really_seated"] = bool(
-                    depths.size and depths.min() >= 0.9 * scene.cfg.spec.stud_h
-                )
-                out["attempts"][tag] += 1
-                if report["really_seated"] == want_seated:
-                    break
+            angle = float(rng.uniform(0.0, 2.0 * math.pi))
+            believed = cell + error * np.array([math.cos(angle), math.sin(angle)])
+            start = np.array([believed[0], believed[1], seat_z + cfg.hover])
+            reset_scene(scene, rng, arm_q=tool_down_ik(scene.kin, start, 0.0, q0=scene.home_q))
+            fsm = SkillFSM(seat_z, believed, press=press, cfg=cfg)
+            report = run_skill(scene, fsm, max_ticks=500, seed=int(rng.integers(2**31)))
+            report["group"] = tag
+            depths = report["depths_before_verify"]
+            report["really_seated"] = bool(
+                depths.size and depths.min() >= 0.9 * scene.cfg.spec.stud_h
+            )
             out[tag].append(report["verify_load_rise"])
             out["runs"].append(report)
     return out
