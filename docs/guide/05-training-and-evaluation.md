@@ -456,7 +456,7 @@ budget (`--sync-envs --n-envs 4 --total-steps 6144`, i.e. 6 PPO updates — a fe
 
 | policy | level | episodes | successes | 95% Wilson CI |
 |---|---|---|---|---|
-| scripted baseline (`press_env.scripted_action`) | 0 | 20 | 4 | [0.161, 0.643] |
+| scripted baseline (`press_env.scripted_action`) | 0 | 20 | 4 | [0.081, 0.416] |
 | 6-update smoke checkpoint | 0 | 20 | 15 | [0.531, 0.888] |
 
 The scripted-baseline row is re-measured (2026-09-25, after the servo-encoder correction:
