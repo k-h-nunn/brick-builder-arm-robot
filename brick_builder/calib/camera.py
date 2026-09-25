@@ -279,6 +279,11 @@ class HandEyeResult:
     translation_m_cv: np.ndarray  # (3,), metres
     n_poses: int
     method: str
+    used_cv2_binding: bool
+    """Whether ``cv2.calibrateHandEye`` itself ran ``method``. ``False`` means
+    :func:`_solve_axb_axis_correspondence` ran instead (see :data:`HAS_CV2_HAND_EYE_BINDING`),
+    which is not a Tsai/Park/Horaud/Andreff/Daniilidis implementation and does not read ``method``
+    at all -- :attr:`method` is then only the caller's request, not what actually solved it."""
 
     def rotation_mujoco(self) -> np.ndarray:
         """The same rotation, expressed for a MuJoCo-convention camera frame (see module docstring)."""
@@ -288,6 +293,17 @@ class HandEyeResult:
         """Camera position in the gripper frame -- unaffected by the OpenCV/MuJoCo axis
         convention (see module docstring)."""
         return self.translation_m_cv
+
+    @property
+    def solver_description(self) -> str:
+        """One line naming what actually solved ``AX = XB`` -- for provenance notes and printouts,
+        so a fallback run is never reported as ``cv2.calibrateHandEye``."""
+        if self.used_cv2_binding:
+            return f"cv2.calibrateHandEye ({self.method})"
+        return (
+            "closed-form axis-correspondence AX=XB solve "
+            f"(cv2.calibrateHandEye unavailable; requested method {self.method!r} had no effect)"
+        )
 
 
 _HAND_EYE_METHODS = {
@@ -302,7 +318,7 @@ HAS_CV2_HAND_EYE_BINDING = hasattr(cv2, "calibrateHandEye")
 """False on this project's OpenCV 5.0.0 build: the ``CALIB_HAND_EYE_*`` enum constants are
 exposed but the ``cv2.calibrateHandEye`` Python function itself is not bound (checked directly:
 absent from ``dir(cv2)`` and from the installed ``cv2/__init__.pyi`` stub). :func:`calibrate_hand_eye`
-calls it when present and otherwise falls back to :func:`_solve_axb_tsai_lenz`, a from-scratch
+calls it when present and otherwise falls back to :func:`_solve_axb_axis_correspondence`, a from-scratch
 closed-form ``AX = XB`` solve so this module works on the venv actually installed. Re-check this
 flag after any OpenCV upgrade -- the fallback can be dropped once the real binding exists."""
 
@@ -337,7 +353,7 @@ def _pairwise_axb(
     return r_a, t_a, r_b, t_b
 
 
-def _solve_axb_tsai_lenz(
+def _solve_axb_axis_correspondence(
     r_a: list[np.ndarray], t_a: list[np.ndarray], r_b: list[np.ndarray], t_b: list[np.ndarray],
     min_angle_deg: float = 2.0,
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -398,7 +414,7 @@ def calibrate_hand_eye(
     forward kinematics, MuJoCo or real) and the checkerboard's pose relative to the camera (from
     :func:`solve_checkerboard_pose`, OpenCV convention). Solves the ``AX = XB`` hand-eye problem,
     through ``cv2.calibrateHandEye`` when the installed OpenCV build actually exposes it
-    (:data:`HAS_CV2_HAND_EYE_BINDING`) and :func:`_solve_axb_tsai_lenz` otherwise. Needs at least
+    (:data:`HAS_CV2_HAND_EYE_BINDING`) and :func:`_solve_axb_axis_correspondence` otherwise. Needs at least
     3 poses with enough rotational spread between them to be well conditioned, 8-10+ recommended.
     """
     if len(gripper_to_base) != len(target_to_cam):
@@ -420,13 +436,14 @@ def calibrate_hand_eye(
         t_cam2gripper = t_cam2gripper.reshape(3)
     else:
         r_a, t_a, r_b, t_b = _pairwise_axb(list(zip(r_g2b, t_g2b)), list(zip(r_t2c, t_t2c)))
-        r_cam2gripper, t_cam2gripper = _solve_axb_tsai_lenz(r_a, t_a, r_b, t_b)
+        r_cam2gripper, t_cam2gripper = _solve_axb_axis_correspondence(r_a, t_a, r_b, t_b)
 
     return HandEyeResult(
         rotation_cv=r_cam2gripper,
         translation_m_cv=t_cam2gripper.reshape(3),
         n_poses=len(gripper_to_base),
         method=method,
+        used_cv2_binding=HAS_CV2_HAND_EYE_BINDING,
     )
 
 
@@ -573,7 +590,7 @@ _HAND_EYE_FRAGMENT = """
     status: measured
     measured_by: {measured_by}
     measured_on: {measured_on}
-    notes: "cv2.calibrateHandEye ({method}) over {n_poses} pose(s), converted from OpenCV's camera convention to MuJoCo's (180 degree flip about the camera's own x axis)."
+    notes: "{solver_description}, {n_poses} pose(s), converted from OpenCV's camera convention to MuJoCo's (180 degree flip about the camera's own x axis)."
 
   mount_y_mm:
     value: {y_mm:.6g}
@@ -594,7 +611,7 @@ _HAND_EYE_FRAGMENT = """
     status: measured
     measured_by: {measured_by}
     measured_on: {measured_on}
-    notes: "See mount_x_mm. Extracted as intrinsic XYZ Euler angles from the calibrated rotation matrix."
+    notes: "See mount_x_mm. Extracted from the calibrated rotation matrix as R = Rz(yaw) @ Ry(pitch) @ Rx(roll) -- brick_builder.robot.kinematics.euler_zyx's own convention, yaw/pitch/roll about the fixed base-frame axes, not the body's own rotated axes."
 
   mount_pitch_deg:
     value: {pitch_deg:.6g}
@@ -613,9 +630,12 @@ _HAND_EYE_FRAGMENT = """
 
 
 def _euler_xyz_deg_from_matrix(rot: np.ndarray) -> tuple[float, float, float]:
-    """Intrinsic XYZ Euler angles [deg] (roll about x, pitch about y, yaw about z) from a
-    rotation matrix -- the convention ``camera.mount_roll_deg``/``_pitch_deg``/``_yaw_deg``
-    documents (a pure roll reproduces ``WRIST_CAM_QUAT_IN_GRIPPER`` when pitch=yaw=0)."""
+    """Roll/pitch/yaw [deg] from a rotation matrix, inverting :func:`_euler_xyz_deg_to_matrix`'s
+    ``R = Rz(yaw) @ Ry(pitch) @ Rx(roll)`` -- roll/pitch/yaw about the fixed base-frame axes, not
+    the body's own rotated axes (the convention ``camera.mount_roll_deg``/``_pitch_deg``/
+    ``_yaw_deg`` documents; a pure roll reproduces ``WRIST_CAM_QUAT_IN_GRIPPER`` when
+    pitch=yaw=0). Same decomposition as :func:`brick_builder.robot.kinematics.euler_zyx`, in
+    ``(roll, pitch, yaw)`` order and degrees rather than ``(yaw, pitch, roll)`` in radians."""
     r = np.asarray(rot, dtype=float)
     pitch = math.asin(np.clip(-r[2, 0], -1.0, 1.0))
     if abs(r[2, 0]) < 0.9999999:
@@ -640,12 +660,15 @@ def camera_config_from_params(params) -> "CameraConfig":  # noqa: F821 -- see do
     """Build a :class:`brick_builder.robot.patch_so101.CameraConfig` from a loaded
     :class:`brick_builder.params.ParamFile`'s ``camera.*`` fields.
 
-    ``brick_builder.params`` owns the parameter file's schema and loader; ``to_camera_settings``
-    there says outright that "there is no ``CameraConfig`` dataclass anywhere in the simulator to
-    build" -- this is that conversion, kept here (not in ``params.py``, a file this package does
-    not own) so it exists and is callable. Wiring it into ``to_arm_config``/``to_scene_config`` in
-    ``brick_builder/params.py`` itself is one line for whoever owns that file next; see this
-    package's report.
+    ``fx_px``/``fy_px``/``cx_px``/``cy_px`` only switch the built config onto
+    :attr:`CameraConfig.uses_measured_intrinsics` when at least one of them has
+    ``status: measured`` in the loaded file -- the shipped default file carries values for all
+    four (derived from ``diagonal_fov_deg`` and a centred principal point, ``status: assumed``) so
+    that a member reading the file sees a real number rather than a blank, not because that
+    number is an actual calibration; passing them through unconditionally would build a
+    measured-intrinsics config from the un-measured default file, which compiles a different
+    MuJoCo camera model than the ``diagonal_fov_deg`` path even though the numbers agree (see
+    :meth:`CameraConfig.fovy_deg`).
 
     Imported lazily (``patch_so101`` pulls in ``mujoco`` at module level) so nothing else in this
     module needs it -- the rest of ``brick_builder.calib.camera`` stays MuJoCo-free (module
@@ -660,13 +683,21 @@ def camera_config_from_params(params) -> "CameraConfig":  # noqa: F821 -- see do
         float(params.value("camera.mount_pitch_deg")),
         float(params.value("camera.mount_yaw_deg")),
     )
+    intrinsics_measured = any(
+        params.get(f"camera.{name}").status == "measured"
+        for name in ("fx_px", "fy_px", "cx_px", "cy_px")
+    )
+    fx = float(params.value("camera.fx_px")) if intrinsics_measured else None
+    fy = float(params.value("camera.fy_px")) if intrinsics_measured else None
+    cx = float(params.value("camera.cx_px")) if intrinsics_measured else None
+    cy = float(params.value("camera.cy_px")) if intrinsics_measured else None
     return CameraConfig(
         resolution=(width, height),
         diagonal_fov_deg=float(params.value("camera.diagonal_fov_deg")),
-        fx_px=float(params.value("camera.fx_px")),
-        fy_px=float(params.value("camera.fy_px")),
-        cx_px=float(params.value("camera.cx_px")),
-        cy_px=float(params.value("camera.cy_px")),
+        fx_px=fx,
+        fy_px=fy,
+        cx_px=cx,
+        cy_px=cy,
         distortion_k1=float(params.value("camera.distortion_k1")),
         distortion_k2=float(params.value("camera.distortion_k2")),
         pos_in_gripper=(
@@ -709,7 +740,7 @@ def parameter_fragment(
         text += _HAND_EYE_FRAGMENT.format(
             x_mm=t_mm[0], y_mm=t_mm[1], z_mm=t_mm[2],
             roll_deg=roll, pitch_deg=pitch, yaw_deg=yaw,
-            method=hand_eye.method, n_poses=hand_eye.n_poses,
+            solver_description=hand_eye.solver_description, n_poses=hand_eye.n_poses,
             measured_by=measured_by, measured_on=measured_on,
         )
     return text
