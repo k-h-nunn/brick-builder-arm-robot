@@ -358,17 +358,40 @@ this renders a full second `train` (~2 690 frames, all five scene kinds -- `plat
 `episode`, `supply`, `approach`) and merges it in, for ~5 380 frames total -- **not** the 4 546
 frames the shipped checkpoint was trained on (543 held-out frames, unchanged).
 
-`data_cache/vision_model/train` on disk today holds the shipped set: shards `0000`-`0042` are the
-original 170-scene, 2 690-frame render above, all five kinds; shards `0043`-`0071` are 29 full
-64-frame shards merged from `train_b`, 1 856 frames, `plate`/`held`/`episode` only. That `train_b`
-render was stopped once its `episode` block finished and before `supply` began -- `generate` fills
-one scene kind's whole block at a time, in `DEFAULT_MIX` order (plate, held, episode, supply,
-approach) -- and only the resulting full shards were merged in.
+`data_cache/vision_model/train` on disk today holds the shipped set, and is its only copy: shards
+`0000`-`0042` are the original 170-scene, 2 690-frame render above, all five kinds; shards
+`0043`-`0071` are 29 full 64-frame shards merged from `train_b`, 1 856 frames, `plate`/`held`/`episode`
+only (`generate` fills one scene kind's whole block at a time, in `DEFAULT_MIX` order: plate, held,
+episode, supply, approach).
 
-To reproduce the shipped set exactly: run the `generate` command above, but kill the process once
-`data_cache/vision_model/train_b/shard_0028.npz` exists and before `shard_0029.npz` appears (there
-is no flag that stops it there -- watch the directory, not the clock), then run the `merge_split`
-command unchanged.
+What the merged shards show about where that render stopped, and no more than that: of the 34
+`episode` scenes `DEFAULT_MIX` plans for 170 scenes, only 32 were started -- by phase reset
+(`to_tray` -> `open` -> `descend` -> `close` -> `lift`, with no scene ever reaching `carry`/`align`/
+`place`/...) the 501 merged `episode` frames are 31 complete 16-frame episodes plus a 32nd cut off 5
+frames in -- and no `supply` or `approach` frame exists at all. So the render stopped somewhere in
+the `episode` block; a shard only records what had been flushed at its 64-frame boundary, not where
+the unflushed buffer after that actually broke off, so it cannot be placed more precisely than that.
+(Suggestive only, not proof of when or why: `shard_0070` and `shard_0071` are 134 s apart on disk,
+about 33 s/episode over that stretch, and `train/`'s own mtime, left by the merge, is 63 s after
+`shard_0071`.)
+
+The shipped frames cannot be reproduced, at any kill point: `brick_builder/perception/cnn/data.py`
+was not committed until after these shards were written (shards: 2026-09-21, 05:07am; first commit
+of `data.py`: `078bebb`, later that same day), and the rendering code has moved on since. The
+shipped `episode` frames use `tray_brick_0`/`tray_brick_1` bricks and a `to_tray` phase; today's
+`_episode_scene` instead draws from the loose supply and calls them `supply_brick_0`/`supply_brick_1`
+(`2aec008`, `62a603a`). `settle()`, joint dry friction/printed-part colour, and the wrist
+`CameraConfig` changed too (`a7d93a1`, `e77e1ff`, `9f338bb`) -- all affecting every scene kind's
+physics or appearance, not just `episode`. `data_cache/vision_model/train` is the only copy there is.
+
+At most: run the `generate` command above, kill it once
+`data_cache/vision_model/train_b/shard_0028.json` exists on disk -- not the `.npz`: `write_shard`
+writes the `.npz` first and the `.json` after, so triggering on the `.npz` can catch a shard
+mid-write, or let `merge_split` carry a shard into `train` with no `.json` at all, which then breaks
+`dataset_size`/`np.load` on it during training -- and before `shard_0029.npz` appears (there is no
+flag that stops it there -- watch the directory, not the clock), then run the `merge_split` command
+unchanged. That reproduces the shipped `train_b` portion's *size* (1 856 frames, 29 shards) and
+*rough kind mix* (`plate`/`held`/`episode` only) -- not the shipped frames themselves.
 
 Outputs land in `results/vision_model/` (git-ignored): `checkpoint.pt` for resuming,
 `training_log.csv`, `loss_curves.png`, `train_summary.json`. The best held-out checkpoint is
