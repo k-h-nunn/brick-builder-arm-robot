@@ -26,6 +26,10 @@ typedef struct {
     double max_spin;
     double max_in_hand;
     int require_brick;
+    /* Whether the servo lines up the brick in the hand at all. `VisualServo` is built on the
+     * first usable step without a brick reference and takes the step's own one only when a
+     * later step is swapped in, so the first step's ticks line up the tool alone. */
+    int brick;
     int hold_in_hand;
     /* Carried across ticks: the in-hand reading is an average of many frames of a quantity that
      * does not change, and the hit counter is what the done test reads. */

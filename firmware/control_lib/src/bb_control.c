@@ -19,6 +19,9 @@ static void prepare_step(bb_controller *c, const bb_frame_rec *f)
         return;
     }
     c->has_step = 1;
+    /* `TrackingEpisode._settle_servo`: the servo is built on the first usable step without a
+     * brick reference; every later step is swapped in together with its own. */
+    c->servo.brick = c->servo_created ? c->step.hdr->has_brick_ref : 0;
     c->servo_created = 1;
     c->gain = c->step.hdr->gain;
     c->trusted = c->step.hdr->trusted;
@@ -197,6 +200,28 @@ int bb_tick_begin(bb_controller *c, bb_tick_out *out)
     return n;
 }
 
+/* Where the placed brick's reference sits among the active step's features: its references,
+ * then the brick in the hand when the servo carries one. -1 when the step does not list it. */
+static int held_ref(const bb_controller *c, int32_t name)
+{
+    const bb_step_hdr *h = c->step.hdr;
+    int i;
+
+    if (name < 0) {
+        return -1;
+    }
+    for (i = 0; i < h->n_refs; ++i) {
+        if (c->step.refs[i].name == name) {
+            return i;
+        }
+    }
+    if (c->servo.brick && h->has_brick_ref && h->brick_dim > 0
+        && c->step.brick_ref->name == name) {
+        return h->n_refs;
+    }
+    return -1;
+}
+
 /* One step of the inverse, plus the next-frame prediction it implies. Returns the matched frame
  * index; writes the tracking error in millimetres and how many reference blobs were seen. */
 static int feedback(bb_controller *c, const bb_frame_rec *f, const bb_slots *state,
@@ -268,10 +293,11 @@ static int feedback(bb_controller *c, const bb_frame_rec *f, const bb_slots *sta
     if (out.blind) {
         return c->k;
     }
-    if (rel) {
+    if (rel && f->held_name != BB_HELD_NONE) {
         /* In relative mode the placed brick is the whole point: if it is not among the blobs
          * that matched, the number is unknown, and it is reported as unknown. */
-        if (f->held_ref < 0 || out.found.slot[f->held_ref] < 0) {
+        int r = held_ref(c, f->held_name);
+        if (r < 0 || out.found.slot[r] < 0) {
             c->unmatched += 1;
             *seen = out.seen;
             return c->k;
@@ -440,7 +466,7 @@ int bb_tick_end(bb_controller *c, const bb_slots *state, const bb_bus_readings *
     out->predict_mm = c->pred_mm;
     out->yaw_err = c->yaw_err;
     out->refs_seen = seen;
-    out->matched = match;
+    out->matched = c->matched;
     for (i = 0; i < 3; ++i) {
         out->correction[i] = c->correction[i];
     }

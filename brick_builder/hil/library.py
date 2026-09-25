@@ -77,7 +77,7 @@ class CCommandRec(ctypes.Structure):
 
 class CFrameRec(ctypes.Structure):
     _fields_ = [("k", _I), ("step_index", _I), ("step_id", _I), ("n_commands", _I),
-                ("cmd_offset", _I), ("held", _I), ("is_freeze_step", _I), ("held_ref", _I),
+                ("cmd_offset", _I), ("held", _I), ("is_freeze_step", _I), ("held_name", _I),
                 ("travel", _D), ("pad", _D)]
 
 
@@ -89,7 +89,7 @@ class CSlots(ctypes.Structure):
 class CRefRec(ctypes.Structure):
     _fields_ = [("colour", _D * 3), ("size", _D * 2), ("colour_tol", _D), ("size_tol", _D),
                 ("min_mass", _D), ("max_border", _D), ("has_size", _I), ("has_min_mass", _I),
-                ("require_inside", _I), ("pad", _I)]
+                ("require_inside", _I), ("name", _I)]
 
 
 class CStepHdr(ctypes.Structure):

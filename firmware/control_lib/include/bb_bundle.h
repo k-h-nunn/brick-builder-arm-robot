@@ -22,7 +22,10 @@
 #include "bb_scene.h"
 
 #define BB_BUNDLE_MAGIC   0x42425442u   /* 'B','B','T','B' */
-#define BB_BUNDLE_VERSION 1u
+#define BB_BUNDLE_VERSION 2u
+
+#define BB_HELD_NONE      (-1)
+#define BB_HELD_UNLISTED  (-2)
 
 /* Tracking gains, tolerances and the indices the recording fixes. Doubles first, then int32s,
  * so the struct has the same layout under every C compiler this is built with. */
@@ -94,7 +97,9 @@ typedef struct {
     int32_t cmd_offset;
     int32_t held;               /* a brick is in the hand during this step */
     int32_t is_freeze_step;     /* this frame's step is `freeze_after` */
-    int32_t held_ref;           /* reference index of the held body, -1 when it has none */
+    int32_t held_name;          /* name id of the placed brick's reference; BB_HELD_NONE when
+                                 * the task places nothing, BB_HELD_UNLISTED when this frame
+                                 * does not list it */
     double travel;
     double pad;
 } bb_frame_rec;
@@ -111,7 +116,7 @@ typedef struct {
     int32_t has_size;
     int32_t has_min_mass;
     int32_t require_inside;
-    int32_t pad;
+    int32_t name;               /* the reference's title as an id shared across steps */
 } bb_ref_rec;
 
 typedef struct {
