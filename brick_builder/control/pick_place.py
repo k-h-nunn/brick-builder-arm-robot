@@ -822,6 +822,19 @@ class PlacementCheck:
     tilt_deg: float
     n_engaged: int
     success: bool
+    at_target_layer: bool = True
+    """Whether the brick's bottom face is at the layer the target names, within half a brick.
+
+    On the baseplate this is the only layer there is and it is always true. On a stacked target
+    it is what separates "seated on the brick it was sent to" from "seated on the plate beside
+    it": the lateral check answers the cell and this one answers the height.
+    """
+
+    height_error_mm: float = 0.0
+    """Bottom face, minus the height the target layer puts it at [mm]."""
+
+    lower_bodies: tuple[str, ...] = ()
+    """The bodies whose studs this brick's sockets are on, as the snap model reports them."""
 
 
 def verify_placement(
@@ -838,6 +851,11 @@ def verify_placement(
     insertion depths, the brick's pose and the live connection list.  ``depth_tolerance`` is the
     specified 0.3 mm: every stud has to be within that of full depth.  Call it *after* the
     arm has left, so "still seated once nothing is holding it" is part of the answer.
+
+    ``target``'s third element is the stacking layer, and it is scored: a brick sent one layer up
+    has to be a brick height above the plate's top face, on the studs of whatever is underneath,
+    not on the plate beside it.  Every stud reaching full depth says the joint is closed; the
+    height says which joint it is.
     """
 
     spec = scene.cfg.spec
@@ -861,6 +879,11 @@ def verify_placement(
     depth_error = max(spec.stud_h - min_depth, 0.0)
     at_cell = lateral <= cell_tolerance * spec.pitch
     seated = depth_error <= depth_tolerance
+    # The seat the layer names, and how far off it the brick's bottom face ended up. Half a
+    # brick height either way, so a seated brick can only be at one layer and a brick sitting on
+    # the wrong one is never inside it.
+    height_error = float(pos[2]) - (float(cell[2]) + int(layer) * spec.height)
+    at_layer = abs(height_error) <= 0.5 * spec.height
     return PlacementCheck(
         connected=connected,
         seated=seated,
@@ -871,7 +894,10 @@ def verify_placement(
         yaw_deg=math.degrees(math.remainder(yaw, period)),
         tilt_deg=math.degrees(abs(pitch)),
         n_engaged=engaged,
-        success=bool(connected and seated and at_cell),
+        success=bool(connected and seated and at_cell and at_layer),
+        at_target_layer=at_layer,
+        height_error_mm=1e3 * height_error,
+        lower_bodies=tuple(sorted({c.lower for c in connections})),
     )
 
 

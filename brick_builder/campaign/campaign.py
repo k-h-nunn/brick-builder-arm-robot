@@ -663,9 +663,10 @@ def _read_csv(path: Path) -> list[EpisodeRecord]:
                 vision_ticks=int(row["vision_ticks"] or 0), wall_s=_f(row["wall_s"]),
                 replanned=row["replanned"] in ("True", "true", "1"))
             for i in range(int(row["n_bricks"] or 0)):
+                # Two numbers on the plate, three when the cell names a layer.
                 cell = row[f"brick{i}_cell"].split(",")
                 record.bricks.append(BrickRecord(
-                    index=i, cell=(int(cell[0]), int(cell[1])),
+                    index=i, cell=tuple(int(v) for v in cell),
                     seated=row[f"brick{i}_seated"] == "True",
                     at_target_cell=row[f"brick{i}_at_cell"] == "True", connected=False,
                     lateral_mm=_f(row[f"brick{i}_lateral_mm"]),

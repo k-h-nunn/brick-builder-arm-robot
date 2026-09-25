@@ -285,6 +285,48 @@ moving under the measurement, not the inverse. The residual form reaches the sam
 on different seeds (1, 2 and 6 against the analytic's 3, 4 and 9), so on this task adding a
 learned term to the analytic one neither helps nor hurts.
 
+### Stacked placements
+
+A brick that goes on top of another one seats on that brick's studs, one brick height above the
+plate's top face. Every height the script derives is measured from the seat, so the target's
+layer has to reach the geometry: `Geometry` takes `(x, y)` or `(x, y, layer)`, and
+
+```
+seat = plate top + layer * 19.2 mm
+```
+
+With the baseplate 3.0 mm thick and a DUPLO 2x2 19.2 mm tall with 4.5 mm studs, that is what the
+script asks for at each layer, as TCP heights above the table:
+
+| Height | Layer 0 | Layer 1 | Layer 2 |
+|---|---|---|---|
+| Seat, the held brick's bottom face | 3.0 | 22.2 | 41.4 |
+| Align hover, 20 mm up | 39.0 | 58.2 | 77.4 |
+| Low dwell, 6 mm up | 25.0 | 44.2 | 63.4 |
+| Press target | 19.0 | 38.2 | 57.4 |
+| Release clearance | 53.4 | 72.6 | 91.8 |
+| Foot on the roof, for the push | 34.7 | 53.9 | 73.1 |
+| Carry | 64.0 | 64.0 | 77.4 |
+| Verify pose | 61.0 | 61.0 | 61.0 |
+
+The carry and the verify pose are the two that do not move with the layer, because neither is
+about the cell: the carry clears the tallest thing standing on the plate and is never below the
+hover it descends from, and the verify pose stands off the plate's own top face. Layer 0 is
+unchanged to the bit, and a two-element target is layer 0.
+
+What the missing seat height cost: with the geometry aiming at the plate, a layer-1 placement
+puts the held brick's bottom at 23.0 mm at the align hover, which is 3.7 mm **below** the stud
+tops it is supposed to be hovering over, and the press then drives it at 3.0 mm -- 19.2 mm inside
+the brick underneath. The push on the roof aims the fixed jaw's tip at 26.7 mm, which is the
+layer-0 stud height and 14.7 mm below the roof it is meant to be pushing on.
+
+`verify_placement` scores the layer too: `at_target_layer` is the brick's bottom face against the
+height the layer puts it at, within half a brick height, and `lower_bodies` names what the snap
+model has it standing on. Without it a brick that ended up on the plate beside the tower scored
+as a success, because the lateral check and the depth check are both satisfied there.
+
+<!-- STACK RESULTS -->
+
 ### Remedies
 
 Each tried once, on the placement task, against the same recordings.
