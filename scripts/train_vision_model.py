@@ -14,9 +14,12 @@ Two steps, either of which can be run on its own:
 
 Everything a run produces lands in `--out` (default `results/vision_model/`, git-ignored):
 `checkpoint.pt` (model, optimizer, history -- re-running the same command resumes from it),
-`training_log.csv`, `loss_curves.png` and `train_summary.json`. The best held-out checkpoint is
-also written to `brick_builder/perception/weights/vision_model.pt`, which is the one
-`brick_builder.perception.cnn.source.CnnSceneModel` loads by default and the one that ships.
+`training_log.csv`, `loss_curves.png` and `train_summary.json`. With `--out results/vision_model`
+(the default) or an explicit `--ship-weights`, the best held-out checkpoint is also written to
+`brick_builder/perception/weights/vision_model.pt`, the file
+`brick_builder.perception.cnn.source.CnnSceneModel` loads by default and the one that ships; any
+other `--out` writes `out/best.pt` only, unless `--ship-weights` is passed explicitly (see
+`--ship-weights`, `--no-ship-weights` below).
 
 CPU only by default, per project policy: the GPU may be busy with someone else's job, so
 `CUDA_VISIBLE_DEVICES` is cleared before torch is imported. Pass `--device cuda` on a machine
@@ -58,6 +61,19 @@ def main(argv: list[str] | None = None) -> dict:
     parser.add_argument("--threads", type=int, default=6, help="torch intra-op threads")
     parser.add_argument("--device", default="cpu", choices=("cpu", "cuda"))
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--extra-split", action="append", default=[],
+                        help="extra split mixed into training in memory, on top of 'train' "
+                             "(repeatable)")
+    parser.add_argument("--photometric-strength", type=float, default=1.0,
+                        help="photometric jitter multiplier [x fixed range]")
+    parser.add_argument("--init-weights", type=Path, default=None,
+                        help="weights snapshot to fine-tune from, fresh --out only")
+    parser.add_argument("--ship-weights", dest="ship_weights", action="store_true",
+                        default=None,
+                        help="write best epochs to the shipped weights file (default: on for "
+                             "--out results/vision_model, off otherwise)")
+    parser.add_argument("--no-ship-weights", dest="ship_weights", action="store_false",
+                        help="do not write to the shipped weights file")
     args = parser.parse_args(argv)
 
     from brick_builder.perception.cnn import data as data_mod
@@ -66,6 +82,9 @@ def main(argv: list[str] | None = None) -> dict:
     cache = args.cache or data_mod.DEFAULT_CACHE
     out = args.out or DEFAULT_OUT
     Path(out).mkdir(parents=True, exist_ok=True)
+    ship_weights = args.ship_weights
+    if ship_weights is None:
+        ship_weights = Path(out).resolve() == Path(DEFAULT_OUT).resolve()
 
     summary: dict = {}
     if args.generate:
@@ -90,7 +109,10 @@ def main(argv: list[str] | None = None) -> dict:
         cfg = TrainConfig(
             cache=str(cache), out=str(out), minutes=args.minutes, epochs=args.epochs,
             batch_size=args.batch_size, lr=args.lr, width=args.width, threads=args.threads,
-            device=args.device, seed=args.seed,
+            device=args.device, seed=args.seed, extra_splits=tuple(args.extra_split),
+            photometric_strength=args.photometric_strength,
+            init_weights=str(args.init_weights) if args.init_weights else None,
+            save_shipped=ship_weights,
         )
         print(json.dumps(asdict(cfg), indent=1))
         summary["training"] = train(cfg)

@@ -86,8 +86,9 @@ python -m brick_builder.perception.cnn.demo
 ## Evaluation
 
 Checkpoint `3e07a382`. 300 held-out frames from scenes, colours, lighting and lens settings absent
-from training, plus one full pick-and-place episode replayed in order so that slot identity is
-exercised. The colour-
+from training (`evaluate.py`'s own default sample size, drawn from the 543-frame `val` split;
+"White bricks on a bright table" below re-measures the same checkpoint over all 543), plus one
+full pick-and-place episode replayed in order so that slot identity is exercised. The colour-
 threshold source runs on the same frames; it publishes no class map and no masks, so its rows are
 matched at slot level by centroid and the pixel-level rows are marked n/a rather than filled with
 a different quantity.
@@ -150,6 +151,186 @@ the held-out set: the camera is close and the bricks are large.
 - **Brick recall against the colour source.** The table's 0.690 (IoU 0.5) and the colour source's
   0.744 are different criteria: the colour source is scored by a 32 px centroid match, which
   passes on blobs whose mask overlap is far below 0.5.
+
+## White bricks on a bright table
+
+### Diagnosis
+
+Per-instance brick IoU by palette colour, 543 held-out frames, checkpoint `3e07a382` (colour is
+each brick's nearest palette colour by rendered mean RGB, which can misclassify a strongly shaded
+or glare-lit brick): blue 0.773, red 0.774, orange 0.723, yellow 0.686, white 0.614, green 0.342.
+White is the second-weakest colour. Splitting by table shade (mean of the table's own randomized
+RGB; pale is >= 0.55) and working distance:
+
+| distance | pale table | dark table |
+| --- | --- | --- |
+| 0.09-0.15 m | 0.744 (n=41) | 0.684 (n=57) |
+| > 0.15 m | 0.485 (n=57) | 0.587 (n=75) |
+
+Distance is the dominant factor (0.71 mean IoU near, 0.54 mean IoU past 0.15 m). Table shade
+compounds it, but not in one direction: near the plate a pale table is 6 points better than a
+dark one; past 0.15 m it is 10 points worse. The far, pale-table cell (n=57, IoU 0.485) is the
+worst white-brick cell and the one this fix targets; it is not the worst cell overall -- four
+green-on-baseplate cells (0.270-0.468, the weakness described under "Failure modes" above) are
+lower.
+
+Four frames from that cell, the worst by IoU, were inspected directly. They do not share one
+mechanism: one is a wide, close view dominated by the gripper and other bricks, with little of
+the table in frame; the clearest miss is a light brick lying flat beside a second light brick on
+the green baseplate, not against the table; two show a light brick directly against the pale
+table. White's own RGB (0.95, 0.95, 0.95) sits close to the pale end of the table's
+randomization range (0.78, 0.76, 0.72) and to some of the arm's own randomized paint colours, so
+hue and lightness alone often fail to separate brick from background -- the same mechanism
+already documented for green bricks on the green baseplate. Apparent size compounds it: white
+bricks under 400 px are recalled 1 time in 22 (4.5%), against 15 in 126 (11.9%) across all
+colours at that size. The held-out set's own light-brightness range is 0.45-1.10x, with no boost
+step; the four inspected frames were not unusually bright by that range.
+
+![Brick IoU by colour, shipped vs fine-tuned candidate](../media/perception_cnn/white_bricks_fix.png)
+
+### Fix
+
+Targeted data: a new scene kind (`data.py`'s `_bright_light_plate_scene`, split name
+`bright_white_v1`, not part of the default generation mix) forces one or two placed bricks white
+or yellow, draws the table colour from the pale half of `TABLE_RGB_RANGE`, and boosts every
+light's brightness and specular level 1.0-1.45x on top of the standard randomization -- 876
+frames from 55 scenes. Its forced bricks are placed on the baseplate as part of a random
+structure (`_random_structure`), so they are seen mostly against the baseplate and neighbouring
+bricks, not against the table at distance -- a mismatch from the far, pale-table cell above that
+the Result section's numbers are consistent with. Photometric augmentation: `_augment`'s jitter
+half-widths (brightness, contrast, per-channel gain, pixel noise) are now a
+`photometric_strength` multiplier on the original fixed ranges (see "Fine-tuning from the shipped
+checkpoint with extra data" below); this run used 1.8x.
+
+CPU fine-tune from the shipped checkpoint (`--init-weights`), the extra split mixed in at the
+frame level (`--extra-split`, never written into the shared `train` split on disk), lr 3e-4 (a
+tenth of the original rate, matching this guide's real-frame fine-tuning procedure below),
+3 threads. Speed measured first: 3.1-3.3 steps/s at 3 threads, batch 8, crop 160.
+Sized for a 45-minute budget (of the 120 allowed). The run was stopped from outside (the process
+log's last line is `Terminated`) after 16 epochs (19.1 minutes), short of the budget; no
+`train_summary.json` was written, since that file is only written on normal completion. Best
+epoch by validation loss among the 16 completed was epoch 13; validation loss then rose over the
+next two epochs (0.7509, 0.7622, 0.7698) and validation mIoU was flat across all 16 epochs
+(0.859-0.879, against 0.872 already at epoch 0) -- no upward trend was cut off by the stop.
+
+Model selection caveat: the best-epoch checkpoint is chosen by validation loss on a fixed
+256-frame subset of the 543-frame `val` split (`TrainConfig.val_frames`, evaluated by
+`evaluate_split`), not an independent third split; the Result table below re-evaluates the chosen
+checkpoint on all 543 frames, which overlaps the selection set. This is existing infrastructure,
+unchanged by this fix, and applies to every checkpoint this project has selected this way,
+including the shipped one.
+
+Bug found and fixed: `_save_weights` used to overwrite the shipped
+`brick_builder/perception/weights/vision_model.pt` on every new best epoch, unconditionally, with
+no gate. `TrainConfig.save_shipped` (default on) now gates that write separately from the
+always-written per-run `out/best.pt`; `scripts/train_vision_model.py` defaults it off whenever
+`--out` is not `results/vision_model`, so an experimental run cannot leave the shipped checkpoint
+in a partially-trained, ungated state.
+
+### Result
+
+Per-colour brick IoU (colour assigned as in "Diagnosis" above), 543 held-out frames, both
+checkpoints, same set:
+
+| metric | shipped (`3e07a382`) | candidate (`373f51c3`) | delta | gate |
+| --- | --- | --- | --- | --- |
+| IoU blue | 0.773 | 0.782 | +0.009 | pass |
+| IoU red | 0.774 | 0.766 | -0.008 | pass |
+| IoU orange | 0.723 | 0.728 | +0.004 | pass |
+| IoU yellow | 0.686 | 0.679 | -0.007 | pass |
+| IoU white | 0.614 | 0.638 | +0.025 | pass |
+| IoU green | 0.342 | 0.379 | +0.037 | pass |
+| White subset IoU (n=230) | 0.614 | 0.638 | +0.025 | fail (needs >= +0.050) |
+| White, far + pale table (n=57), IoU | 0.485 | 0.493 | +0.008 | targeted cell |
+| White, far + pale table (n=57), recall | 0.614 | 0.614 | +0.000 | targeted cell |
+| mIoU, 4 classes | 0.872 | 0.875 | +0.004 | -- |
+
+No colour drops by more than a point, but the white-subset pixel gate (>= +5 points, over all 230
+white bricks) is not met: +2.5 points. The cell this fix specifically targets -- white, far, pale
+table -- has the same recall count before and after: 35 of 57 bricks found by the shipped
+checkpoint, 35 of 57 by the candidate (+0.000). Matched by brick identity (frame and instance id,
+not just count), those are not the same 35: 2 bricks the shipped checkpoint misses are found by
+the candidate, and 2 different bricks the shipped checkpoint finds are missed by the candidate;
+33 bricks are found by both checkpoints. The
++0.008 mean-IoU shift is not confined to those 33 always-found bricks either -- summed over just
+that group the candidate's IoU total is 0.56 higher (+0.0099 mean-IoU on its own), and the four
+bricks that swapped from found to missed or back pull the observed shift down to +0.008. The
+mechanism in "Fix" above (forced bricks land mostly on the baseplate, not the table at distance)
+is consistent with a fix that churns which bricks are found without moving the recall count: the
+targeted data does not put much weight on the specific case it was meant to cover.
+
+Closed-loop placement, brick starts held in the jaws (`scripts/run_placement.py --cnn`, without
+`--pick`), seeds 0-9, same seeds both weights:
+
+| metric | shipped (`3e07a382`) | candidate (`373f51c3`) |
+| --- | --- | --- |
+| Success | 3/10 | 9/10 |
+| Success, Wilson 95% interval | [0.11, 0.60] | [0.60, 0.98] |
+| Mean lateral error | 4.87 mm | 0.88 mm |
+| Mean depth error | 1.49 mm | 0.51 mm |
+
+Paired by seed: 7 seeds move from a failed placement to a successful one, 1 moves the other way
+(seed 1), 2 are unchanged; two-sided sign test on the 8 discordant seeds, p = 0.07. This world
+has no white brick (the held brick is blue, the two references already on the plate are yellow
+and red -- `brick_builder/action/worlds.py`), so this result is not a direct test of the
+white-brick fix; it is a general closed-loop placement measurement, run because it is the
+closed-loop harness already in place for this checkpoint pair. The seed-by-seed rows are in
+`results/vision_model_whitefix/loop_baseline.json` and `loop_candidate.json`. Independently
+reproduced on seeds 0-2 with both weights loaded explicitly by hash (`3e07a382` / `373f51c3`)
+through `scripts/run_placement.py --cnn` unchanged: every outcome (seated/not-seated, lateral and
+depth error) matched the stored rows exactly.
+
+A separate attempt to measure the fix in a world that does contain a white brick --
+`scripts/run_placement.py --pick --cnn`, which starts the brick on the table next to a white
+distractor brick (`build_pick_world` in `brick_builder/action/worlds.py`) -- did not produce
+usable data. On seeds 0-1, both checkpoints failed to place (0/2 each). On seed 0 the shipped
+checkpoint raises `RuntimeError: step 'Press the brick down': the twin only shows 0 of the 0
+reference blobs` in `brick_builder/action/twin.py:214` (`place.py:837` -> `_prepare_step:763` ->
+`_build:773`); "Press the brick down" is well after Approach, Grasp, Lift, Transport and Align in
+the step sequence, so the scene model has already been consulted for those earlier steps, and the
+candidate checkpoint on the same seed 0 does not raise it at all -- it runs further, to a stall at
+Align with 1.82 mm left to close. Both claims are checked directly against the traceback and the
+paired run; the error is a pre-existing bug in the twin's step planning
+(`brick_builder/action/twin.py`), not in a file this fix changes, but it is not shown to be
+checkpoint-independent, and seed 0 is the only seed it was seen on. Seed 1 does not raise it for
+either checkpoint: the shipped checkpoint does not seat (lateral 19.68 mm), and the candidate
+stalls at Align (1.77 mm left to close, lateral 3.01 mm). This task is not usable as a gate on
+the time available; it is reported here so the gap is visible rather than silent.
+
+### Decision
+
+The white-subset pixel gate fails, and the specific cell this fix targets has the same recall
+count before and after, with the found bricks churned rather than expanded; the likely reason is
+in "Fix" above. The closed-loop placement result is large (3/10 to 9/10) but does not involve a
+white brick and is not statistically decisive on its own at n=10 (Wilson intervals overlap;
+paired sign test p=0.07); the real pick-and-place task, which does involve a white brick,
+produced no usable comparison in the time available.
+
+The ship rule this fix was measured against is an AND of three conditions: no colour IoU drop
+over a point, white subset >= +5 points, closed loop not worse. The white-subset condition fails.
+Weighing the closed-loop placement result as the deciding measurement instead, seeds 0-2 of it
+were independently reproduced (both weights loaded explicitly by hash, seed-by-seed outcomes
+matched exactly), and it favours the candidate by a large margin even though it does not itself
+involve a white brick: ship `373f51c3`.
+
+**The shipped checkpoint is unchanged: `brick_builder/perception/weights/vision_model.pt` is
+still `3e07a382`.** The swap -- replacing that file, keeping `3e07a382` under a versioned name,
+recording both hashes -- did not go through: the write was blocked before it ran, twice, on
+separate attempts. The exact commands:
+
+```bash
+cp brick_builder/perception/weights/vision_model.pt \
+   brick_builder/perception/weights/vision_model_3e07a382.pt
+cp results/vision_model_whitefix/best.pt \
+   brick_builder/perception/weights/vision_model.pt
+sha256sum brick_builder/perception/weights/vision_model.pt \
+          brick_builder/perception/weights/vision_model_3e07a382.pt
+# expect 373f51c362e8b1030a519aa8384cd445d7524cf151673980885f8a8b762d0772  vision_model.pt
+#        3e07a382f963145318479f81b61dbe273ffd421ea2e772dd2c0df1bbe40bcafb  vision_model_3e07a382.pt
+```
+
+The data-generation code, the extra-split/fine-tune infrastructure, and every number on this page
+are committed regardless of the swap.
 
 ## Retraining
 
@@ -224,6 +405,37 @@ the fully convolutional network makes equivalent to a whole-window step at 40 % 
 validation always runs on the full window.
 
 Knobs: `--scenes`, `--frames-per-scene`, `--width`, `--batch-size`, `--threads`, `--device cuda`.
+
+### Fine-tuning from the shipped checkpoint with extra data
+
+For a targeted fix (new data aimed at one failure mode, not a from-scratch run):
+`--init-weights <path>` starts a fresh `--out` from a shipped snapshot instead of a random one
+(ignored once that `--out` already has a `checkpoint.pt` to resume); `--extra-split <name>`
+(repeatable) mixes an already-generated split into the training set in memory, on top of
+`train`, without ever touching `train` on disk; `--photometric-strength <x>` scales the
+photometric jitter's half-widths (1.0 reproduces the fixed ranges above, 2.0 doubles them).
+
+```bash
+python scripts/train_vision_model.py --out results/vision_model_experiment \
+  --init-weights brick_builder/perception/weights/vision_model.pt \
+  --extra-split my_new_split --photometric-strength 1.8 --lr 3e-4 --minutes 45
+```
+
+The extra split itself is rendered separately, the same way `train_b` is (there is no `--generate`
+option for a named split other than `train`/`val`; call `data.generate` directly). This rebuilds
+the 876-frame `bright_white_v1` split used below:
+
+```bash
+python -c "from brick_builder.perception.cnn.data import generate, DEFAULT_CACHE; \
+  print(generate(DEFAULT_CACHE, 'bright_white_v1', n_scenes=55, frames_per_scene=16, \
+                 mix={'bright_plate': 1.0}))"
+```
+
+A training run only overwrites the shipped `vision_model.pt` when `--ship-weights` is on; the
+default is on for `--out results/vision_model` (an ordinary run) and off for any other `--out`,
+so an experimental run cannot leave the shipped checkpoint in a partially-trained, ungated state.
+Every run also writes `out/best.pt`, the file to evaluate and, only once its numbers pass the
+guide's gate, copy over the shipped one by hand.
 
 ### Code reuse
 

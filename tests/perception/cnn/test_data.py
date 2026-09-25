@@ -181,3 +181,19 @@ def test_a_structure_is_always_a_valid_one():
         placed = D._random_structure(np.random.default_rng(seed), touching_same_colour=bool(seed % 2))
         assert validate_structure(placed, grid_shape=(8, 8)) == []
         assert len(placed) <= 6
+
+
+def test_bright_plate_scene_forces_a_light_brick_on_a_pale_table():
+    """The targeted scene kind (white bricks on a bright table, see the guide's failure
+    analysis): every frame carries a forced white or yellow brick, and the table colour is drawn
+    from the pale half of `TABLE_RGB_RANGE` only."""
+    lo, hi = D.TABLE_RGB_RANGE
+    mid = 0.5 * (np.asarray(lo) + np.asarray(hi))
+    samples = list(D._bright_light_plate_scene(np.random.default_rng(0), frames=3))
+    assert samples, "the scene kind should yield at least one frame"
+    for s in samples:
+        assert s.meta["kind"] == "bright_plate"
+        assert set(s.meta["forced_light"]) <= {"white", "yellow"}
+        table_rgb = np.asarray(s.meta["table_rgb"])
+        assert np.all(table_rgb >= mid - 1e-9)
+        assert np.all(table_rgb <= np.asarray(hi) + 1e-9)

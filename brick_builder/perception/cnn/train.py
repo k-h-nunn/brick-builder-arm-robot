@@ -57,7 +57,7 @@ import torch.nn.functional as F
 
 from .data import DEFAULT_CACHE, read_shard, shard_paths
 from .labels import CLASS_NAMES, FIRST_BRICK_INSTANCE, N_CLASSES, class_map_from_instance
-from .model import OFFSET_SCALE, SceneModelNet, pack_weights
+from .model import OFFSET_SCALE, SceneModelNet, pack_weights, unpack_weights
 
 DEFAULT_OUT = Path("results/vision_model")
 WEIGHTS_DIR = Path("brick_builder/perception/weights")
@@ -101,6 +101,32 @@ class TrainConfig:
     w_depth: float = 0.4
     class_weights: tuple[float, ...] = ()
     """Filled in from the training split's own class frequencies when left empty."""
+
+    extra_splits: tuple[str, ...] = ()
+    """Extra splits mixed into the training set in memory, on top of `cache`/`train`. For adding
+    targeted data (for example a fix aimed at one failure mode) without touching the shared
+    `train` split on disk: generate the new frames into their own split name under `cache` and
+    name it here. The held-out split is never affected by this field."""
+
+    init_weights: str | None = None
+    """A shipped weights snapshot (`_save_weights`'s format) to initialize the model from, on a
+    fresh run only (`checkpoint.pt` still wins if `out` already has one, so re-running the same
+    fine-tune command resumes it rather than restarting from this snapshot again)."""
+
+    save_shipped: bool = True
+    """Whether a new best-held-out epoch also overwrites the live
+    `brick_builder/perception/weights/vision_model.pt` (the file `CnnSceneModel` loads by
+    default), on top of always writing `out/best.pt`. Off for an experimental run (a speed probe,
+    an ungated fine-tune) so the shipped checkpoint stays fixed; shipping is then a separate,
+    explicit step: copy `out/best.pt` over the shipped file once the gate in the guide passes."""
+
+    photometric_strength: float = 1.0
+    """Scales the photometric jitter `_augment` applies, relative to the original fixed ranges
+    (brightness +/-0.06, contrast 0.88-1.14, per-channel gain +/-0.10, pixel noise std 0.012):
+    1.0 reproduces them exactly, 2.0 doubles each jitter's half-width. Widening this is the
+    "photometric augmentation" half of a data-level fix for a lighting- or contrast-driven
+    failure; a `class`/`centre`/`offset` target never depends on pixel values, so it is
+    unaffected either way."""
 
 
 # --------------------------------------------------------------------------------- targets ---
@@ -219,8 +245,13 @@ def class_frequencies(frames: FrameSet, sample: int = 400) -> np.ndarray:
 
 
 def _augment(rgb: np.ndarray, instance: np.ndarray, depth: np.ndarray, rng: np.random.Generator,
-             crop: int = 0):
-    """Crop and flips first (image and labels together), then a photometric jitter on the image."""
+             crop: int = 0, strength: float = 1.0):
+    """Crop and flips first (image and labels together), then a photometric jitter on the image.
+
+    `strength` scales the jitter's half-widths around the original fixed ranges (see
+    `TrainConfig.photometric_strength`); 1.0 reproduces brightness +/-0.06, contrast 0.88-1.14,
+    gain +/-0.10, noise std 0.012 exactly.
+    """
     if crop and crop < rgb.shape[0]:
         res = rgb.shape[0]
         r0 = int(rng.integers(0, res - crop + 1))
@@ -232,18 +263,20 @@ def _augment(rgb: np.ndarray, instance: np.ndarray, depth: np.ndarray, rng: np.r
     if rng.random() < 0.5:
         rgb, instance, depth = rgb[::-1], instance[::-1], depth[::-1]
     img = rgb.astype(np.float32) / 255.0
-    gain = 1.0 + rng.uniform(-0.10, 0.10, size=3).astype(np.float32)     # small: never a hue swap
-    brightness = float(rng.uniform(-0.06, 0.06))
-    contrast = float(rng.uniform(0.88, 1.14))
+    gain_half = 0.10 * strength
+    gain = 1.0 + rng.uniform(-gain_half, gain_half, size=3).astype(np.float32)  # small: never a hue swap
+    brightness = float(rng.uniform(-0.06 * strength, 0.06 * strength))
+    contrast = float(rng.uniform(1.0 - 0.12 * strength, 1.0 + 0.14 * strength))
     img = (img - 0.5) * contrast + 0.5 + brightness
     img = np.clip(img * gain, 0.0, 1.0)
     if rng.random() < 0.3:
-        img = np.clip(img + rng.normal(0.0, 0.012, size=img.shape).astype(np.float32), 0.0, 1.0)
+        img = np.clip(img + rng.normal(0.0, 0.012 * strength, size=img.shape).astype(np.float32),
+                      0.0, 1.0)
     return img, np.ascontiguousarray(instance), np.ascontiguousarray(depth)
 
 
 def make_batch(frames: FrameSet, idx: np.ndarray, rng: np.random.Generator | None,
-               crop: int = 0):
+               crop: int = 0, photometric_strength: float = 1.0):
     """One training (or validation, with `rng=None`) batch as tensors.
 
     Validation never crops: it is measured on the whole 256x256 window, which is what the model
@@ -255,7 +288,7 @@ def make_batch(frames: FrameSet, idx: np.ndarray, rng: np.random.Generator | Non
         if rng is None:
             img = rgb.astype(np.float32) / 255.0
         else:
-            img, instance, depth = _augment(rgb, instance, depth, rng, crop)
+            img, instance, depth = _augment(rgb, instance, depth, rng, crop, photometric_strength)
         images.append(img.transpose(2, 0, 1))
         targets.append(make_targets(instance, depth))
     batch = {
@@ -338,6 +371,16 @@ def train(cfg: TrainConfig, verbose: bool = True) -> dict:
     csv_path = out_dir / "training_log.csv"
 
     train_frames = load_split(cfg.cache, "train")
+    for extra in cfg.extra_splits:
+        more = load_split(cfg.cache, extra)
+        train_frames = FrameSet(
+            rgb=np.concatenate([train_frames.rgb, more.rgb]),
+            instance=np.concatenate([train_frames.instance, more.instance]),
+            depth=np.concatenate([train_frames.depth, more.depth]),
+            kinds=train_frames.kinds + more.kinds,
+        )
+        if verbose:
+            print(f"extra split {extra!r}: +{len(more)} frames")
     val_frames = load_split(cfg.cache, "val")
     if verbose:
         print(f"train frames {len(train_frames)}  val frames {len(val_frames)}")
@@ -356,6 +399,15 @@ def train(cfg: TrainConfig, verbose: bool = True) -> dict:
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
     history: list[dict] = []
     start_epoch, elapsed_before, best = 0, 0.0, float("inf")
+
+    if cfg.init_weights and not ckpt_path.exists():
+        # A fine-tune from a shipped snapshot, not a from-scratch run: the optimizer starts
+        # fresh (this is a new `out`, so there is no `checkpoint.pt` to resume it from either),
+        # only the weights carry over.
+        init_state = torch.load(cfg.init_weights, map_location="cpu", weights_only=False)
+        model.load_state_dict(unpack_weights(init_state["model"]))
+        if verbose:
+            print(f"initialized from {cfg.init_weights}")
 
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
@@ -392,7 +444,7 @@ def train(cfg: TrainConfig, verbose: bool = True) -> dict:
         t_epoch = time.perf_counter()
         for step in range(steps_per_epoch):
             chunk = order[step * cfg.batch_size:(step + 1) * cfg.batch_size]
-            batch = make_batch(train_frames, chunk, rng, cfg.crop)
+            batch = make_batch(train_frames, chunk, rng, cfg.crop, cfg.photometric_strength)
             out = model(batch["image"])
             loss, parts = compute_loss(out, batch, cfg, class_weight)
             opt.zero_grad(set_to_none=True)
@@ -417,7 +469,9 @@ def train(cfg: TrainConfig, verbose: bool = True) -> dict:
 
         if row["val_loss"] < best:
             best = row["val_loss"]
-            _save_weights(model, cfg, row, WEIGHTS_DIR / WEIGHTS_NAME)
+            _save_weights(model, cfg, row, out_dir / "best.pt")
+            if cfg.save_shipped:
+                _save_weights(model, cfg, row, WEIGHTS_DIR / WEIGHTS_NAME)
         torch.save({
             "model": model.state_dict(), "optimizer": opt.state_dict(), "epoch": epoch + 1,
             "elapsed_s": elapsed_before + (time.perf_counter() - t_start), "history": history,
@@ -435,7 +489,7 @@ def train(cfg: TrainConfig, verbose: bool = True) -> dict:
         "best_val_loss": best,
         "final": history[-1] if history else {},
         "parameters": model.n_parameters(),
-        "weights": str(WEIGHTS_DIR / WEIGHTS_NAME),
+        "weights": str(WEIGHTS_DIR / WEIGHTS_NAME) if cfg.save_shipped else str(out_dir / "best.pt"),
     }
     (out_dir / "train_summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     return summary
