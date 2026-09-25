@@ -50,11 +50,10 @@ layer, at grid cells (4, 3) and (2, 3). The compiler has no pronouns, so the sec
 the first by colour rather than saying "on top of it"; and both bricks are blue 2x2 because that
 is what the supply row offers.
 
-Left rather than right, and the reason is the press, not the loop. The right-hand neighbour,
-column 7 row 4, sits 218 mm from the arm's base, past the 100-200 mm band the gripper's downward
-force was characterised over. Measured there on five seeds, the second brick reached its cell to
-within 0.02-0.29 mm on four of them and full insertion depth on one: the control was right and
-the press was 0.43-4.50 mm short. The left-hand neighbour is at 154 mm, inside the band."""
+The second brick targets the left-hand neighbour (column 3, row 4; 154 mm from the base, inside
+the characterised band). The right-hand neighbour (column 7, row 4; 218 mm) lies outside the
+100-200 mm band the gripper's downward force was characterised over; on five seeds there, lateral
+placement was within 0.02-0.29 mm on four of them, but insertion depth fell 0.43-4.50 mm short."""
 
 BASE_PLACED = (REF_YELLOW, REF_RED)
 """What is on the plate before the campaign starts: the two bricks the loop lines itself up on."""
