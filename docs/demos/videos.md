@@ -284,7 +284,7 @@ Reproduction writes it to `media_out/hd/brick_builder_arm_robot_two_brick_build_
 | Scene model, panels | Convolutional scene model, checkpoint `3e07a382` |
 | Controller | Target-sequence tracking at 10 Hz, analytic inverse |
 | Target sequences | Recorded in the digital twin from the goal and nominal parameters, one per cycle |
-| Video | 1920x1080, 30 fps, H.264, 58.7 s, 1762 frames, 8.0 MB, single take, seed 0, one world for both cycles |
+| Video | 1920x1080, 30 fps, H.264, 58.7 s, 1762 frames, 7.9 MB, single take, seed 0, one world for both cycles |
 
 ## On-screen elements
 
@@ -297,8 +297,8 @@ As the placement video, with these changes:
 | Bottom-row panels | "Scene model segmentation" (the convolutional scene model's output, display only) beside "Ground truth segmentation" |
 | Command | Title line under the panels |
 | Press force [N] | Live value; a dash when the arm is not pushing down on the brick |
-| Scene-state error [mm] | A dash in a step that has returned no measurement; a gap in the trace over that step (the gap is not in the file on disk; see Results) |
-| Prediction error [mm] | A dash in a step that has returned no prediction (not in the file on disk; see Results) |
+| Scene-state error [mm] | A dash in a step that has returned no measurement; a gap in the trace over that step |
+| Prediction error [mm] | A dash in a step that has returned no prediction; a gap in the trace over that step |
 
 ## Results
 
@@ -307,12 +307,9 @@ depth error 0.00 mm. Second brick on the first (`lower_bodies` = the first brick
 0.10 mm, depth error 0.00 mm, bottom face 0.44 mm below the nominal layer-1 height.
 
 Release, Retract and Verify returned no scene-state measurement on any tick of this run, and
-the Scene-state error [mm] readout shows a dash through them; see
+the Scene-state error [mm] and Prediction error [mm] readouts show a dash through them, with a
+gap in each trace over the same steps; see
 [Closed-loop control, Two-brick recording](../guide/12-closed-loop-control.md#two-brick-recording).
-The file on disk was recorded before the script drew the Prediction error [mm] dash and the
-trace gap: its Prediction error [mm] readout holds the last value through unmeasured steps
-(0.09 mm at cycle 2's Grasp, 0.19 mm at Verify), and the Scene-state error trace runs flat
-across them.
 
 Task `stack_2` on seeds 0-9, both cycles pick-and-place, each in its own world, ground truth
 driving: second brick seated 10/10, whole build 9/10 (Wilson 95 % 60-98 %); see

@@ -416,16 +416,14 @@ ground-truth target sequences:
 | Align | Held blue brick and the blue brick under it one blue region, not two | No Align measurement for 40 ticks; Transport ends at a scene-state error of 10.34 mm, the press step logs 14.42 mm, and the brick does not seat |
 
 `make_campaign_video.py` draws a dash in the Scene-state error [mm] and Prediction error [mm]
-readouts for a step that has returned no measurement, and a gap in the Scene-state error trace
-over it.
+readouts for a step that has returned no measurement, and a gap in each readout's trace over it.
 Release, Retract and Verify are measured in relative mode (the placed brick against the
 baseplate and the bricks already placed) and returned none on the recorded run. Each cycle has
 two Press the brick down steps: the press with the brick in the jaws, then, after Release, a
 press on the brick's top with the jaws closed, measured against the recorded frame. The last
 values of the second, 2.03 mm (cycle 1) and 2.30 mm (cycle 2), are the tracking error of that
 press, not the placed brick's offset from its cell, which `verify_placement` puts at 0.07 mm
-(first brick) and 0.10 mm (second brick) lateral with 0.00 mm depth error. The file on disk
-predates the Prediction error dash and the trace gap; see
+(first brick) and 0.10 mm (second brick) lateral with 0.00 mm depth error; see
 [Two-brick stack video](../demos/videos.md#two-brick-stack-video).
 
 ### Remedies
