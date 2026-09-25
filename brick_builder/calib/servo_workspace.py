@@ -168,7 +168,10 @@ def figure_workspace_map(wmap: WorkspaceMap, out_path) -> None:
     if missed:
         xy = np.array([p.target_xyz_m[:2] for p in missed]) * 1e3
         ax.scatter(xy[:, 0], xy[:, 1], marker="x", c="#b0413e", s=60, label="unreachable")
-        ax.legend(loc="upper right", fontsize=9)
+        # Every grid target has x > 0 (the heading sweep is +-50 deg either side of +x, so
+        # cos(heading) never reaches 0), which leaves the left half of the axes clear of data for
+        # the legend -- "upper right" sat on top of a real point at one radius/heading.
+        ax.legend(loc="upper left", fontsize=9)
     ax.set_xlabel("x [mm]")
     ax.set_ylabel("y [mm]")
     ax.set_title("Settling-error map, tool down")
