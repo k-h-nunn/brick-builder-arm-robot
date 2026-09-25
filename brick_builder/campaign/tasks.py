@@ -44,11 +44,17 @@ FIRST_PERFORM_SEED = 300_000
 above the collection seeds `action.learn.collect` uses, so no world is ever both."""
 
 BUILD_COMMAND = ("put a blue 2x2 at column 5 row 4 "
-                 "then put a blue 2x2 next to the blue brick")
+                 "then put a blue 2x2 left of the blue brick")
 """The whole of `build_2`, in English. It compiles to two 2x2 blue placements on the bottom
-layer, at grid cells (4, 3) and (6, 3). The compiler has no pronouns, so the second brick names
+layer, at grid cells (4, 3) and (2, 3). The compiler has no pronouns, so the second brick names
 the first by colour rather than saying "on top of it"; and both bricks are blue 2x2 because that
-is what the supply row offers."""
+is what the supply row offers.
+
+Left rather than right, and the reason is the press, not the loop. The right-hand neighbour,
+column 7 row 4, sits 218 mm from the arm's base, past the 100-200 mm band the gripper's downward
+force was characterised over. Measured there on five seeds, the second brick reached its cell to
+within 0.02-0.29 mm on four of them and full insertion depth on one: the control was right and
+the press was 0.43-4.50 mm short. The left-hand neighbour is at 154 mm, inside the band."""
 
 BASE_PLACED = (REF_YELLOW, REF_RED)
 """What is on the plate before the campaign starts: the two bricks the loop lines itself up on."""
@@ -459,7 +465,7 @@ def run_episode(spec: TaskSpec, seed: int, *, phase: str = "evaluate", round_ind
             # `remaining_steps` reads the plate, not the run: a brick that is not where the goal
             # wants it leaves its step outstanding, and that is what asks for the second try.
             left = goal.remaining_steps(observed + ([landed] if done else []))
-            if log is not None:
+            if log is not None and attempts < 2:
                 log(f"    {spec.name} seed {seed} cycle {cycle}: "
                     f"{len(left)} step(s) outstanding, re-planning")
             if not any(s.placement.x == cell[0] and s.placement.y == cell[1] for s in left):

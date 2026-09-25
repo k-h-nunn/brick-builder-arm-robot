@@ -33,12 +33,14 @@ def test_the_build_command_compiles_to_two_bricks_on_the_bottom_layer() -> None:
     """One English command, two placements, and both reachable by the existing geometry.
 
     The action layer places on the plate's own top face, so a stacked second brick would need a
-    seat height it has no way to express; the campaign's build is two bricks side by side.
+    seat height it has no way to express; the campaign's build is two bricks side by side. Both
+    cells are inside the 100-200 mm band the gripper's downward force was characterised over,
+    which the right-hand neighbour at 218 mm is not.
     """
     goal = build_goal(BUILD_COMMAND)
     placements = goal.placements
     assert len(placements) == 2
-    assert [(p.x, p.y, p.z) for p in placements] == [(4, 3, 0), (6, 3, 0)]
+    assert [(p.x, p.y, p.z) for p in placements] == [(4, 3, 0), (2, 3, 0)]
     assert {p.colour for p in placements} == {"blue"}
     assert {(p.h, p.w) for p in placements} == {(2, 2)}
 

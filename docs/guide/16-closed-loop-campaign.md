@@ -39,6 +39,14 @@ The analytic inverse does not change between rounds, so it is measured once, in 
 carried into every table as the fixed baseline; the last round re-measures it on `placement` as a
 check that it really did not move.
 
+The campaign deploys every round to its own directory unconditionally. A campaign that deployed
+only the rounds that already won would never collect the states a losing round visits, and those
+are the states the next round is relabelled on. Whether a round earned the checkpoints the
+repository *ships* is a separate question, and every round's table answers it in the **Would
+ship** column: that is what `action.learn.rounds.deploy_if_better` would have decided -- the
+learned inverse at least matching the analytic baseline on every task, not winning on one and
+losing on another.
+
 ## The task set
 
 | Task | Cycles | Starts | Unknown to the controller | Scored |
@@ -53,17 +61,24 @@ check that it really did not move.
 put a blue 2x2 at column 5 row 4 then put a blue 2x2 next to the blue brick
 ```
 
-which becomes two placements, `2x2 (4,3,0) blue` and `2x2 (6,3,0) blue`, executed as consecutive
+which becomes two placements, `2x2 (4,3,0) blue` and `2x2 (2,3,0) blue`, executed as consecutive
 pick-and-place cycles. After each cycle `Goal.remaining_steps` is recomputed against what is
 really on the plate; a brick that did not land on its cell leaves its own step outstanding and
 that cycle is run once more. Both bricks are on the bottom layer and both are blue 2x2, because
 the seat height the geometry places on is the plate's own top face and the supply row offers a
 blue 2x2. The compiler has no pronouns, so the second brick names the first by colour.
 
-The second cycle's world carries the first brick on the plate, and its target sequence is
-recorded against a nominal plate that carries it too (`record_ideal(..., placed=...)`). Without
-that, the brick the run has just placed matches nothing in the recording and the loop lines
-itself up on it.
+Left rather than right, and the press decided it rather than the loop. The right-hand neighbour,
+column 7 row 4, is 218 mm from the arm's base, past the 100-200 mm band the gripper's downward
+force was characterised over. Measured there on five seeds, the second brick reached its cell to
+within 0.02-0.29 mm on four of them and full insertion depth on one; the shortfalls were
+0.43-4.50 mm. The left-hand neighbour is at 154 mm.
+
+The second cycle's world carries the first brick on the plate; so does the nominal plate its
+target sequence is recorded against (`record_ideal(..., placed=...)`) and so do the twins its
+Jacobians are measured in (`TrackingEpisode(..., placed=...)`). All three have to agree: a
+recording made against a bare plate matches nothing where the run has just put a brick, and a
+twin that lacks a brick the recording lines itself up on drops that reference silently.
 
 ### Scoring
 
@@ -84,8 +99,13 @@ Start a campaign:
 
 ```bash
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=3 \
-  python scripts/run_campaign.py --rounds 5 --episodes 3 --budget-minutes 200
+  python scripts/run_campaign.py --rounds 5 --episodes 3 --seeds 0-9 \
+    --sparse-tasks build_2 --train-minutes 3 --budget-minutes 265
 ```
+
+`--sparse-tasks build_2` evaluates the build in the first and last round only, and performs it in
+every one. Ten held-out builds are twenty closed-loop cycles and about half of what a round of
+evaluation costs; this is the knob the budget turns before it gives up a round.
 
 Continue one that stopped, for any reason, from the round it reached:
 
@@ -123,11 +143,18 @@ it re-runs that phase.
   8/10 and 10/10 overlap, and a one-seed change moves the point estimate by ten points.
 - The evaluation seeds are fixed, so the same ten worlds are scored every round. That is what
   makes the rounds comparable and it is also the whole of the sample.
+- `build_2` was evaluated in the first and the last round only (`--sparse-tasks build_2`), so its
+  curve has two points where the other two tasks have one per round. It was performed in every
+  round, so the training set grew with it throughout.
 - `build_2`'s two bricks go side by side on the bottom layer. A stacked build needs a seat height
   above the plate's top face, which `action.place.Geometry` has no way to express.
-- Each of the build's cycles runs in its own world, built with the bricks the earlier cycles
-  landed. The plan carries over, the physics does not: a brick that seated slightly off its cell
-  is rebuilt on the cell for the next cycle.
+- The build's two cells are flush neighbours, and the second brick is pressed against a wall that
+  is already there. That is what the build measures beyond two pick-and-places, and it is where
+  it fails: see the table.
+- Each of the build's cycles runs in its own world, built with the bricks the earlier cycles were
+  sent to place, on the cells they were sent to. The plan carries over, the physics does not: a
+  brick that missed is rebuilt on its cell for the next cycle, so the second cycle's result is a
+  measurement of the second cycle rather than of the first one's luck.
 - The campaign's own deployed pair is written under `results/`, which is git-ignored. Nothing here
   changes what `PlaceConfig(inverse="learned")` loads by default.
 

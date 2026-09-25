@@ -65,6 +65,9 @@ which is the whole job and the second [video](demos/videos.md).
 <http://127.0.0.1:8765>, with scene setup, stepping and disturbances
 ([Simulator page](guide/14-simulator-gui.md)).
 
+`scripts/run_campaign.py` runs the same loop in rounds, training the two models on what the arm
+did and re-measuring after each one ([Closed-loop campaign](guide/16-closed-loop-campaign.md)).
+
 ## Watch a scripted press
 
 ```bash

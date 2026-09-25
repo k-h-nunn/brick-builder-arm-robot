@@ -39,25 +39,27 @@ def task_table(rows: Sequence[dict], task: str) -> str:
     learned = sorted([r for r in keep if r["inverse"] == "learned"], key=lambda r: r["round"])
     learned = [r for r in learned if r["predictor"] == "learned"] or learned
 
-    head = ("| Round | Inverse | Version | Seated on target cell | Wilson 95 % | "
+    head = ("| Round | Inverse | Version | Seated on target cell | Wilson 95 % | Bricks | "
             "Lateral error [mm] | Median tracking [mm] | Median prediction [mm] | "
             "Ticks at Align | Tuples trained on | Would ship |")
-    rule = "|" + "---|" * 11
+    rule = "|" + "---|" * 12
     lines = [head, rule]
     if analytic:
         a = analytic[0]
         lines.append(
             f"| fixed | analytic | -- | {a['seated_on_target']} | "
             f"{100 * a['wilson_low']:.0f}-{100 * a['wilson_high']:.0f} % | "
+            f"{a['bricks_on_target']} | "
             f"{_fmt(a['lateral_mm_median'])} | {_fmt(a['median_tracking_mm'])} | "
             f"{_fmt(a['median_prediction_mm'])} | {_fmt(a['ticks_align'], 0)} | -- | -- |")
     if task in PUBLISHED_TEXT:
         lines.append(f"| published | ground truth | -- | {PUBLISHED_TEXT[task]} | -- | -- | "
-                     "-- | -- | -- | -- | -- |")
+                     "-- | -- | -- | -- | -- | -- |")
     for r in learned:
         lines.append(
             f"| {r['round']} | learned | {r['version']} | {r['seated_on_target']} | "
             f"{100 * r['wilson_low']:.0f}-{100 * r['wilson_high']:.0f} % | "
+            f"{r['bricks_on_target']} | "
             f"{_fmt(r['lateral_mm_median'])} | {_fmt(r['median_tracking_mm'])} | "
             f"{_fmt(r['median_prediction_mm'])} | {_fmt(r['ticks_align'], 0)} | "
             f"{r['ticks_trained_on'] or '--'} | {r.get('would_ship') or '--'} |")

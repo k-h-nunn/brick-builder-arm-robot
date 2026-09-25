@@ -55,6 +55,10 @@ CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python scripts/run_placement.py 
 About forty seconds. `--cnn` drives the loop from the trained convolutional scene model, which is
 what the video shows; without it the same loop runs on simulator ground truth instead.
 
+`scripts/run_campaign.py` runs that loop in rounds, training the predictor and the one-step
+inverse on the arm's own episodes and re-measuring the closed loop after each round
+([Closed-loop campaign](docs/guide/16-closed-loop-campaign.md)).
+
 The video, at draft resolution:
 
 ```bash

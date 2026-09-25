@@ -200,7 +200,7 @@ def build_video(out: Path, *, quality_name: str = "hd1080", seed: int = 1,
         first.close()
         second = TrackingEpisode(scene, ideal_two, cfg=cfg_two, seed=seed, target=cells[1],
                                  twin_prepare=prepare, build_decode=True, source=source,
-                                 inverse=g)
+                                 inverse=g, placed=placed_two)
         state["second"] = second
         yield from cycle_motion(scene, second, panels, truth, SUPPLY_BODY,
                                 lead_seconds=0.6, hold_seconds=hold_seconds, last=last)
