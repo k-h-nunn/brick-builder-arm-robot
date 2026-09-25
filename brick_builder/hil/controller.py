@@ -333,6 +333,15 @@ class SerialController(_WireController):
         self.port.close()
 
 
+def free_port() -> int:
+    """Unused loopback TCP port number, as the kernel assigns one to port 0."""
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
 def make(spec: str, *, lib: ControlLib | None = None, build=None, tcp_port: int = 0):
     """`c`, `process`, `process:tcp` or `serial:/dev/ttyACM0`."""
     if spec == "c":
@@ -340,7 +349,7 @@ def make(spec: str, *, lib: ControlLib | None = None, build=None, tcp_port: int 
     if spec in ("process", "process:pipe"):
         return ProcessController(build.runner)
     if spec == "process:tcp":
-        return ProcessController(build.runner, tcp_port=tcp_port or 58421)
+        return ProcessController(build.runner, tcp_port=tcp_port or free_port())
     if spec.startswith("serial:"):
         return SerialController(spec.split(":", 1)[1])
     raise ValueError(f"unknown controller {spec!r}")

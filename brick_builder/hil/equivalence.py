@@ -64,7 +64,7 @@ class SeedComparison:
     seed: int
     controller: str
     against: str
-    """What this side was compared with: `python` for `c`, `c` for the wire transports."""
+    """Reference side: `python` for `c`, `c` for the wire transports."""
     index_identical: bool
     boundaries_identical: bool
     n_vision_ticks: tuple

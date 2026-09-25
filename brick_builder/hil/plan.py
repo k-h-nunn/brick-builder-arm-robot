@@ -26,7 +26,7 @@ from ..scene.compose import HeldBrick
 
 @dataclass
 class FramePlan:
-    """What the controller needs to know about one reference frame beyond its own record."""
+    """Per-frame controller plan, beyond the frame's own record."""
 
     step: object | None
     """The `TwinStep` measured at this frame, or `None` when there is nothing to line up on."""
@@ -50,8 +50,9 @@ class Plan:
         self.n_frames = len(self.frames)
 
     def step_for(self, k: int):
-        """What `TrackingEpisode._build` returns for frame `k`; raises `BlindStep` when there is
-        no usable step, which is how the live twin reports the same thing."""
+        """Twin step of frame `k`, as `TrackingEpisode._build` returns it.
+
+        Raises `BlindStep` when there is no usable step, as the live twin does."""
         plan = self.frames[k]
         if plan.step is None:
             raise BlindStep(f"frame {k}: the twin has no step to measure an inverse from")
