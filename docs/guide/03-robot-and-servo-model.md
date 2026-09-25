@@ -30,7 +30,8 @@ What `build_arm_spec` changes:
 |---|---|
 | Position actuators at `kp = servo_kp(P, Vin)`, `kv = 0` | Upstream's 998 is about 100x too stiff (below) |
 | `forcerange = ±torque_limit_nm · Vin/7.4` | Upstream's ±3.35 is a 12 V number |
-| Joint damping 0.62, frictionloss 0.052, armature 0.026 | Rhoban BAM's identified values for this servo |
+| Joint damping 0.62, frictionloss `ArmConfig.joint_friction_nm` (default 0.052), armature 0.026 | Rhoban BAM's identified values for this servo |
+| Every printed-part material recoloured to `ArmConfig.print_color_rgba` | At the default value this reproduces the upstream mesh's own colour exactly |
 | Optional backlash joint beside each actuated joint | Real gear play is larger than a stud's capture window |
 | Boxes instead of collision meshes, plus two fingertip pads | A mesh's convex hull fills the jaw gap (below) |
 | `tcp_pinch` site, `wrist_cam` camera on the `gripper` body | The tool point and the camera the policy sees through |
@@ -527,6 +528,29 @@ six 21-byte replies = 140 bytes, **1.4 ms**. With a 200 µs turnaround before ea
 exchange takes 3.06 ms (inside a 20 ms tick); servo 5 samples 2.05 ms after servo 0. Packet loss
 defaults to 0.5%/packet; a lost request takes every reply that tick with it.
 
+## Randomizing the firmware dead band
+
+`error_deadband_ticks` is in the randomization ranges (`randomize.RANGES`/`NOMINAL`, key
+`command.error_deadband_ticks`) and reaches `ServoConfig` through `randomize.servo_config`. It is
+not one of `envs.base_env.DR_PARAM_KEYS`, the critic's fixed 17-wide `dr_params` observation
+entry, which stays 17 wide. The episode still randomizes over the dead band and
+`Scene.randomization` still records the value drawn; only the critic's dedicated summary vector
+does not carry it.
+
+Every group's sampler shares one `rng.Generator`, drawn group by group in a fixed order
+(`dynamics`, `command`, `snap`, `contact`, `plate`, `in_hand`, `visual`), so a new key anywhere in
+`RANGES` would normally consume one more `rng` call before later groups draw, shifting every
+later group's numbers for a fixed seed. `sample_command` draws `command.error_deadband_ticks`
+from `rng.spawn(1)[0]` instead: `Generator.spawn` derives the child from `rng`'s `SeedSequence`
+without drawing any numbers from `rng` itself, so `rng`'s state after `sample()` returns is
+unchanged from what it was before this parameter existed, and no later draw shifts.
+`tests/robot/test_servo_model.py` pins this for seeds 0-4 and several `groups` values: every
+pre-existing draw and `rng`'s post-`sample()` state match what they are with the key absent from
+`RANGES`/`NOMINAL`. Caveat: this matching is on `rng.bit_generator.state`, which does not include
+`SeedSequence.spawn`'s own counter; saving and restoring `bit_generator.state` around two
+`sample()` calls reproduces every other field but draws a different `error_deadband_ticks` each
+time. Nothing in this codebase saves and restores `bit_generator.state`.
+
 ## Figures
 
 The sag, step-response and settling-error plots on this page regenerate from one function after
@@ -548,27 +572,9 @@ other two are seconds.
   spans 1.5-3.4.
 - **The firmware dead band** (registers 26, 27): unread on real hardware. `error_deadband_ticks`
   defaults to 0; the documented 2-count value brackets the bench report's "10 counts" against its
-  own ±2-count repeatability — not a measurement.
-- `error_deadband_ticks` is now in the randomization ranges (`randomize.RANGES`/`NOMINAL`, key
-  `command.error_deadband_ticks`) and reaches `ServoConfig` through `randomize.servo_config`. It
-  is deliberately **not** one of `envs.base_env.DR_PARAM_KEYS`: that tuple is a fixed 17-wide
-  vector (the critic's `dr_params` observation entry), and growing it is a decision for whoever
-  owns `brick_builder/envs/**`, not this page's files. The episode still randomizes over the dead
-  band and `Scene.randomization` still records the value drawn; only the critic's dedicated
-  summary vector does not grow to show it, until that width change is made deliberately.
-- **Consequence of the above for seed-pinned tests**: every group's sampler shares one
-  `rng.Generator`, drawn group by group in a fixed order (`dynamics`, `command`, `snap`,
-  `contact`, `plate`, `in_hand`, `visual`), so a new `RANGES` key anywhere at or before a given
-  group consumes one more `rng` call before that group's own draws happen -- for a fixed seed,
-  every later group now draws different numbers than before, regardless of where in the dict the
-  new key physically sits. Adding `command.error_deadband_ticks` shifts `snap`/`contact`/
-  `plate`/`in_hand`/`visual` this way; the one test this was checked against,
-  `tests/scene/test_randomize.py::test_a_randomized_scene_still_settles_cleanly`, fails at
-  seed 1 (`max_speed` 0.0196 against its 0.005 s⁻¹ bound) as a result -- not because the dead
-  band reaches the physics model (`randomize.apply` has no `command.*` branch; only
-  `servo_config`/`ServoBus` read it), but because seed 1's *other* randomized fields (plate
-  pose, friction, snap parameters, ...) are now different draws. `tests/scene` is not owned by
-  this page; flagged here rather than fixed there.
+  own ±2-count repeatability — not a measurement. See
+  [Randomizing the firmware dead band](#randomizing-the-firmware-dead-band) for how a value here
+  reaches the simulator today.
 
 ## Kinematics
 

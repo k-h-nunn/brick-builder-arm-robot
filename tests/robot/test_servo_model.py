@@ -6,6 +6,7 @@ to exploit if they are wrong, and they are invisible in an aggregate "the arm mo
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import math
 
@@ -664,9 +665,6 @@ def test_measure_sag_is_monotone_in_torque():
 
 
 # ------------------------------------------------ error_deadband_ticks in the randomization ranges ---
-#
-# brick_builder/scene/randomize.py is this package's file; its own test directory (tests/scene) is
-# not, so this checks the wiring from here instead of duplicating scene-level fixtures.
 
 
 def test_error_deadband_ticks_is_a_randomization_range_with_a_nominal_value():
@@ -691,17 +689,60 @@ def test_error_deadband_ticks_reaches_servo_config_and_only_that_field():
         assert getattr(sc, f.name) == getattr(default_sc, f.name), f.name
 
 
-def test_error_deadband_ticks_is_sampled_but_kept_out_of_the_fixed_width_critic_observation():
-    """The randomization key exists and is drawn (`R.sample`), but is deliberately not one of
-    `envs.base_env.DR_PARAM_KEYS` -- growing that fixed-width vector is an environment-owned
-    decision this package does not make. See docs/guide/03, "Still to come"."""
+def test_error_deadband_ticks_is_sampled_at_every_level():
+    """`command.error_deadband_ticks` is drawn by `R.sample` at every randomization level and
+    reaches `ServoConfig` (the previous two tests). It is not one of
+    `envs.base_env.DR_PARAM_KEYS`, whose width is checked by its own test next to that tuple."""
     from brick_builder.scene import randomize as R
 
-    rng = np.random.default_rng(0)
-    drawn = R.sample(rng, 1.0, groups=("command",))
-    assert "command.error_deadband_ticks" in drawn
+    for level in (0.0, 0.5, 1.0):
+        drawn = R.sample(np.random.default_rng(0), level, groups=("command",))
+        assert "command.error_deadband_ticks" in drawn
 
-    from brick_builder.envs.base_env import DR_PARAM_KEYS
 
-    assert "command.error_deadband_ticks" not in DR_PARAM_KEYS
-    assert len(DR_PARAM_KEYS) == 17
+def test_adding_error_deadband_ticks_did_not_shift_any_pre_existing_draw():
+    """Regression: `command.error_deadband_ticks` joined `RANGES`/`NOMINAL` after every other
+    key that already existed. Because `sample_command` draws it from a child generator
+    (`rng.spawn(1)[0]`) instead of from `rng` itself, every pre-existing key's value, and `rng`'s
+    own state after `sample()` returns, must be exactly what they would be if this key were
+    absent -- for any seed, `level` and set of `groups`, including the un-randomized
+    `level=0.0` case a scripted baseline resets with. This pins the fix for the regression
+    `tests/scene/test_randomize.py::test_a_randomized_scene_still_settles_cleanly` caught at
+    seed 1 when the key was drawn from the shared stream in the middle of the `command` group.
+    """
+    from brick_builder.scene import randomize as R
+
+    old_ranges = {k: v for k, v in R.RANGES.items() if k != R.ERROR_DEADBAND_KEY}
+    old_nominal = {k: v for k, v in R.NOMINAL.items() if k != R.ERROR_DEADBAND_KEY}
+
+    group_sets = (None, ("dynamics", "command"), ("dynamics", "command", "in_hand", "contact", "plate"))
+    for groups in group_sets:
+        for level in (0.0, 1.0):
+            for seed in range(5):
+                rng_new = np.random.default_rng(seed)
+                drawn_new = R.sample(rng_new, level, groups=groups)
+                next_new = rng_new.uniform()
+
+                rng_old = np.random.default_rng(seed)
+                with (
+                    _patched(R, "RANGES", old_ranges),
+                    _patched(R, "NOMINAL", old_nominal),
+                ):
+                    drawn_old = R.sample(rng_old, level, groups=groups)
+                next_old = rng_old.uniform()
+
+                assert set(drawn_old) == set(drawn_new) - {R.ERROR_DEADBAND_KEY}, (groups, level, seed)
+                for key, value in drawn_old.items():
+                    assert value == drawn_new[key], (groups, level, seed, key)
+                assert next_new == next_old, (groups, level, seed)
+                assert rng_new.bit_generator.state == rng_old.bit_generator.state, (groups, level, seed)
+
+
+@contextlib.contextmanager
+def _patched(module, name, value):
+    original = getattr(module, name)
+    setattr(module, name, value)
+    try:
+        yield
+    finally:
+        setattr(module, name, original)

@@ -60,12 +60,12 @@ def test_mass_check_flags_a_deliberately_wrong_mass(tmp_path):
     assert row["agree_within_10pct"] is False
 
 
-def test_hooks_missing_names_the_joint_friction_gap(tmp_path):
+def test_hooks_missing_names_the_camera_gap_but_not_joint_friction(tmp_path):
     ctx = _ctx(tmp_path)
     params_cmd.run(ctx)
     data = json.loads((ctx.out_dir / "data.json").read_text())
     joined = " ".join(data["hooks_missing"])
-    assert "joint_friction" in joined
+    assert "joint_friction" not in joined  # ArmConfig.joint_friction_nm closes this gap
     assert "CameraConfig" in joined
 
 
