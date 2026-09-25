@@ -17,11 +17,13 @@ the take, and reports whether both bricks seated: the seed is chosen with it bef
 
 The layout is the closed-loop video's: four square panels (the arm camera, the target frame's
 labels, the scene model's labels and the renderer's labels, the last two side by side) and the
-data strip, plus one title line under the panels carrying the English command. After the take
-the QA checks run on the file and on the stills: frame shape, no two text boxes intersecting,
-the smallest font, no code identifiers on screen, step names from the list, every stud coloured
-like its brick, and a main view that is a render rather than noise; the text areas are cropped
-at 100 % beside the stills.
+data strip, plus one title line under the panels carrying the English command. The title card
+takes the data strip's box for the opening seconds: in this shot the top left of the main view
+holds the upper arm and the wrist. After the take the QA checks run on the file and on the
+stills: frame shape, no two text boxes intersecting, no text box over the arm's pixels, the
+smallest font, no code identifiers or hashes on screen, step names from the list, every stud
+coloured like its brick, and a main view that is a render rather than noise; the text areas are
+cropped at 100 % beside the stills.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ import math
 import os
 import re
 import sys
+from dataclasses import replace
 from itertools import combinations
 from pathlib import Path
 from typing import Sequence
@@ -50,7 +53,8 @@ from brick_builder.demo.video import (  # noqa: E402
     CamKey, Recorder, Tick, arm_points, panel_size_for, quality_by_name, studio_look,
 )
 from brick_builder.demo.video_panels import (  # noqa: E402
-    BOX, LABEL_FRAC, TEXT, LayoutError, Rect, check_layout, fit_caption,
+    BOX, DIM_TEXT, LABEL_FRAC, STRIP_BOX, TEXT, LayoutError, Overlay, Rect, check_layout,
+    fit_caption,
 )
 from make_demo_video import (  # noqa: E402
     CL_AZIMUTH, CL_DISTANCE, CL_ELEVATION, CL_LOOKAT, CL_MIN_SPAN, CL_READOUTS, CL_TITLE,
@@ -67,6 +71,20 @@ PANEL_ORDER = ("Arm camera POV", "Target scene state",
 """Top row: what the camera sees and what the target sequence wants. Bottom row: the scene
 model's dense output beside the renderer's ground truth it is scored against."""
 
+DISPLAY_ONLY_TITLE = "Scene model segmentation"
+"""The third panel's title when the scene model is shown but ground truth drives: the panel is
+then not what the controller observes."""
+
+SCENE_MODEL = "convolutional scene model"
+
+READOUTS = tuple(replace(r, text=True) if r.key == "press_n" else r for r in CL_READOUTS)
+"""The closed-loop readouts, the press force as a live value: a dash when the arm is not
+pushing down on the brick, instead of the last press held on screen."""
+
+ARM_INSTANCE = 10_000
+"""Instance id the main view's segmentation pass gives the arm's bodies, for the QA check that
+no text box covers the robot."""
+
 STEP_NAMES = frozenset({"Approach", "Grasp", "Lift", "Transport", "Align",
                         "Press the brick down", "Release", "Retract", "Verify"})
 MAX_MAIN_VIEW_GRADIENT = 5.0
@@ -77,8 +95,10 @@ framebuffer measured 7.0-53.6."""
 MIN_FONT_PX = 22
 """Smallest glyph size any on-screen string may use at 1080 lines [px]."""
 
-IDENTIFIER = re.compile(r"\b[A-Za-z]+_[A-Za-z0-9_]+\b|\w\(|\.py\b|\b[a-z]+[A-Z][A-Za-z]*\b")
-"""snake_case, a call, a file name, camelCase: what a code identifier looks like on screen."""
+IDENTIFIER = re.compile(r"\b[A-Za-z]+_[A-Za-z0-9_]+\b|\w\(|\.py\b|\b[a-z]+[A-Z][A-Za-z]*\b"
+                        r"|\b(?=[0-9A-Fa-f]*[0-9])(?=[0-9A-Fa-f]*[A-Fa-f])[0-9A-Fa-f]{6,}\b")
+"""snake_case, a call, a file name, camelCase, a hex hash: what a code identifier or a version
+tag looks like on screen."""
 NOT_IDENTIFIERS = frozenset({"mIoU"})
 
 
@@ -89,8 +109,8 @@ def spec_line(*, job: str, driving: str, displayed: str, inverse: str, version: 
     Job, perception source, controller, bricks, and the world's offset; the command has its own
     title line under the panels, which is on screen with the title card and after it.
     """
-    model = (f"scene model: {driving}" if driving == displayed
-             else f"control: {driving} | panel: {displayed}")
+    model = (f"Perception: {driving}" if driving == displayed
+             else f"Control input: {driving} | Display: {displayed}")
     tag = f"{inverse} inverse" + (f" {version}" if version else "")
     return (f"{job} | {model} | target-sequence tracking, 10 Hz | {tag} | 2 x DUPLO 2x2 | "
             f"baseplate offset: {offset_mm:.1f} mm, {offset_deg:.1f} deg")
@@ -109,6 +129,58 @@ def command_lines(command: str, measure, max_px: float) -> list[str]:
     return fit_caption(text, measure, max_px, max_lines=2)
 
 
+class TitleOverlay(Overlay):
+    """`Overlay` with the title card in the data strip's box instead of the top left corner.
+
+    The strip's box lies outside the picture the shot is framed in, so the card covers no part of
+    the arm; for the opening seconds it replaces the strip, which has nothing measured to show
+    yet, and the strip takes its box back when the card goes.
+    """
+
+    def draw(self, picture, *, title=None, subtitle=None, readouts=(), **kw):
+        if not title:
+            return super().draw(picture, title=None, subtitle=subtitle, readouts=readouts, **kw)
+        from PIL import Image, ImageDraw
+
+        composed, rects = super().draw(picture, title=None, subtitle=None, readouts=(), **kw)
+        rect = self.strip_rect()
+        max_px = rect.width - 2 * self.pad
+        if self.f_title.getlength(title) > max_px:
+            raise LayoutError(f"the title does not fit {max_px} px: {title!r}")
+        lines = [(title, self.f_title, TEXT)]
+        if subtitle:
+            lines += [(line, self.f_subtitle, DIM_TEXT)
+                      for line in self._spec_lines(subtitle, max_px)]
+        height = sum(self._line_height(font) for _, font, _ in lines)
+        base = Image.fromarray(np.ascontiguousarray(composed), mode="RGB").convert("RGBA")
+        layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(layer)
+        self._box(draw, rect, fill=STRIP_BOX)
+        y = rect.y0 + max((rect.height - height) // 2, self.pad)
+        for text, font, colour in lines:
+            draw.text((rect.x0 + self.pad, y), text, font=font, fill=colour)
+            y += self._line_height(font)
+        rects = dict(rects)
+        rects["title"] = rect
+        check_layout(rects, self.safe)
+        out = Image.alpha_composite(base, layer).convert("RGB")
+        return np.asarray(out, dtype=np.uint8), rects
+
+
+def arm_body_names(model, root: str = "base") -> list[str]:
+    """Every named body hanging off `root` in the body tree: the arm, jaws included."""
+    import mujoco
+
+    root_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, root)
+    if root_id < 0:
+        raise ValueError(f"no body named {root!r}")
+    in_arm = np.zeros(model.nbody, dtype=bool)
+    in_arm[root_id] = True
+    for b in range(root_id + 1, model.nbody):
+        in_arm[b] = in_arm[int(model.body_parentid[b])]
+    return [model.body(b).name for b in np.nonzero(in_arm)[0] if model.body(b).name]
+
+
 class CommandRecorder(Recorder):
     """Closed-loop video recorder with the English command under the panel grid."""
 
@@ -116,7 +188,24 @@ class CommandRecorder(Recorder):
         from PIL import ImageFont
 
         super().__init__(scene, **kw)
+        self.overlay = TitleOverlay(self.quality.width, self.quality.height)
         ov = self.overlay
+        # The main view's segmentation pass tells the arm apart from everything else, so each
+        # frame can count the arm pixels under the text boxes drawn inside the picture.
+        lut = dict(scene.instance_ids)
+        arm = arm_body_names(scene.model)
+        lut.update({name: ARM_INSTANCE for name in arm})
+        self._main.instance_lut(lut)
+        self.arm_bodies = len(arm)
+        self.arm_under_text: dict[str, int] = {}
+        self._frame = None
+        render_free = self._main.render_free
+
+        def keep(*args, **kwargs):
+            self._frame = render_free(*args, **kwargs)
+            return self._frame
+
+        self._main.render_free = keep
         font_dir = Path(ov.f_label.path).parent
         self.command_font = ImageFont.truetype(str(font_dir / "DejaVuSans.ttf"),
                                                ov._px(LABEL_FRAC))
@@ -156,6 +245,11 @@ class CommandRecorder(Recorder):
         rects = dict(rects)
         rects["command"] = r
         check_layout(rects, ov.safe)
+        instance = self._frame.instance
+        for key, box in rects.items():
+            under = int(np.count_nonzero(
+                instance[box.y0:box.y1, box.x0:box.x1] == ARM_INSTANCE))
+            self.arm_under_text[key] = max(self.arm_under_text.get(key, 0), under)
         return out, rects, span, overrun, ray
 
 
@@ -190,13 +284,23 @@ def build_scene_for(seed: int, prepare):
 
 
 def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
-                 hold_seconds: float, last: dict, on_hold=None):
+                 hold_seconds: float, last: dict, on_hold=None, segments: list | None = None):
     """One cycle's per-tick records, turned into ticks the video understands.
 
     With `panels` set to `None` nothing is drawn, and every control tick, every observation the
-    loop makes and every physics step is the same as with it: that is the probe.
+    loop makes and every physics step is the same as with it: that is the probe. `segments`
+    collects, per step in the order run, `[step, ticks, measured ticks, last measured error]`.
     """
     from brick_builder.control.pick_place import gripper_press_force
+
+    def contact() -> None:
+        # Live, for this cycle's brick: a dash while the arm is not pushing down on it, so a
+        # press from an earlier step or cycle is not held on screen.
+        force = gripper_press_force(scene, brick)
+        last["press_n"] = f"{force:.1f}" if force > 0.05 else "—"
+        depths = np.asarray(scene.snap.stud_depths(brick), dtype=float)
+        if depths.size:
+            last["depth_mm"] = float(1e3 * np.min(depths))
 
     hold_tcp = episode.world.feedback(episode.ideal.frames[0].commands[0].grip).tcp_pos.copy()
     grip0 = episode.ideal.frames[0].commands[0].grip
@@ -208,9 +312,17 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
     del state
     for _ in range(max(int(round(lead_seconds / CONTROL_DT)), 1)):
         episode.world.command(hold_tcp, 0.0, grip0)
+        contact()
         yield Tick(scene=scene, phase=episode.ideal.frames[0].step, data=dict(last))
 
     for rec in episode.run():
+        if segments is not None:
+            if not segments or segments[-1][0] != rec.step:
+                segments.append([rec.step, 0, 0, float("nan")])
+            segments[-1][1] += 1
+            if rec.err_mm == rec.err_mm:
+                segments[-1][2] += 1
+                segments[-1][3] = float(rec.err_mm)
         if panels is not None and rec.vision and rec.state is not None:
             panels.update(rec.rgb, rec.target_label, truth(scene), window=truth.window)
             if panels.miou == panels.miou:
@@ -219,12 +331,7 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
             last["err_mm"] = float(rec.err_mm)
         if rec.predict_mm == rec.predict_mm:
             last["predict_mm"] = float(rec.predict_mm)
-        force = gripper_press_force(scene, brick)
-        if force > 0.05:
-            last["press_n"] = float(force)
-        depths = np.asarray(scene.snap.stud_depths(brick), dtype=float)
-        if depths.size:
-            last["depth_mm"] = float(1e3 * np.min(depths))
+        contact()
         yield Tick(scene=scene, phase=rec.step, data=dict(last))
 
     if on_hold is not None:
@@ -234,15 +341,25 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
                          park.pos[1] + episode.correction[1], park.pos[2]])
     for _ in range(max(int(round(hold_seconds / CONTROL_DT)), 1)):
         episode.world.command(park_pos, park.spin + episode.correction[2], park.grip)
+        contact()
         yield Tick(scene=scene, phase="Verify", data=dict(last))
 
 
 class DisplayPanels(Panels):
-    """The four panels in `PANEL_ORDER`: scene model output beside ground truth."""
+    """The four panels in `PANEL_ORDER`: scene model output beside ground truth.
+
+    `shown_as` retitles a panel on screen, for a run in which the scene model is displayed but
+    does not drive.
+    """
+
+    shown_as: dict = {}
+
+    def titles(self) -> list[str]:
+        return [self.shown_as.get(title, title) for title in PANEL_ORDER]
 
     def entries(self):
         by_title = dict(zip(PANEL_TITLES, self.images))
-        return [(title, by_title[title]) for title in PANEL_ORDER]
+        return [(shown, by_title[title]) for title, shown in zip(PANEL_ORDER, self.titles())]
 
 
 def still_picker(state: dict, lead_seconds: float, hold_seconds: float):
@@ -294,7 +411,7 @@ def build_video(out: Path | None, *, task: str = "stack_2", quality_name: str = 
     driving = "ground truth"
     if cnn_drives:
         source = _cnn()
-        driving = f"CNN {FROZEN_SHA}"
+        driving = SCENE_MODEL
 
     # Cycle one places the brick already in the jaws; cycle two fetches the next one off the
     # table. Two configurations, one world.
@@ -326,7 +443,9 @@ def build_video(out: Path | None, *, task: str = "stack_2", quality_name: str = 
         # tracker across frames, and a display that fed it extra observations would make the
         # take a different run from the probe that chose its seed.
         panels = DisplayPanels(panel_size_for(quality, 4), cnn=_cnn())
-        displayed = f"CNN {FROZEN_SHA}"
+        displayed = SCENE_MODEL
+        if not cnn_drives:
+            panels.shown_as = {"Observed scene state": DISPLAY_ONLY_TITLE}
 
     g = None
     if inverse == "learned":
@@ -342,7 +461,7 @@ def build_video(out: Path | None, *, task: str = "stack_2", quality_name: str = 
         offset_mm=1e3 * float(np.linalg.norm(d_xy)), offset_deg=abs(math.degrees(d_yaw)))
 
     state: dict = {"second": None, "checks": [], "cycle": 0, "holding": False,
-                   "phases": set(), "episodes": []}
+                   "phases": set(), "episodes": [], "segments": [[], []]}
 
     def centre(cell):
         return (cell[0] + 0.5, cell[1] + 0.5, cell_layer(cell))
@@ -350,7 +469,8 @@ def build_video(out: Path | None, *, task: str = "stack_2", quality_name: str = 
     def motion():
         last: dict = {}
         yield from cycle_motion(scene, first, panels, truth, held_name,
-                                lead_seconds=lead_seconds, hold_seconds=gap_seconds, last=last)
+                                lead_seconds=lead_seconds, hold_seconds=gap_seconds, last=last,
+                                segments=state["segments"][0])
         state["checks"].append(verify_placement(scene, held_name, centre(cells[0])))
         state["episodes"].append(first)
         # `first` is closed after the take, not here: `SceneRenderer.close` frees its GL objects
@@ -363,7 +483,8 @@ def build_video(out: Path | None, *, task: str = "stack_2", quality_name: str = 
         state["second"] = second
         yield from cycle_motion(scene, second, panels, truth, SUPPLY_BODY,
                                 lead_seconds=0.6, hold_seconds=hold_seconds, last=last,
-                                on_hold=lambda: state.update(holding=True))
+                                on_hold=lambda: state.update(holding=True),
+                                segments=state["segments"][1])
         state["checks"].append(verify_placement(scene, SUPPLY_BODY, centre(cells[1])))
         state["episodes"].append(second)
 
@@ -377,7 +498,7 @@ def build_video(out: Path | None, *, task: str = "stack_2", quality_name: str = 
         with CommandRecorder(
             scene, command=spec.command, quality=quality,
             shot=[CamKey(0.0, CL_LOOKAT, CL_DISTANCE, CL_AZIMUTH, CL_ELEVATION)],
-            title=TITLE, subtitle=subtitle, readouts=CL_READOUTS,
+            title=TITLE, subtitle=subtitle, readouts=READOUTS,
             panel_images=lambda tick: panels.entries(), n_panels=4,
             phase_name=lambda phase: phase,
             title_seconds=lead_seconds, min_span=CL_MIN_SPAN, keep_in_frame=arm_points,
@@ -388,15 +509,20 @@ def build_video(out: Path | None, *, task: str = "stack_2", quality_name: str = 
             info.update(command_lines=recorder.command_lines, fonts=recorder.font_sizes(),
                         panel_bar=recorder.overlay._panel_bar(),
                         safe=recorder.overlay.safe.as_tuple(),
-                        clear=recorder.overlay.clear_rect().as_tuple())
+                        clear=recorder.overlay.clear_rect().as_tuple(),
+                        arm_bodies=recorder.arm_bodies,
+                        arm_px_under_boxes=dict(recorder.arm_under_text))
         truth.close()
     for episode in state["episodes"] or [first]:
         episode.close()
     info["cycles"] = [{"failure": e.failure or "",
                        "steps": [(r.name, int(r.vision_ticks), float(r.final_err_mm))
-                                 for r in e.reports]} for e in state["episodes"]]
+                                 for r in e.reports],
+                       "measured": seg}
+                      for e, seg in zip(state["episodes"], state["segments"])]
     info.update(phases=sorted(state["phases"]),
-                panel_titles=list(PANEL_ORDER), readouts=[r.label for r in CL_READOUTS],
+                panel_titles=panels.titles() if panels is not None else list(PANEL_ORDER),
+                readouts=[r.label for r in READOUTS],
                 studs=stud_colour_problems(scene))
     return result, state["checks"], (d_xy, d_yaw), info
 
@@ -476,6 +602,11 @@ def run_qa(video: Path, stills_dir: Path) -> list[str]:
                 r = Rect(r.x0, r.y0, r.x1, r.y0 + int(info["panel_bar"]))
             imageio.imwrite(str(crops / f"{path.stem}_{key}.png"), img[r.y0:r.y1, r.x0:r.x1])
 
+    if not info.get("arm_bodies"):
+        failures.append("the arm's pixels were not identified in the main view")
+    for key, count in sorted(info.get("arm_px_under_boxes", {"(none)": -1}).items()):
+        if count != 0:
+            failures.append(f"{key}: {count} px of the arm under the box on some frame")
     small = {k: v for k, v in info["fonts"].items() if v < MIN_FONT_PX}
     if small:
         failures.append(f"fonts under {MIN_FONT_PX} px: {small}")
@@ -550,6 +681,9 @@ def main(argv: Sequence[str] | None = None) -> int:
               f"{result.width}x{result.height}")
     print(f"task {args.task} seed {args.seed} "
           f"control {'CNN ' + FROZEN_SHA if args.cnn_drives else 'ground truth'}")
+    if "arm_px_under_boxes" in info:
+        print("arm pixels under boxes (max over frames): "
+              + ", ".join(f"{k} {v}" for k, v in sorted(info["arm_px_under_boxes"].items())))
     print(f"baseplate offset {1e3 * disp[0][0]:+.2f}, {1e3 * disp[0][1]:+.2f} mm, "
           f"{math.degrees(disp[1]):+.2f} deg")
     ok = len(checks) == 2
@@ -562,6 +696,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     for i, cycle in enumerate(info["cycles"]):
         steps = "  ".join(f"{n} {t} ticks {e:.2f} mm" for n, t, e in cycle["steps"])
         print(f"cycle {i + 1}: {steps}  failure: {cycle['failure'] or 'none'}")
+        print(f"cycle {i + 1} measured ticks: " + "  ".join(
+            f"{n} {k}/{t} last {e:.2f} mm" for n, t, k, e in cycle["measured"]))
     print("RESULT: built" if ok else "RESULT: not built")
     if result is not None:
         write_manifest(stills_dir, result, info, checks)
