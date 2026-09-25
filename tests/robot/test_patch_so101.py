@@ -140,15 +140,32 @@ def _drive_and_record(cfg: ArmConfig, ticks: int = 200) -> np.ndarray:
 
 
 def test_joint_friction_leaves_the_default_trajectory_unchanged():
-    """Behaviour identical at defaults: a config that only names joint_friction_nm explicitly,
-    at the value patch_so101 used to hard-code, must reproduce the same-seed default trajectory
-    bit-for-bit -- not just the same frictionloss in isolation."""
-    default_traj = _drive_and_record(ArmConfig(backlash_deg=0.0))
-    explicit_traj = _drive_and_record(ArmConfig(backlash_deg=0.0, joint_friction_nm=P.BAM_FRICTION_BASE))
-    assert np.array_equal(default_traj, explicit_traj)
+    """Behaviour identical at defaults, checked against a reference that does not depend on
+    `ArmConfig.joint_friction_nm` at all: compile at plain `ArmConfig()` defaults (backlash
+    included, not switched off), then overwrite `dof_frictionloss` directly on the compiled
+    model with `P.BAM_FRICTION_BASE` -- the value `_patch_joints` used to hard-code before this
+    field existed -- bypassing the new field's plumbing entirely. If the field's default did not
+    reproduce the old hard-coded behaviour, these two trajectories would differ."""
+    default_traj = _drive_and_record(ArmConfig())
+
+    model, data = _compile(ArmConfig())
+    for name in ARM_JOINTS:
+        dof = model.jnt_dofadr[_jid(model, name)]
+        model.dof_frictionloss[dof] = P.BAM_FRICTION_BASE  # set by hand, not through the field
+    bus = ServoBus(model, data, cfg=ServoConfig(action_delay_jitter_s=0.0))
+    bus.write(np.array([0.3, -0.4, 0.5, -0.2, 0.1, 0.0]))
+    reference_traj = []
+    for k in range(200):
+        if k % 10 == 0:
+            bus.substep()
+        mujoco.mj_step(model, data)
+        reference_traj.append(data.qpos.copy())
+    reference_traj = np.array(reference_traj)
+
+    assert np.array_equal(default_traj, reference_traj)
 
     # and a materially different value is not a no-op -- the field really drives the dynamics
-    high_friction_traj = _drive_and_record(ArmConfig(backlash_deg=0.0, joint_friction_nm=0.3))
+    high_friction_traj = _drive_and_record(ArmConfig(joint_friction_nm=0.3))
     assert not np.allclose(default_traj, high_friction_traj, atol=1e-9)
 
 
