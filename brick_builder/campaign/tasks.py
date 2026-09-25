@@ -53,7 +53,8 @@ is what the supply row offers.
 The second brick targets the left-hand neighbour (column 3, row 4; 154 mm from the base, inside
 the characterised band). The right-hand neighbour (column 7, row 4; 218 mm) lies outside the
 100-200 mm band the gripper's downward force was characterised over; on five seeds there, lateral
-placement was within 0.02-0.29 mm on four of them, but insertion depth fell 0.43-4.50 mm short."""
+placement landed within 0.02-0.29 mm of the cell on every seed, and insertion depth reached full
+depth on one of the five and fell 0.43-4.50 mm short on the other four."""
 
 BASE_PLACED = (REF_YELLOW, REF_RED)
 """What is on the plate before the campaign starts: the two bricks the loop lines itself up on."""
