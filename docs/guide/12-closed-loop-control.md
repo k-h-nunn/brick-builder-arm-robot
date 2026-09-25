@@ -318,11 +318,12 @@ hover and the press target 19.2 mm inside the lower brick.
 
 `verify_placement` scores the layer: `at_target_layer` holds when the brick's bottom face is
 within half a brick height (9.6 mm) of the height the layer names, and `lower_bodies` lists the
-bodies whose studs the brick is on. A brick sent to layer 1 that lands on the plate beside the
-lower brick passes the lateral and depth checks and fails this one; its failure class is
-`seated on the wrong layer`. The campaign's CSV writes a layer-1 cell as `x,y,1` and the layer
-score as `brick{i}_at_layer`; a file written before that column existed reads back as on the
-layer.
+bodies whose studs the brick is on. The check runs on every layer, layer 0 included. A brick sent
+to layer 1 that lands on the plate beside the lower brick passes the lateral and depth checks
+and fails this one, and so does a brick sent to the plate that ends on top of another brick;
+the failure class is `seated on the wrong layer`. The campaign's CSV writes a layer-1 cell as
+`x,y,1` and the layer score as `brick{i}_at_layer`; a file written before that column existed
+reads back as on the layer.
 
 ### Flush neighbour
 
@@ -377,12 +378,14 @@ Reproduction, 20 episodes in one process, 44.7 min at nice 19 and two threads:
 ```bash
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=2 \
   python -m brick_builder.campaign.runner --tasks stack_2 build_2 --seeds 0-9 --no-replan \
-    --out results/campaign/stacked_builds/evaluate.jsonl
+    --out results/campaign/stacked_builds_rerun/evaluate.jsonl
 ```
 
 One `evaluate` job per task and seed, ground-truth scene model, analytic inverse and prediction
 rule, target sequences cached in `ideals/` beside `--out`; one JSON line per episode is appended
-to `--out`. The measured run used a job file with the same 20 jobs.
+to `--out`, so the command writes to a fresh directory rather than to the published
+`results/campaign/stacked_builds/evaluate.jsonl`. The measured run used a job file with the
+same 20 jobs.
 
 ### Two-brick recording
 
@@ -412,13 +415,17 @@ ground-truth target sequences:
 | Lift | White 2x4 on the table not segmented | No reference blob: no estimate of the brick in the jaws; with target sequences recorded through the model, the twin has nothing to line up on and the run stops |
 | Align | Held blue brick and the blue brick under it one blue region, not two | No Align measurement for 40 ticks; the press starts from a scene-state error of 14.6 mm and the brick does not seat |
 
-The recording's Scene-state error [mm] readout shows a dash in a step that has returned no
-measurement. Release, Retract and Verify are measured in relative mode (the placed brick against
-the baseplate and the bricks already placed) and returned none on the recorded run. The press on
-the brick's top with the jaws together is an in-hand step (`_in_hand`), measured against the
-recorded frame; its last values, 2.03 mm (cycle 1) and 2.30 mm (cycle 2), are the tracking
-error of that press, not the placed brick's offset from its cell, which `verify_placement` puts
-at 0.07 mm (first brick) and 0.10 mm (second brick) lateral with 0.00 mm depth error.
+In the recording, the Scene-state error [mm] and Prediction error [mm] readouts show a dash in a
+step that has returned no measurement, and the Scene-state error trace has a gap over it.
+Release, Retract and Verify are measured in relative mode (the placed brick against the
+baseplate and the bricks already placed) and returned none on the recorded run. Each cycle has
+two Press the brick down steps: the press with the brick in the jaws, then, after Release, a
+press on the brick's top with the jaws closed, measured against the recorded frame. The last
+values of the second, 2.03 mm (cycle 1) and 2.30 mm (cycle 2), are the tracking error of that
+press, not the placed brick's offset from its cell, which `verify_placement` puts at 0.07 mm
+(first brick) and 0.10 mm (second brick) lateral with 0.00 mm depth error. The file on disk
+predates the Prediction error dash and the trace gap; see
+[Two-brick stack video](../demos/videos.md#two-brick-stack-video).
 
 ### Remedies
 
