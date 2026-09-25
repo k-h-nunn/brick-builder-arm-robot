@@ -2,8 +2,8 @@
 
 Reads the JSON ``--out`` files ``arm_selftest.py`` and ``servo_sysid.py`` already write and prints
 (and, with ``--out``, saves) the ``arm:`` block in ``configs/params/default.yaml``'s own
-``value``/``status``/``measured_by``/``measured_on``/``notes`` format -- ready to paste. This
-package does not own ``configs/params/``, so nothing here edits that file.
+``value``/``status``/``measured_by``/``measured_on``/``notes`` format -- ready to paste. Nothing
+here writes to ``configs/params/`` itself; pasting the printed block in is a manual step.
 
     python scripts/hardware/arm_selftest.py --virtual --out results/servo_bringup/selftest.json
     python scripts/hardware/servo_sysid.py --virtual --joint shoulder_lift \\

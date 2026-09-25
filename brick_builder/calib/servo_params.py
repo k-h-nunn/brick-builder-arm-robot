@@ -1,12 +1,12 @@
 """Render the bring-up kit's findings as a parameter-file fragment.
 
-``configs/params/default.yaml`` (the ``parameters`` package's file, not this one's) gives every
-measured field a ``value``/``status``/``measured_by``/``measured_on``/``notes`` block under its
-group; this module writes exactly that block, under ``arm:``, from a
+``configs/params/default.yaml`` gives every measured field a
+``value``/``status``/``measured_by``/``measured_on``/``notes`` block under its group; this module
+writes exactly that block, under ``arm:``, from a
 :class:`~brick_builder.calib.servo_selftest.SelfTestReport` and a sysid
 :class:`~scripts.hardware.servo_sysid.ServoFit`-shaped mapping, so the text is ready to paste
-rather than retyped from a printed table.  Nothing here writes to ``configs/params/`` itself --
-this package does not own that path.
+rather than retyped from a printed table.  Nothing here writes to ``configs/params/`` itself;
+pasting the printed block in is a manual step.
 """
 
 from __future__ import annotations
@@ -17,11 +17,20 @@ from dataclasses import dataclass
 
 _DEG_PER_TICK = 360.0 / 4096.0
 
+GRAVITY_LOADED_JOINTS = frozenset({"shoulder_lift", "elbow_flex", "wrist_flex"})
+"""The three joints the droop line can identify at all (guide 08): their own axis carries enough
+gravity torque to fit ``kp``/friction from bus readings. Also the joints whose ramp never sees the
+firmware dead band at all -- see :func:`build_fields`."""
+
 
 @dataclass(frozen=True)
 class Field:
     value: float | int
     notes: str
+    status: str | None = None
+    """Overrides the value/real default status (:func:`render_param_fragment`) when a field's own
+    reliability does not track whether the bus was virtual or real -- ``joint_friction_Nm`` is
+    biased low by a fixed mechanism (the settling transient) whether or not the arm is real."""
 
 
 def _p_gain_and_dead_band(report) -> tuple[Field, Field]:
@@ -63,33 +72,47 @@ def build_fields(report, fit=None) -> dict[str, Field]:
         "servo_dead_band_counts": dead_band,
     }
     if fit is not None:
-        # `fit.dead_band_ticks`/`fit.backlash_deg` are `servo_sysid.py`'s own attempt to split
-        # the ramp's combined hysteresis in two from bus behaviour alone; `--validate` shows that
-        # split is close to 100 % wrong (the zero-load pocket it looks for is shorter than one
-        # control tick).  The register read is what actually fills the dead band, and free play
-        # is what is left of the *combined* (reliable) figure once that registered dead band is
-        # taken out -- not `fit.backlash_deg`, which assumes its own unreliable split.
+        # `fit.dead_band_ticks` is `servo_sysid.py`'s own attempt to split the ramp's combined
+        # hysteresis in two from bus behaviour alone (`fit_dead_band_ticks`'s zero-`Present_Load`
+        # pocket); `--validate` shows it fits 0 on every draw on a gravity-loaded joint -- not
+        # because the pocket is too short to sample, but because the joint's own P-gain droop
+        # against gravity keeps the ramp's position error outside the dead band at every point on
+        # the ramp, so there is no pocket there to find (guide 08). The register read is what
+        # actually fills `servo_dead_band_counts`.
         registered_ticks = dead_band.value
-        backlash_from_combined = max(
-            fit.deadband_and_play_deg - 2.0 * registered_ticks * _DEG_PER_TICK, 0.0)
         fields["servo_dead_band_counts"] = Field(
             registered_ticks,
-            dead_band.notes + " (sysid's own bus-behaviour split of the combined figure is "
-            "validated unreliable at the 50 Hz control rate -- see guide 08 -- so this is the "
-            "register read, not that split.)",
+            dead_band.notes + " (the ramp's own hysteresis cannot fill this field on a "
+            "gravity-loaded joint -- see guide 08 -- so this is the register read.)",
         )
-        fields["backlash_total_deg"] = Field(
-            round(backlash_from_combined, 3),
-            f"system identification, joint {fit.joint}: ramp hysteresis "
-            f"({fit.deadband_and_play_deg:.3f} deg combined dead band + free play, with the "
-            f"droop part already taken out) minus this fragment's own servo_dead_band_counts "
-            f"above (the self-test's register read, not sysid's unreliable split -- guide 08).",
-        )
+        if fit.joint in GRAVITY_LOADED_JOINTS:
+            # On a gravity-loaded joint the ramp never sees the dead band at all (just above), so
+            # nothing measured by the ramp needs the registered dead band subtracted back out: the
+            # raw combined figure already is the free-play estimate.
+            backlash_value = fit.deadband_and_play_deg
+            backlash_note = (
+                f"system identification, joint {fit.joint}: ramp hysteresis "
+                f"({fit.deadband_and_play_deg:.3f} deg, the droop part already taken out) taken "
+                f"directly as free play -- {fit.joint} is gravity-loaded, so its ramp never sees "
+                f"the firmware dead band and nothing is subtracted (guide 08)."
+            )
+        else:
+            backlash_value = max(
+                fit.deadband_and_play_deg - 2.0 * registered_ticks * _DEG_PER_TICK, 0.0)
+            backlash_note = (
+                f"system identification, joint {fit.joint}: ramp hysteresis "
+                f"({fit.deadband_and_play_deg:.3f} deg, the droop part already taken out) minus "
+                f"this fragment's own servo_dead_band_counts above -- {fit.joint} is not one of "
+                f"the gravity-loaded joints the ramp-vs-dead-band reasoning in guide 08 covers, "
+                f"so this subtraction is unvalidated."
+            )
+        fields["backlash_total_deg"] = Field(round(backlash_value, 3), backlash_note)
         fields["joint_friction_Nm"] = Field(
             round(fit.friction_nm, 4),
             f"system identification, joint {fit.joint}, from the hold-from-below/from-above "
-            f"asymmetry; recorded for reference, biased low by the settling transient (guide 08) "
-            f"-- treat as a lower bound.",
+            f"asymmetry; known biased low by the settling transient crossing the friction dead "
+            f"zone (guide 08, roughly 3x low in validation) -- a lower bound, not a measurement.",
+            status="derived",
         )
     return fields
 
@@ -112,7 +135,7 @@ def render_param_fragment(
         if name not in fields:
             continue
         field = fields[name]
-        status = "assumed" if virtual else "measured"
+        status = field.status or ("assumed" if virtual else "measured")
         lines.append(f"  {name}:")
         lines.append(f"    value: {field.value}")
         lines.append(f"    status: {status}")

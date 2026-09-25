@@ -46,15 +46,60 @@ def test_disagreeing_registers_are_flagged_not_averaged():
     assert "disagree" in fields["servo_p_gain"].notes
 
 
-def test_backlash_is_the_combined_figure_minus_the_registered_dead_band_not_the_sysid_split():
+def test_backlash_on_a_gravity_loaded_joint_is_the_raw_combined_figure_not_subtracted():
+    """`shoulder_lift` is gravity-loaded (`GRAVITY_LOADED_JOINTS`): its ramp never sees the
+    firmware dead band (guide 08), so the registered dead band is not subtracted back out of the
+    combined ramp figure -- subtracting it would take out something the ramp never measured."""
     report = _report([16] * 6, [(4, 4)] * 6, [7.4] * 6)
-    fit = _fit(deadband_and_play_deg=1.2, dead_band_ticks=0.0, backlash_deg=1.2)
+    fit = _fit(joint="shoulder_lift", deadband_and_play_deg=1.2, dead_band_ticks=0.0,
+              backlash_deg=1.2)
+    fields = build_fields(report, fit)
+    assert fields["backlash_total_deg"].value == pytest.approx(1.2, abs=1e-3)
+    assert fields["servo_dead_band_counts"].value == 4
+    assert "gravity-loaded" in fields["backlash_total_deg"].notes
+
+
+def test_backlash_off_a_gravity_loaded_joint_does_subtract_the_registered_dead_band():
+    report = _report([16] * 6, [(4, 4)] * 6, [7.4] * 6)
+    fit = _fit(joint="wrist_roll", deadband_and_play_deg=1.2, dead_band_ticks=0.0, backlash_deg=1.2)
     fields = build_fields(report, fit)
     # 4 registered ticks each way -> 8 ticks total -> 8 * (360/4096) deg taken out of 1.2.
     expected = 1.2 - 8.0 * (360.0 / 4096.0)
     assert fields["backlash_total_deg"].value == pytest.approx(expected, abs=1e-3)
-    assert fields["servo_dead_band_counts"].value == 4
-    assert "unreliable" in fields["backlash_total_deg"].notes
+    assert "unvalidated" in fields["backlash_total_deg"].notes
+
+
+def test_joint_friction_is_always_derived_never_measured():
+    """The friction fit is biased low by a fixed mechanism (guide 08) whether the bus is virtual
+    or real, so pasting a `--real` fragment must not claim `status: measured` for it."""
+    report = _report([16] * 6, [(0, 0)] * 6, [7.4] * 6)
+    fit = _fit()
+    fields = build_fields(report, fit)
+    assert fields["joint_friction_Nm"].status == "derived"
+    text = render_param_fragment(fields, virtual=False)
+    friction_block = text.split("joint_friction_Nm:")[1]
+    assert "status: derived" in friction_block
+    assert "status: measured" not in friction_block
+
+
+def test_fragment_loads_through_brick_builder_params(tmp_path):
+    """The printed fragment is not just YAML-shaped text: it has to load through the real params
+    loader and reach `to_arm_config` with the values it printed."""
+    from brick_builder.params import load_params, to_arm_config
+
+    report = _report([16] * 6, [(0, 0)] * 6, [7.4] * 6)
+    fit = _fit(joint="shoulder_lift", kp_nm_per_rad=9.32, friction_nm=0.015,
+              deadband_and_play_deg=1.22)
+    fields = build_fields(report, fit)
+    text = render_param_fragment(fields, measured_on="2026-09-25")
+    path = tmp_path / "fragment.yaml"
+    path.write_text(text)
+
+    params = load_params(path)
+    assert params.value("arm.servo_p_gain") == 16
+    assert params.value("arm.backlash_total_deg") == pytest.approx(1.22, abs=1e-3)
+    arm_cfg = to_arm_config(params)
+    assert arm_cfg.p_gain == 16
 
 
 def test_render_param_fragment_is_pasteable_yaml_shaped_text():
