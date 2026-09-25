@@ -353,8 +353,22 @@ python -c "from brick_builder.perception.cnn.data import merge_split, dataset_si
   print(dataset_size('data_cache/vision_model', 'train'))"
 ```
 
-`train_b` draws from its own seed range, disjoint from `train` and from `val`. The shipped
-checkpoint was trained on 4 546 frames built this way, with 543 held-out frames.
+`train_b` draws from its own seed range, disjoint from `train` and from `val`. Run to completion,
+this renders a full second `train` (~2 690 frames, all five scene kinds -- `plate`, `held`,
+`episode`, `supply`, `approach`) and merges it in, for ~5 380 frames total -- **not** the 4 546
+frames the shipped checkpoint was trained on (543 held-out frames, unchanged).
+
+`data_cache/vision_model/train` on disk today holds the shipped set: shards `0000`-`0042` are the
+original 170-scene, 2 690-frame render above, all five kinds; shards `0043`-`0071` are 29 full
+64-frame shards merged from `train_b`, 1 856 frames, `plate`/`held`/`episode` only. That `train_b`
+render was stopped once its `episode` block finished and before `supply` began -- `generate` fills
+one scene kind's whole block at a time, in `DEFAULT_MIX` order (plate, held, episode, supply,
+approach) -- and only the resulting full shards were merged in.
+
+To reproduce the shipped set exactly: run the `generate` command above, but kill the process once
+`data_cache/vision_model/train_b/shard_0028.npz` exists and before `shard_0029.npz` appears (there
+is no flag that stops it there -- watch the directory, not the clock), then run the `merge_split`
+command unchanged.
 
 Outputs land in `results/vision_model/` (git-ignored): `checkpoint.pt` for resuming,
 `training_log.csv`, `loss_curves.png`, `train_summary.json`. The best held-out checkpoint is
