@@ -337,6 +337,28 @@ table is not segmented, so the step has no reference blob; at Align the held blu
 blue brick under it are one blue region, not two, Align has no measurement, and the press starts
 from a scene-state error of 14.6 mm.
 
+Re-probed on seeds 0-2 (`--cnn-drives --probe`, target sequences recorded through the
+convolutional model -- the campaign's own `--source cnn` convention) after the fixes in
+`docs/guide/16b-campaign-on-the-scene-model.md`'s Fixes to the crashes and The pickling fix: none
+of the three raises any more (`failure: none` on both cycles, every seed), but none seats both
+bricks either.
+
+| Seed | Baseplate offset | Brick 0 | Brick 1 | `Align` trusted ticks, cycle 1 / cycle 2 |
+|---|---|---|---|---|
+| 0 | -4.84, -3.69 mm, +2.20 deg | not seated, 17.47 mm off cell | not seated, 20.59 mm off cell | 0/240, 0/240 |
+| 1 | +6.42, +0.64 mm, +2.86 deg | not seated, 13.62 mm off cell | seated, wrong cell, 16.28 mm off | 0/240, 0/240 |
+| 2 | -3.44, +4.32 mm, +2.39 deg | not seated, 6.43 mm off cell | not seated, 21.66 mm off cell | 0/240, 0/240 |
+
+`Align` gets zero trusted ticks out of 240 in every cycle of every seed, on both cycles -- worse
+than the partial mislabeling Mislabeled reference bodies reports for `placement` (empty in none of
+400 frames there), consistent with the same slot-id/instance-id defect naming the wrong or no
+reference body for `stack_2`'s own geometry (a second brick present at cycle 2's `Align`), not
+re-diagnosed further here. With `Align` never corrected, each brick's final position is
+essentially the open-loop nominal trajectory plus the seed's own baseplate/pick noise, which is
+why the lateral errors above track the baseplate offset and compound across the two cycles. No
+video was recorded for this probe (see Reproduction): the acceptance was seating both bricks, and
+none of the three seeds did.
+
 ## QA
 
 Run on the file and the stills by the script after the take (`--qa-only` repeats it):

@@ -54,11 +54,12 @@ cp results/campaign/closed_loop/weights/{inverse.npz,predictor.npz,deployed.json
 `--no-baseline-learned` drops the repository-shipped pair's own column so the budget goes to the
 analytic baseline and the round-5 pair, the two this page compares; `--processes 1` throughout,
 the machine-wide limit while other work is also running. `build_2` was left out of both calls: it
-needs its own recorded target sequence per cycle under `--source cnn` (see The pickling
-workaround), and the two single-cycle tasks already used most of the time budget this step had.
+needs its own recorded target sequence per cycle under `--source cnn` (see The pickling fix), and
+the two single-cycle tasks already used most of the time budget this step had.
 
-These commands do not reproduce the numbers below on a fresh checkout by themselves -- see The
-pickling workaround.
+These commands did not reproduce the numbers below on a fresh checkout by themselves when they
+were first measured -- see The pickling fix, and Re-evaluation after the fixes for the numbers
+measured after it landed.
 
 ## Training campaign
 
@@ -256,13 +257,13 @@ tests/action` also passes, 48 tests, no regressions).
   needed, the step name) to stderr before raising, since nothing downstream of the catch sees the
   message again. Reading `_prepare_step`, a `pick_and_place` episode that hits this at `Approach`
   or `Lift` should play that step open-loop and reach `verify_placement` at the end like any other
-  episode -- inferred from the code, not observed: no episode with the fix applied was run,
-  because a single-episode check queued behind the machine's other work and did not return in
-  time. Neither `place.py` nor `campaign/tasks.py`'s `EpisodeRecord` (both outside this page's
-  files) give the blind step its own failure class, so a blind step's effect on the reported
-  numbers is indistinguishable from any other cause of a low seated fraction in `evaluate.csv`.
-  This was not re-run through a campaign (see Scene-model weights); the crash counts in the table
-  above are from before this change.
+  episode -- confirmed by Re-evaluation after the fixes: all ten `pick_and_place` seeds complete
+  under `--source cnn` with this fix in place, where nine of ten raised before it. Neither
+  `place.py` nor `campaign/tasks.py`'s `EpisodeRecord` (both outside this page's files) give the
+  blind step its own failure class, so a blind step's effect on the reported numbers is
+  indistinguishable from any other cause of a low seated fraction in `evaluate.csv`. The crash
+  counts in the Results table above are from before this change; Re-evaluation after the fixes has
+  the numbers measured with it applied.
 - **`brick_builder/action/learn/dataset.py`.** `hindsight_pairs` and `teacher_pairs` both crashed
   on `np.stack([])` when zero ticks passed the `trusted & ~frozen` gate. Both now return zero-row
   `x`/`y` arrays and log one line saying how many of how many ticks passed the gate, through an
@@ -275,7 +276,7 @@ tests/action` also passes, 48 tests, no regressions).
   directly on a synthetic zero-acting-tick log. The round still ends the campaign on this input;
   fixing it needs a change in `train.py`.
 
-## The pickling workaround
+## The pickling fix
 
 The first evaluate-only attempt (one seed, one task, before any of the numbers on this page) failed
 every episode:
@@ -293,32 +294,88 @@ builds locally -- not picklable, and `record_for` unconditionally writes its cac
 way, and nothing before this page had run the closed loop with `--source cnn` end to end.
 
 `decode` is documented as "viewer/evaluation only... not read by anything on the control path"
-(`scene_model.py`), so dropping `_decode_fn` before the cache is written changes nothing the loop
-reads. Fixing `record_for` or `SceneState` itself needs changes in `brick_builder/campaign/**` and
-`brick_builder/perception/**`; the numbers on this page instead come from a one-off script, run
-separately and never imported by the repository, that
-monkey-patches `SceneState.__getstate__` to drop the field and
-pre-populates the ideal-sequence cache before the unmodified `run_campaign.py` / `campaign.runner`
-pipeline reads it back with a plain `pickle.load`. The cache files it wrote are ordinary pickles
-with `_decode_fn: None`; nothing downstream needed the patch to read them.
+(`scene_model.py`), so dropping `_decode_fn` before pickling changes nothing the loop reads.
+`SceneState` now does this itself: `__getstate__` copies `__dict__` and replaces `_decode_fn` with
+`None`, `__setstate__` restores the rest unchanged. A round-tripped state answers every
+control-path query exactly as before; it just has no decode function any more (`has_decode` is
+`False`, `decode` raises the same "no decode function" `RuntimeError` it already raises for any
+producer that never built one) -- see
+`test_cnn_source_state_round_trips_through_pickle` in `tests/perception/test_scene_model.py`.
+`record_for`'s plain `pickle.dump`/`pickle.load` needed no change: a fresh `--source cnn` run now
+populates its own ideal-sequence cache directly.
 
-The commands in Evaluate-only against the round-5 pair and in Training campaign do not reproduce
-the numbers on this page by themselves on a fresh checkout: they need this pre-caching step first,
-and the script that does it is scratch, uncommitted, and not part of this repository. Fixing the
-pickling defect at its source, in `record_for`/`SceneState`, would let a fresh `--source cnn` run
-populate the cache itself and remove the need for it.
+The numbers on this page below "Re-evaluation after the fixes" were measured before this fix
+landed, using a one-off script (scratch, uncommitted, never imported by the repository) that
+monkey-patched `SceneState.__getstate__` the same way, outside the process that ran
+`run_campaign.py`. Nothing downstream needed the patch to read the cache files it wrote --
+they are ordinary pickles with `_decode_fn: None`, exactly what the fix above now writes directly.
+The commands in Evaluate-only against the round-5 pair and in Training campaign reproduce those
+numbers on a fresh checkout by themselves now that the fix is in `SceneState`; they did not before.
+
+## Re-evaluation after the fixes
+
+`closed_loop_cnn_v2`: the same two commands as Evaluate-only against the round-5 pair (`--source
+cnn --evaluate-only --processes 1`, seeds 0-9, placement and pick and place, round 0 against the
+fixed analytic baseline and round 5 against `closed_loop`'s own round-5 pair), renamed and re-run
+with the twin.py and dataset.py fixes (see Fixes to the crashes) and the pickling fix (see The
+pickling fix) in place -- the first `--source cnn` campaign run this project has not needed a
+workaround for. Same checkpoints throughout: `vision_model.pt` is still `3e07a382` (see
+Scene-model weights and `docs/guide/06b-conventional-vision-model.md`'s Decision, which records
+the candidate checkpoint was not shipped), and the round-5 `inverse.npz`/`predictor.npz` pair
+copied from `results/campaign/closed_loop/weights/` is byte-identical to the one
+`closed_loop_cnn` used -- sha256 `d7be3b0eeafdb925482fd81049d644b921c0c289ef8e378bed47df2e195274fa`
+(`inverse.npz`) and `b2c735fe598cefe59c5f908094b41446e1ef9b441cfe3d46693d93ee209728a0`
+(`predictor.npz`) in both `closed_loop_cnn/weights/` and `closed_loop_cnn_v2/weights/`. The
+difference below is the code fixes, not a different model.
+
+| Task | Round | Inverse | `closed_loop_cnn` (before) | `closed_loop_cnn_v2` (after) |
+|---|---|---|---|---|
+| Placement | 0 | analytic | 4/10 (17-69 %) | 4/10 (17-69 %) |
+| Placement | 5 | learned (r5) | 2/10 (6-51 %) | 2/10 (6-51 %) |
+| Pick and place | 0 | analytic | 0/1 (0-79 %) | 5/10 (24-76 %) |
+| Pick and place | 5 | learned (r5) | 0/1 (0-79 %) | 2/10 (6-51 %) |
+
+Placement is unaffected either way -- it never hit the reference-body crash -- and reproducing its
+exact seated fraction and Wilson interval on a second, independent run is itself a check that the
+fixes changed nothing on a path that was already working. Pick and place is the one the crash was
+hiding: all ten seeds now complete instead of nine raising, and the completed baseline is a real
+ten-episode measurement (5/10) rather than the one seed that happened not to crash (0/1, itself a
+failure). The round-5 learned pair reaches 2/10, below the ten-seed analytic baseline (5/10); by
+`docs/guide/16-closed-loop-campaign.md`'s "The loop" rule (the learned inverse's seated fraction
+at least matching the fixed analytic baseline) pick and place does not clear it here either, the
+same conclusion placement already reported, now on a full sample for both tasks. Failure classes,
+`closed_loop_cnn_v2`, seeds 0-9: pick and place round 0 (5 failures) -- seated on the wrong
+cell=4, partial seat=1; round 5 (8 failures) -- seated on the wrong cell=7, partial seat=1.
+
+Commands (identical to Evaluate-only against the round-5 pair, `--name closed_loop_cnn_v2`):
+
+```bash
+.venv/bin/python scripts/run_campaign.py \
+  --evaluate-only --round 0 --seeds 0-9 --tasks placement pick_and_place \
+  --source cnn --processes 1 --no-baseline-learned \
+  --name closed_loop_cnn_v2 --root results/campaign
+
+cp results/campaign/closed_loop/weights/{inverse.npz,predictor.npz,deployed.json} \
+   results/campaign/closed_loop_cnn_v2/weights/
+
+.venv/bin/python scripts/run_campaign.py \
+  --evaluate-only --round 5 --seeds 0-9 --tasks placement pick_and_place \
+  --source cnn --processes 1 --no-baseline-learned \
+  --name closed_loop_cnn_v2 --root results/campaign
+```
 
 ## Limits
 
 - `pick_and_place` under `--source cnn` raised on 9 of 10 held-out seeds before the twin.py fix
-  above (see Mislabeled reference bodies); its numbers in the table are one episode, not ten.
-  `placement` does not raise and is measured on the full ten. Neither number reflects a re-run
-  after the fix (see Scene-model weights).
+  above (see Mislabeled reference bodies); the `closed_loop_cnn` numbers in the Results table
+  above are one episode, not ten. `placement` did not raise and was measured on the full ten
+  throughout. Re-evaluation after the fixes reports the same measurement at n=10 for both tasks,
+  after the fix.
 - Ten seeds per task per round, same as `docs/guide/16-closed-loop-campaign.md`; the Wilson
   interval on ten trials is wide and its limits apply here unchanged.
-- `build_2` was not measured under `--source cnn`: its recorded target sequence needs the same
-  workaround per cycle, and two single-cycle tasks across two campaigns already used most of the
-  step's time budget.
+- `build_2` was not measured under `--source cnn`: it needs its own recorded target sequence per
+  cycle, and two single-cycle tasks across two campaigns already used most of the step's time
+  budget.
 - `--processes 1` throughout (the machine-wide limit while other work is running), so the
   performing rounds' recorded-sequence pool (`ideal_pool_seed`) is one recording, not the two a
   `--processes 2` run would keep; every performing episode of a task in `closed_loop_cnn_train`
@@ -330,6 +387,8 @@ populate the cache itself and remove the need for it.
 - The dataset.py fix (see Fixes to the crashes) does not by itself get `closed_loop_cnn_train`
   past round 1: `train_inverse` (`brick_builder/action/learn/train.py:194`) still raises on the
   same zero-tick input, 18 lines further into training than the `hindsight_pairs` call.
-- The twin.py fix's effect on a `pick_and_place` episode is inferred from reading `_prepare_step`,
-  not observed: no episode was run with the fix applied (see Fixes to the crashes), and neither
-  `place.py` nor `campaign/tasks.py` give a blind step its own failure class in `evaluate.csv`.
+- The twin.py fix's effect on a `pick_and_place` episode is now observed, not only inferred from
+  reading `_prepare_step` (see Fixes to the crashes and Re-evaluation after the fixes): all ten
+  seeds complete under `--source cnn`. Neither `place.py` nor `campaign/tasks.py` give a blind
+  step its own failure class in `evaluate.csv`, so which completed episodes hit a blind step is
+  still not visible in the per-episode record.
