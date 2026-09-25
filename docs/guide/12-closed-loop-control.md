@@ -357,7 +357,8 @@ Seed 4 misses in both: 0.42 mm short of full depth against the 0.3 mm tolerance.
 `build_2`, cycle 2, (2, 3, 0): seated on seed 8 only. Eight of the nine misses are on the cell
 (lateral 0.04-2.00 mm) and 0.53-4.50 mm short of full depth at 0.73-4.29 deg tilt; seed 1 is on
 the neighbouring cell (16.33 mm). The brick is pressed between two flush neighbours and stops
-tilted; the flush-neighbour hover and aim do not change the count.
+tilted. The campaign's round-0 evaluation, on the tree before the flush-neighbour hover and aim,
+had the same count for the second brick, 1/10, on seed 1.
 
 With the convolutional scene model driving, the stacked build's second cycle does not seat
 (`scripts/make_campaign_video.py --probe`, seeds 0 and 1 with ground-truth target sequences;
