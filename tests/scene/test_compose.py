@@ -643,6 +643,13 @@ def test_the_detent_snap_model_connects_the_same_bricks():
     assert report.connected_placed == len(TWO_BRICKS), report.connections
 
 
+def test_the_deprecated_collet_alias_still_builds_the_per_stud_friction_model():
+    scene = build_scene(SceneConfig(placed=list(TWO_BRICKS), snap_model="collet", held=None))
+    report = settle(scene, 1.0)
+    assert report.warnings == {}
+    assert report.connected_placed == len(TWO_BRICKS), report.connections
+
+
 def test_a_scene_with_no_held_brick_has_no_weld_and_no_grasp():
     scene = build_scene(SceneConfig(held=None))
     assert scene.weld_eq == -1
