@@ -4,8 +4,8 @@ Builds a test-only scene -- a flat printed checkerboard on the table, never wire
 `brick_builder.scene.compose`'s default scene builder -- renders it from the wrist camera at many
 known arm poses, and runs it back through `brick_builder.calib.camera`'s calibration routines to
 report how well they recover a `CameraConfig` this module already knows exactly. This is the
-"validated in simulation" half of the camera-model package; the real-hardware half is
-`scripts/calibrate_camera.py` run against photographs, with no MuJoCo import required for that.
+in-simulation validation; real-hardware calibration is `scripts/calibrate_camera.py` run against
+photographs, with no MuJoCo import required for that.
 
 The checkerboard is a grid of individual flat box geoms with alternating black/white colour, not
 a texture: the physical position of every printed corner is then exactly the shared edge between
@@ -38,14 +38,20 @@ module re-derives."""
 
 _TABLE_Z = 0.0
 _BOARD_GEOM_HALF_THICKNESS = 0.0005
-_BOARD_BODY_CLEARANCE = 0.0006  # board body origin sits this far above the table plane
+_BOARD_BODY_CLEARANCE = _BOARD_GEOM_HALF_THICKNESS  # board body origin sits this far above the table plane
 
 
 # --------------------------------------------------------------------------------- the scene ---
 
 
 def board_top_z(table_z: float = _TABLE_Z) -> float:
-    """World z of the checkerboard's printed (top) face -- where every corner's z coordinate is."""
+    """World z of the checkerboard's printed (top) face -- where every corner's z coordinate is.
+
+    The board body sits at ``table_z + _BOARD_BODY_CLEARANCE`` (see
+    :func:`build_checkerboard_spec`'s ``board = world.worldbody.add_body(...)``) and each checker
+    geom is a box of half-thickness ``_BOARD_GEOM_HALF_THICKNESS`` centred on the body's own
+    frame, so the top face is one more half-thickness above the body origin.
+    """
     return table_z + _BOARD_BODY_CLEARANCE + _BOARD_GEOM_HALF_THICKNESS
 
 
@@ -102,7 +108,7 @@ def build_checkerboard_spec(
     n_x, n_y = cols + 1, rows + 1
     square = target.square_m
     board = world.worldbody.add_body(
-        name=CHECKER_BODY, pos=[board_xy[0], board_xy[1], table_z + _BOARD_GEOM_HALF_THICKNESS]
+        name=CHECKER_BODY, pos=[board_xy[0], board_xy[1], table_z + _BOARD_BODY_CLEARANCE]
     )
     for i in range(n_x):
         for j in range(n_y):
@@ -303,6 +309,8 @@ class RecoveryReport:
     position_error_mm: float
     rotation_error_deg: float
     flip: calib.FlipCheckResult
+    recovered_fx_px: float
+    recovered_fy_px: float
 
 
 def _camera_to_gripper_truth(camera_cfg: CameraConfig) -> tuple[np.ndarray, np.ndarray]:
@@ -374,6 +382,8 @@ def report_from_calibration(
         position_error_mm=position_error_mm,
         rotation_error_deg=rotation_error_deg,
         flip=flip,
+        recovered_fx_px=intrinsics.fx,
+        recovered_fy_px=intrinsics.fy,
     )
 
 
@@ -394,7 +404,7 @@ def validate_recovery(
 
     Raises if fewer than ``min_corners_found`` of the ``n_poses`` renders had a detectable
     checkerboard (see `render_calibration_set`'s docstring for why some are expected to fail) --
-    the task this package was set is "15+ arm poses", meaning 15+ *usable* ones.
+    "15+ arm poses" means 15+ *usable* ones, not 15+ requested.
     """
     calib_set = render_calibration_set(
         camera_cfg=camera_cfg, arm_cfg=arm_cfg, target=target, n_poses=n_poses, seed=seed, board_xy=board_xy,
@@ -406,7 +416,10 @@ def validate_recovery(
 
 
 def format_report_table(reports: list[RecoveryReport]) -> str:
-    """A Markdown table -- ``docs/guide/03``'s camera section pastes this directly."""
+    """Recovery-report rows as a Markdown table.
+
+    ``docs/guide/03``'s camera section pastes this directly.
+    """
     header = (
         "| Case | poses (found/requested) | reprojection RMS [px] | focal error [%] | "
         "position error [mm] | rotation error [deg] |\n"
