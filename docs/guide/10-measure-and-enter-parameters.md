@@ -232,7 +232,11 @@ Feetech/Waveshare tool your kit came with provides), read:
 - the supply voltage the servos are actually running at (off the power supply under load is more
   honest than the supply's nameplate rating);
 - the P register (address 21) each servo is set to — LeRobot writes 16 on connect, the factory
-  default is 32; confirm which this team's servos actually have.
+  default is 32; confirm which this team's servos actually have;
+- the CW/CCW dead band (registers 26/27) each servo is set to — the same tool session reads
+  these, and [Robot and servo model](03-robot-and-servo-model.md#reading-the-servo-registers) has
+  the exact commands. `arm.servo_dead_band_counts` wants one number for both registers; if they
+  differ, write down the larger of the two.
 
 **Type into `my_params.yaml`:**
 
@@ -240,6 +244,7 @@ Feetech/Waveshare tool your kit came with provides), read:
 arm:
   supply_voltage_V: 7.35
   servo_p_gain: 16
+  servo_dead_band_counts: 2
 ```
 
 **Run:**
@@ -261,6 +266,12 @@ kitchen scale settles. It needs a lever arm and a scale, or a calibrated stall t
 servo tool, and is out of scope for this page; the parameter file ships the conservative 1.9 N·m
 figure, and both `seating-feasibility` and `force-map` show what changes if the truth turns out
 to be the higher, identified-law number instead.
+
+`arm.servo_dead_band_counts`, like backlash below, has no dedicated report section of its own —
+it is a background contributor to `pick-and-place`'s success rate, not something with an
+immediate number to read. It also feeds the domain-randomization ranges in
+`brick_builder/scene/randomize.py`, so a value entered here changes what a training run sees the
+firmware do, in addition to what a single scripted run does.
 
 ---
 
@@ -369,6 +380,53 @@ where its camera model would come from.
 
 ---
 
+## 7. Joint dry friction — not a kitchen-scale measurement
+
+`arm.joint_friction_Nm` is the dry friction in one servo's gear train, and it now reaches the
+simulator: it sets `ArmConfig.joint_friction_nm`, which every actuated joint's MuJoCo
+`frictionloss` is drawn from. The shipped default is the BAM-identified value the model already
+used, so leaving this alone changes nothing.
+
+There isn't a kitchen-scale procedure for it — the number comes from a system identification
+against a real servo (a scope on the current draw, or a droop/step-response fit like
+[Robot and servo model](03-robot-and-servo-model.md#checking-the-model-against-the-bench)
+describes), which is arm bring-up work, not this page's. Until that identification runs on this
+team's own servos, leave it at the shipped default and `status: assumed`.
+
+**Run**, if you do change it: `params` shows the value the report will use; there is no
+dedicated report section, the same way `arm.backlash_total_deg` has none — it is a background
+contributor to joint dynamics, most visible in the step-response and settling-error figures
+[Robot and servo model](03-robot-and-servo-model.md#figures) regenerates.
+
+---
+
+## 8. Arm print colour — look, don't guess
+
+`bricks.clutch_force_per_stud_N` and every other section on this page is a physical measurement;
+this one is a fact only whoever printed the parts, or has the arm in hand, can state.
+`arm.print_color_r`/`_g`/`_b`
+set the RGBA this team's own printed arm parts render in (`ArmConfig.print_color_rgba`, applied
+to every printed-part material except the STS3215 servos' own black plastic casing). The shipped
+default reproduces the upstream mesh's colour — a golden yellow that has nothing to do with what
+this team actually printed the parts in.
+
+**Type into `my_params.yaml`**, once the colour is known (values 0-1, not 0-255):
+
+```yaml
+arm:
+  print_color_r: 0.85
+  print_color_g: 0.85
+  print_color_b: 0.85
+```
+
+**Run:** `params` reflects the new values immediately; no physics report changes, since this is a
+render-only parameter — its consumer is a vision task's rendered image, not any of the other five
+experiments. A yellow brick against yellow jaws is a real confound for a colour-based perception
+approach, which is the reason this is worth entering accurately rather than leaving at the
+upstream default.
+
+---
+
 ## A worked example
 
 Suppose a teammate spent an afternoon and came back with:
@@ -454,6 +512,8 @@ be filled in before and after, not just after.
 | `arm.torque_limit_Nm` | not a kitchen-scale measurement — see step 4 | `seating-feasibility`, `force-map` |
 | `arm.backlash_total_deg` | ruler at the tool, by feel (total play, not half) | `pick-and-place` |
 | `arm.servo_dead_band_counts` | servo tool, registers 26/27 | `pick-and-place` |
+| `arm.joint_friction_Nm` | not a kitchen-scale measurement — system identification, see guide 03 | no dedicated section |
+| `arm.print_color_r`/`_g`/`_b` | look at the printed arm — not a physics measurement | `params` (render only) |
 | `camera.diagonal_fov_deg`, resolution | printed checkerboard or a sheet of paper | `params` |
 | `bricks.youngs_modulus_GPa` | three-point bend on a wall cut from a brick | `params` |
 | `bricks.tensile_yield_MPa`, `flexural_strength_MPa` | destructive: push a wall sideways to a visible set, then to a crack (guide 02c section 7.7) | `grasp-hold` |
