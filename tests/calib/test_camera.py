@@ -2,8 +2,8 @@
 
 Everything here runs on synthetic geometry (`cv2.projectPoints`, hand-built rotation matrices) --
 no rendering, so this file is fast enough to run outside `-m "not slow"`. The simulated,
-rendering-based validation (item 3 of the task: 15+ known arm poses, a perturbed pose, a perturbed
-field of view) is `test_camera_sim.py`, marked `@pytest.mark.slow`.
+rendering-based validation (15+ known arm poses, a perturbed pose, a perturbed field of view) is
+`test_camera_sim.py`, marked `@pytest.mark.slow`.
 """
 
 from __future__ import annotations
@@ -115,31 +115,62 @@ def _project(objp, rvec, tvec, camera_matrix, dist=None):
     return pts.reshape(-1, 2)
 
 
+def _checkerboard_template(target: C.CheckerboardTarget, px_per_square: int = 80) -> np.ndarray:
+    """A flat, head-on checkerboard image (grayscale, black/white squares): the "physical" board
+    texture :func:`_synthetic_checkerboard_image` warps into a camera view below."""
+    cols, rows = target.pattern
+    squares_x, squares_y = cols + 1, rows + 1
+    img = np.full((squares_y * px_per_square, squares_x * px_per_square), 255, dtype=np.uint8)
+    for r in range(squares_y):
+        for c in range(squares_x):
+            if (r + c) % 2 == 1:
+                img[r * px_per_square:(r + 1) * px_per_square, c * px_per_square:(c + 1) * px_per_square] = 0
+    return img
+
+
+def _synthetic_checkerboard_image(
+    target: C.CheckerboardTarget, rvec: np.ndarray, tvec: np.ndarray, camera_matrix: np.ndarray,
+    width: int = 640, height: int = 480, px_per_square: int = 80,
+) -> np.ndarray:
+    """A synthetic, undistorted photograph of ``target`` at pose ``(rvec, tvec)`` -- a real image
+    `cv2.findChessboardCorners` has to detect a pattern in, not pre-computed corner coordinates it
+    cannot tell apart from real ones. Perspective-warps :func:`_checkerboard_template` with the
+    same board-plane homography (``H = K [r1 r2 t]``) `cv2.projectPoints` uses for the four square
+    corners; every interior pixel in between, not just the internal corners, is correctly warped.
+    """
+    template = _checkerboard_template(target, px_per_square)
+    squares_x, squares_y = target.pattern[0] + 1, target.pattern[1] + 1
+    scale = target.square_m / px_per_square
+    template_to_board = np.array([
+        [scale, 0.0, -0.5 * squares_x * target.square_m],
+        [0.0, scale, -0.5 * squares_y * target.square_m],
+        [0.0, 0.0, 1.0],
+    ])
+    rot, _ = cv2.Rodrigues(rvec)
+    board_to_image = camera_matrix @ np.column_stack([rot[:, 0], rot[:, 1], np.asarray(tvec, dtype=float)])
+    return cv2.warpPerspective(
+        template, board_to_image @ template_to_board, (width, height),
+        flags=cv2.INTER_LINEAR, borderValue=180,
+    )
+
+
 def test_calibrate_intrinsics_recovers_a_known_camera_matrix_from_synthetic_corners():
     target = C.CheckerboardTarget()
-    objp = target.object_points().astype(np.float32)
     true_k = _synthetic_camera_matrix(fx=260.0)
     rng = np.random.default_rng(3)
 
-    # `calibrate_intrinsics` finds corners itself, so drive it through a stand-in: build fake
-    # "images" only to get a consistent `image_size`, and monkeypatch corner-finding by directly
-    # exercising `cv2.calibrateCamera` the same way `calibrate_intrinsics` does, via images that
-    # really do contain the projected pattern rendered as a dummy array shape check instead. To
-    # keep this fast and MuJoCo-free, call `cv2.calibrateCamera` directly here (this is exactly
-    # `calibrate_intrinsics`'s own body) with synthetic corner sets it cannot tell apart from real
-    # ones -- the accuracy claim being tested is `cv2.calibrateCamera`'s own, not corner-detection.
-    obj_points, img_points = [], []
-    for _ in range(10):
+    images = []
+    for _ in range(14):
         rvec = rng.normal(scale=0.15, size=3)
         rvec[2] = 0.0  # keep the board roughly facing the camera
         tvec = np.array([rng.uniform(-0.03, 0.03), rng.uniform(-0.03, 0.03), rng.uniform(0.15, 0.3)])
-        corners = _project(objp, rvec, tvec, true_k)
-        obj_points.append(objp)
-        img_points.append(corners.astype(np.float32))
-    rms, k_rec, dist_rec, _, _ = cv2.calibrateCamera(obj_points, img_points, (640, 480), None, None)
-    assert rms < 0.1
-    assert k_rec[0, 0] == pytest.approx(true_k[0, 0], rel=1e-3)
-    assert k_rec[1, 1] == pytest.approx(true_k[1, 1], rel=1e-3)
+        images.append(_synthetic_checkerboard_image(target, rvec, tvec, true_k))
+
+    result = C.calibrate_intrinsics(images, target=target)
+    assert len(result.used_image_indices) >= 10
+    assert result.rms_reprojection_px < 2.0
+    assert result.fx == pytest.approx(true_k[0, 0], rel=0.03)
+    assert result.fy == pytest.approx(true_k[1, 1], rel=0.03)
 
 
 def test_calibrate_intrinsics_raises_below_three_usable_images():
@@ -288,7 +319,7 @@ def test_parameter_fragment_round_trips_through_yaml_with_the_right_keys():
     hand_eye = C.HandEyeResult(
         rotation_cv=C.quat_wxyz_to_matrix(np.array([0.9, 0.1, 0.2, 0.3])),
         translation_m_cv=np.array([0.0025, 0.07344, 0.00659]),
-        n_poses=18, method="tsai",
+        n_poses=18, method="tsai", used_cv2_binding=False,
     )
     text = C.parameter_fragment(intrinsics, hand_eye, measured_by="unit-test", measured_on="2026-09-25")
     data = yaml.safe_load(text)
@@ -302,6 +333,9 @@ def test_parameter_fragment_round_trips_through_yaml_with_the_right_keys():
         assert cam[key]["status"] == "measured"
     assert cam["fx_px"]["value"] == pytest.approx(254.8)
     assert cam["resolution_width_px"]["value"] == 640
+    # The provenance note names what actually solved AX = XB -- not just echoing the requested
+    # method as if cv2.calibrateHandEye always ran it (see HandEyeResult.solver_description).
+    assert hand_eye.solver_description in cam["mount_x_mm"]["notes"]
 
 
 def test_parameter_fragment_without_hand_eye_omits_mount_keys():
@@ -345,14 +379,69 @@ def test_euler_xyz_pure_roll_matches_the_documented_wrist_cam_quat_convention():
 
 def test_camera_config_from_params_reproduces_the_shipped_default():
     """The shipped `configs/params/default.yaml` camera block was written to match
-    `patch_so101`'s module constants exactly (see its own notes fields); this is the conversion
-    that was missing (`params.CameraSettings`'s own docstring) to prove it end to end."""
+    `CameraConfig()`'s own defaults exactly (`fx_px`/etc. at `status: assumed`, derived from
+    `diagonal_fov_deg`, not a real calibration -- see the file's own notes fields); loading it must
+    reproduce the default `CameraConfig` exactly, not merely something with the same numbers."""
     from brick_builder import params as P
-    from brick_builder.robot.patch_so101 import WRIST_CAM_POS_IN_GRIPPER, WRIST_CAM_QUAT_IN_GRIPPER
+    from brick_builder.robot.patch_so101 import CameraConfig
 
     pf = P.load_params(P.DEFAULT_PARAMS_PATH)
     cfg = C.camera_config_from_params(pf)
-    assert cfg.resolution == (640, 480)
-    assert cfg.pos_in_gripper == pytest.approx(tuple(WRIST_CAM_POS_IN_GRIPPER), abs=1e-6)
-    assert cfg.quat_in_gripper == pytest.approx(tuple(WRIST_CAM_QUAT_IN_GRIPPER), abs=1e-5)
-    assert cfg.fovy_deg() == pytest.approx(cfg.fovy_deg(), abs=1e-3)  # sanity: does not raise/NaN
+    default = CameraConfig()
+    assert not cfg.uses_measured_intrinsics
+    # Field by field with a tolerance, not `cfg == default`: the file's numbers went through a
+    # YAML round trip and an Euler-angle-to-quaternion conversion, `default`'s did not, and a
+    # `.225`-class literal is not bit-identical to the same value computed as `0.5 * (-0.35 - 0.10)`
+    # even though both are "the same number" to any precision anyone would ever type or read.
+    assert cfg.resolution == default.resolution
+    assert cfg.diagonal_fov_deg == pytest.approx(default.diagonal_fov_deg)
+    assert cfg.distortion_k1 == pytest.approx(default.distortion_k1)
+    assert cfg.distortion_k2 == pytest.approx(default.distortion_k2)
+    assert cfg.pos_in_gripper == pytest.approx(default.pos_in_gripper, abs=1e-9)
+    assert cfg.quat_in_gripper == pytest.approx(default.quat_in_gripper, abs=1e-6)
+    assert cfg.fovy_deg() == pytest.approx(default.fovy_deg())
+
+
+def test_camera_config_from_params_switches_to_measured_intrinsics_only_when_measured(tmp_path):
+    """A member's terse override (`camera: {fx_px: 300.0, ...}`, a bare scalar -- `status:
+    measured` by `brick_builder.params`'s own shorthand convention) must switch the built config
+    onto the measured-intrinsics path; the shipped default file's own `assumed` values (previous
+    test) must not."""
+    from brick_builder import params as P
+
+    override = tmp_path / "override.yaml"
+    override.write_text(
+        "camera:\n  fx_px: 300.0\n  fy_px: 300.0\n  cx_px: 330.0\n  cy_px: 250.0\n"
+    )
+    pf = P.load_params(override)
+    assert pf.get("camera.fx_px").status == "measured"
+    cfg = C.camera_config_from_params(pf)
+    assert cfg.uses_measured_intrinsics
+    assert cfg.resolved_intrinsics_px() == pytest.approx((300.0, 300.0, 330.0, 250.0))
+
+
+def test_to_arm_config_measured_intrinsics_file_reaches_the_compiled_model(tmp_path):
+    """`brick_builder.params.to_arm_config`'s `camera` field is not just a Python-side dataclass:
+    a measured-intrinsics override must switch the *compiled* wrist camera onto MuJoCo's
+    pixel-intrinsics model too, with a checkably different frustum from the default."""
+    import mujoco
+
+    from brick_builder import params as P
+    from brick_builder.robot.patch_so101 import ArmConfig, WRIST_CAM, build_arm_spec
+
+    override = tmp_path / "override.yaml"
+    override.write_text(
+        "camera:\n  fx_px: 300.0\n  fy_px: 300.0\n  cx_px: 330.0\n  cy_px: 250.0\n"
+    )
+    pf = P.load_params(override)
+    arm_cfg = P.to_arm_config(pf)
+    assert arm_cfg.camera.uses_measured_intrinsics
+
+    model = build_arm_spec(arm_cfg).compile()
+    cam = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, WRIST_CAM)
+    assert tuple(model.cam_sensorsize[cam]) != (0.0, 0.0)
+    # 300 px focal is longer than the 254.828 px default -> a narrower, checkably different fovy,
+    # not just a different Python-side CameraConfig that never reached the compiled model.
+    default_model = build_arm_spec(ArmConfig()).compile()
+    default_cam = mujoco.mj_name2id(default_model, mujoco.mjtObj.mjOBJ_CAMERA, WRIST_CAM)
+    assert model.cam_fovy[cam] < default_model.cam_fovy[default_cam]

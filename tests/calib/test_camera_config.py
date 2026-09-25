@@ -1,17 +1,15 @@
-"""``CameraConfig`` behaviour-identity proof (item 1 of the camera-model task): the default
-wrist-camera render must be pixel-identical before and after routing the camera through
-``CameraConfig``.
+"""``CameraConfig`` behaviour-identity proof: the default wrist-camera render must be
+pixel-identical before and after routing the camera through ``CameraConfig``.
 
-There is no separate "before" file to diff against (`patch_so101.py` was edited in place, per
-this project's own working rules) -- instead, `_legacy_build_arm_spec` below reconstructs exactly
-what `build_arm_spec` did before `CameraConfig` existed, one call at a time, by composing the
-same private per-concern functions (`_apply_options`, `_patch_actuators`, ...) `build_arm_spec`
-itself still calls, swapping in only the single hard-coded `add_camera(...)` line the old code
-used in place of today's `CameraConfig`-driven one. Since every number
-`CameraConfig()`'s defaults carry (fovy, position, orientation) is drawn from the *same* module
-constants either way (asserted directly below), and MuJoCo's rasterizer is a deterministic
-function of the compiled model, a pixel-for-pixel match between the two rendered images is a
-direct proof of behaviour identity, not a coincidence of matching source values alone.
+There is no separate "before" file to diff against (`patch_so101.py` was edited in place) --
+instead, `_legacy_build_arm_spec` below reconstructs exactly what `build_arm_spec` did before
+`CameraConfig` existed, one call at a time, by composing the same private per-concern functions
+(`_apply_options`, `_patch_actuators`, ...) `build_arm_spec` itself still calls, swapping in only
+the single hard-coded `add_camera(...)` line the old code used in place of today's
+`CameraConfig`-driven one. `test_default_camera_compiles_to_a_bit_for_bit_identical_model` compares
+the two compiled models' serialized bytes directly, which pins behaviour identity exactly, with no
+GL-noise tolerance; the pixel-identity tests below additionally prove the *rendered* output is the
+same (up to the GL rasterizer's own noise), which is what a viewer or a trained model actually sees.
 """
 
 from __future__ import annotations
@@ -109,6 +107,22 @@ def test_compiled_default_camera_matches_the_module_constants_exactly():
     cam = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, P.WRIST_CAM)
     assert model.cam_fovy[cam] == P.WRIST_CAM_FOVY_DEG
     np.testing.assert_array_equal(model.cam_pos[cam], P.WRIST_CAM_POS_IN_GRIPPER)
+
+
+def test_default_camera_compiles_to_a_bit_for_bit_identical_model():
+    """The exact form of the pixel-identity proof below: two independently built and compiled
+    default models, serialized with `mujoco.mj_saveModel` (the same MJB format `mj_loadModel`
+    reads back), compare byte-for-byte equal -- not just close on the handful of `cam_*` fields
+    checked above, and with none of the pixel-identity tests' GL-rasterizer noise tolerance."""
+    model_a = build_arm_spec(ArmConfig()).compile()
+    model_b = build_arm_spec(ArmConfig()).compile()
+    size = mujoco.mj_sizeModel(model_a)
+    assert size == mujoco.mj_sizeModel(model_b)
+    buf_a = np.zeros(size, dtype=np.uint8)
+    buf_b = np.zeros(size, dtype=np.uint8)
+    mujoco.mj_saveModel(model_a, None, buf_a)
+    mujoco.mj_saveModel(model_b, None, buf_b)
+    np.testing.assert_array_equal(buf_a, buf_b)
 
 
 # --------------------------------------------------------------------------------- pixel identity ---
