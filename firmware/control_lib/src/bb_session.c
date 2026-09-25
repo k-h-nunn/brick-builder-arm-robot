@@ -190,13 +190,13 @@ static void on_tick_begin(bb_session *s)
     /* When the bus is real the controller drives it here and reports what came back as
      * telemetry; when the plant is simulated the host writes these targets itself. */
     if (s->bus != 0 && n > 0) {
-        double torque[BB_NJOINT];
-        int j;
-        for (j = 0; j < BB_NJOINT; ++j) {
-            torque[j] = 1.0;
-        }
         for (i = 0; i < n; ++i) {
-            s->bus->write(s->bus->ctx, s->out.cmd[i].q, torque, BB_NJOINT);
+            /* The compliance scalars as per-joint torque limits, as `ArmDriver.step` sets them:
+             * the vertical one on shoulder lift, elbow flex and wrist flex, the lateral one on
+             * shoulder pan and wrist roll, the gripper at its full limit. */
+            const bb_command *c = &s->out.cmd[i];
+            double torque[BB_NJOINT] = {c->c_lat, c->c_vert, c->c_vert, c->c_vert, c->c_lat, 1.0};
+            s->bus->write(s->bus->ctx, c->q, torque, BB_NJOINT);
         }
         s->bus->read(s->bus->ctx, s->bus_state.position, s->bus_state.speed,
                      s->bus_state.load, BB_NJOINT);
