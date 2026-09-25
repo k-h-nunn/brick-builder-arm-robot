@@ -257,3 +257,99 @@ The same three passes without rendering:
 ```
 CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl python scripts/make_damage_video.py --probe
 ```
+
+# Two-brick stack video
+
+[![Two-brick stack, step Verify](../media/hd/two-brick-stack-verify.png)](../media/hd/two-brick-stack-verify.png)
+
+The 1920x1080 file is not in the repository (`*.mp4` is git-ignored); the command under
+Reproduction writes it to `media_out/hd/brick_builder_arm_robot_two_brick_build_1080p.mp4`.
+
+| Step | Frame |
+|---|---|
+| Align, second brick | [two-brick-stack-align.png](../media/hd/two-brick-stack-align.png) |
+| Verify | [two-brick-stack-verify.png](../media/hd/two-brick-stack-verify.png) |
+
+## Run conditions
+
+| Item | Value |
+|---|---|
+| Command | `put a blue 2x2 at column 5 row 4 then put a blue 2x2 on top of the blue brick` |
+| Compiled placements | `2x2 (4,3,0) blue`, `2x2 (4,3,1) blue` (task `stack_2`) |
+| Cycle 1 | Placement of the DUPLO 2x2 held in the stock SO-101 gripper |
+| Cycle 2 | Fetch a DUPLO 2x2 off the table, place it on the first |
+| Baseplate offset from nominal | 6.1 mm, 2.2 deg (unknown to the controller) |
+| Scene model, control input | Simulator ground truth |
+| Scene model, panels | Convolutional scene model, checkpoint `3e07a382` |
+| Controller | Target-sequence tracking at 10 Hz, analytic inverse |
+| Target sequences | Recorded in the digital twin from the goal and nominal parameters, one per cycle |
+| Video | 1920x1080, 30 fps, H.264, 58.7 s, 1762 frames, single take, seed 0, one world for both cycles |
+
+## On-screen elements
+
+As the placement video, with two changes: the bottom row holds "Observed scene state" (the
+convolutional scene model's segmentation) beside "Ground truth segmentation", and a title line
+under the panels carries the command.
+
+## Results
+
+Recorded run: both bricks seated on target. First brick on the plate, lateral error 0.07 mm,
+depth error 0.00 mm. Second brick on the first (`lower_bodies` = the first brick), lateral error
+0.10 mm, depth error 0.00 mm, bottom face 0.44 mm below the nominal layer-1 height.
+
+Seeds 0-9, each cycle in its own world, ground truth driving: second brick seated 10/10, whole
+build 9/10 (Wilson 95 % 60-98 %); see
+[Closed-loop control, Two-brick builds](../guide/12-closed-loop-control.md#two-brick-builds-seeds-0-9).
+
+## Control input
+
+The take is driven by the simulator's ground truth, not the convolutional scene model. With the
+convolutional model driving, the same world was run headless first (`--probe`) and the second
+brick did not seat on any seed tried:
+
+| Build | Target sequences recorded with | Seeds | Result |
+|---|---|---|---|
+| Stack | ground truth | 0, 1 | first brick seated on both; second brick 61 mm (seed 0) and 95 mm (seed 1) off the cell |
+| Stack | the convolutional model | 1, 5 | first brick not seated on either |
+| Stack | the convolutional model | 0, 2, 3 | run stopped at Lift: no reference blob to line up on |
+| Side by side | ground truth | 8 | neither brick seated |
+
+Two perception failures, read off the panels at the second cycle: at Lift the white 2x4 on the
+table is not segmented, so the step has no reference blob; at Align the held blue brick and the
+blue brick under it are one instance, so Align has no measurement and the press starts from a
+scene-state error of 14.6 mm.
+
+## QA
+
+Run on the file and the stills by the script after the take (`--qa-only` repeats it):
+
+| Check | Result |
+|---|---|
+| Frame size | 1920x1080 RGB, file and six stills |
+| Text boxes intersecting | none, on every frame (`check_layout`) and on each still |
+| Smallest font | 24 px (panel titles); floor 22 px |
+| Code identifiers on screen | none |
+| Step names | Approach, Grasp, Lift, Transport, Align, Press the brick down, Release, Retract, Verify |
+| Studs | one colour per brick and on the baseplate, over every visual geom |
+| Main view | mean horizontal pixel gradient 0.93-2.74 on the six stills, limit 5.0 |
+
+The main-view check was added after the first take of this video: that take closed the first
+cycle's episode mid-recording, `SceneRenderer.close` freed its GL objects in the recorder's
+context, and the main view was noise from the second cycle on. The script now closes both
+episodes after the take.
+
+## Reproduction
+
+```
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=3 \
+  python scripts/make_campaign_video.py --task stack_2 --seed 0
+```
+
+Six stills, 100 % crops of every text area and `manifest.json` go to
+`media_out/hd/two_brick_build_stills/`. The same world without rendering, with the
+convolutional model driving:
+
+```
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl python scripts/make_campaign_video.py \
+  --task stack_2 --seed 0 --cnn-drives --targets truth --probe
+```
