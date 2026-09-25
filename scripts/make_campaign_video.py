@@ -81,6 +81,10 @@ READOUTS = tuple(replace(r, text=True) if r.key == "press_n" else r for r in CL_
 """The closed-loop readouts, the press force as a live value: a dash when the arm is not
 pushing down on the brick, instead of the last press held on screen."""
 
+ERROR_LABEL = next(r.label for r in READOUTS if r.key == "err_mm")
+"""Scene-state error readout: its number is a dash in a step with no measurement yet, and its
+trace keeps the measured history."""
+
 ARM_INSTANCE = 10_000
 """Instance id the main view's segmentation pass gives the arm's bodies, for the QA check that
 no text box covers the robot."""
@@ -137,7 +141,12 @@ class TitleOverlay(Overlay):
     yet, and the strip takes its box back when the card goes.
     """
 
+    blank: frozenset = frozenset()
+    """Readout labels drawn with a dash for a number on this frame."""
+
     def draw(self, picture, *, title=None, subtitle=None, readouts=(), **kw):
+        readouts = tuple(replace(r, value=None) if r.label in self.blank else r
+                         for r in readouts)
         if not title:
             return super().draw(picture, title=None, subtitle=subtitle, readouts=readouts, **kw)
         from PIL import Image, ImageDraw
@@ -230,6 +239,8 @@ class CommandRecorder(Recorder):
     def compose(self, tick, video_t):
         from PIL import Image, ImageDraw
 
+        self.overlay.blank = (frozenset() if tick.data.get("err_live", True)
+                              else frozenset({ERROR_LABEL}))
         composed, rects, span, overrun, ray = super().compose(tick, video_t)
         ov = self.overlay
         base = Image.fromarray(np.ascontiguousarray(composed), mode="RGB").convert("RGBA")
@@ -290,6 +301,8 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
     With `panels` set to `None` nothing is drawn, and every control tick, every observation the
     loop makes and every physics step is the same as with it: that is the probe. `segments`
     collects, per step in the order run, `[step, ticks, measured ticks, last measured error]`.
+    `err_live` in each tick's data is false until the current step has returned a scene-state
+    error, so the readout shows a dash rather than an earlier step's value.
     """
     from brick_builder.control.pick_place import gripper_press_force
 
@@ -304,6 +317,7 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
 
     hold_tcp = episode.world.feedback(episode.ideal.frames[0].commands[0].grip).tcp_pos.copy()
     grip0 = episode.ideal.frames[0].commands[0].grip
+    last["err_live"] = False
     state, rgb = episode.world.observe_rgb()
     if panels is not None:
         panels.update(rgb, episode.ideal.frames[0].label, truth(scene), window=truth.window)
@@ -315,7 +329,11 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
         contact()
         yield Tick(scene=scene, phase=episode.ideal.frames[0].step, data=dict(last))
 
+    step = None
     for rec in episode.run():
+        if rec.step != step:
+            step = rec.step
+            last["err_live"] = False
         if segments is not None:
             if not segments or segments[-1][0] != rec.step:
                 segments.append([rec.step, 0, 0, float("nan")])
@@ -329,11 +347,13 @@ def cycle_motion(scene, episode, panels, truth, brick, *, lead_seconds: float,
                 last["miou"] = panels.miou
         if rec.err_mm == rec.err_mm:
             last["err_mm"] = float(rec.err_mm)
+            last["err_live"] = True
         if rec.predict_mm == rec.predict_mm:
             last["predict_mm"] = float(rec.predict_mm)
         contact()
         yield Tick(scene=scene, phase=rec.step, data=dict(last))
 
+    last["err_live"] = False
     if on_hold is not None:
         on_hold()
     park = episode.ideal.frames[-1].commands[-1]
