@@ -297,3 +297,9 @@ paraphrase: a blue 2x2 brick, on top of the red 2x2 brick at column 1, row 1
 placement text:
 2x2 (0,0,1) blue
 ```
+
+## Scene-target environment commands
+
+`python -m brick_builder.rl.scene_target.targets` (viewing-pose target-sequence caches) and
+`python -m brick_builder.rl.scene_target.bench` (calibration, throughput, open-loop replay):
+[Scene-target environment](17-scene-target-environment.md#commands).
