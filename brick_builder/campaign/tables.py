@@ -55,6 +55,17 @@ def task_table(rows: Sequence[dict], task: str) -> str:
     if task in PUBLISHED_TEXT:
         lines.append(f"| published | ground truth | -- | {PUBLISHED_TEXT[task]} | -- | -- | "
                      "-- | -- | -- | -- | -- | -- |")
+    recheck = next((r for r in analytic[1:] if r["predictor"] == "analytic"
+                    and r["round"] != analytic[0]["round"]), None) if analytic else None
+    if recheck:
+        lines.append(
+            f"| recheck (round {recheck['round']}) | analytic | -- | "
+            f"{recheck['seated_on_target']} | "
+            f"{100 * recheck['wilson_low']:.0f}-{100 * recheck['wilson_high']:.0f} % | "
+            f"{recheck['bricks_on_target']} | "
+            f"{_fmt(recheck['lateral_mm_median'])} | {_fmt(recheck['median_tracking_mm'])} | "
+            f"{_fmt(recheck['median_prediction_mm'])} | {_fmt(recheck['ticks_align'], 0)} | "
+            "-- | -- |")
     for r in learned:
         lines.append(
             f"| {r['round']} | learned | {r['version']} | {r['seated_on_target']} | "
