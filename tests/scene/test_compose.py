@@ -249,6 +249,40 @@ def test_the_weld_grip_never_slips_when_no_ceiling_is_set():
     assert scene.data.eq_active[scene.weld_eq] == 1
 
 
+def test_the_ceiling_has_no_effect_on_a_loop_that_steps_mujoco_directly():
+    """`weld_slip_force` only takes effect through `Scene.step` or `push_held_brick`, the only
+    two callers of `_release_overloaded_weld`. Every default weld-mode env/control loop in this
+    project steps the model with its own `mujoco.mj_step` instead (see `weld_slip_force`'s own
+    docstring for the list), so setting the parameter on a scene one of those loops runs has no
+    effect. This pins that limitation down instead of letting it regress silently one way or the
+    other."""
+
+    ceiling = weld_slip_ceiling(SceneConfig())
+    scene = build_scene(SceneConfig(weld_slip_force=ceiling))
+    scene.step(200)
+
+    bid = mujoco.mj_name2id(scene.model, mujoco.mjtObj.mjOBJ_BODY, scene.held_name)
+    scene.data.xfrc_applied[bid, :3] = [0.0, 0.0, -2.0 * ceiling]
+    for _ in range(500):
+        scene.snap.update(scene.model, scene.data)
+        mujoco.mj_step(scene.model, scene.data)  # note: no `_release_overloaded_weld` call
+    scene.data.xfrc_applied[bid, :3] = 0.0
+    assert scene.data.eq_active[scene.weld_eq] == 1, "a raw mj_step loop should never see the ceiling"
+
+
+def test_push_held_brick_never_reports_a_weld_release_in_friction_mode():
+    """`weld_released` means *this call* turned an active weld off. In friction mode the weld was
+    never active (`eq_active` is 0 from the reset on), so a friction-mode pull must not claim a
+    release that never happened."""
+
+    scene = build_scene(SceneConfig(grasp_mode="friction"))
+    scene.step(200)
+    assert scene.data.eq_active[scene.weld_eq] == 0
+
+    report = push_held_brick(scene, force=1.0, seconds=0.2)
+    assert not report["weld_released"], report
+
+
 def test_the_world_has_the_frame_the_spec_fixes(built):
     """Arm base at the origin, table top at z = 0, plate centre inside 0.10-0.24 m of the base."""
     model = built.model

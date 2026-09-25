@@ -335,7 +335,9 @@ class SceneConfig:
 
     home_tcp: tuple[float, float, float] | None = None
     """Where the TCP stands after a reset; ``None`` = centred over the plate, ``home_hover``
-    above it (measured from the brick's bottom face when a brick is held)."""
+    above it (measured from the brick's bottom face when a brick is held).  A tall stack (three or
+    more layers at this plate radius) can push that computed target outside the arm's reach; pass
+    an explicit reachable pose here in that case (`home_pose` raises `RuntimeError` otherwise)."""
 
     home_hover: float = 0.02
     home_yaw: float = 0.0
@@ -357,14 +359,24 @@ class SceneConfig:
     position, which is what a real pinch grip does."""
 
     weld_slip_force: float | None = None
-    """Load [N] above which the soft weld releases (``eq_active`` -> 0), the one failure mode a
-    MuJoCo weld equality does not have on its own: held hard enough, it simply keeps transmitting
-    whatever force it takes, which is not what the stock jaws' friction grip does.  ``None`` (the
-    default) keeps that unlimited hold, because `envs/press_env.py` reads its own press force
-    through this exact weld and no press strategy has been re-specified yet for a grip that can
-    slip; turning a ceiling on by default would silently change what every existing weld-mode
-    scene reports.  :func:`weld_slip_ceiling` gives the physically grounded value to pass
-    instead."""
+    """Weld slip ceiling [N].
+
+    Load above which :func:`_release_overloaded_weld` deactivates the soft weld (``eq_active`` ->
+    0) the next time it runs, the one failure mode a MuJoCo weld equality does not have on its
+    own: held hard enough, it simply keeps transmitting whatever force it takes, which is not what
+    the stock jaws' friction grip does.
+
+    It only takes effect where something calls :meth:`Scene.step` or :func:`push_held_brick`,
+    which are the only two callers of :func:`_release_overloaded_weld`.  A control loop that steps
+    the model with its own ``mujoco.mj_step`` instead of one of those never checks this ceiling,
+    so setting it has no effect there: as of this module's last check, that is every default
+    weld-mode loop in the project -- ``envs/base_env.py`` (and so ``envs/press_env.py``, which
+    hard-codes ``grasp_mode="weld"``), ``control/skill_fsm.py``, ``control/pick_place.py``,
+    ``hardware/twin_sync.py`` and ``hardware/virtual_bus.py``.  ``None`` (the default) keeps the
+    unlimited hold every one of those loops already measures against; turning a ceiling on by
+    default would silently change what they report, and none of them has been re-specified yet
+    for a grip that can slip.  :func:`weld_slip_ceiling` gives the physically grounded value to
+    pass once a caller applies it."""
 
     brick_friction: float = 0.35
     """Sliding friction between bricks and between a brick and the plate.
@@ -1123,12 +1135,14 @@ def _write_weld(model: mujoco.MjModel, data: mujoco.MjData, eq: int, body1: int,
 
 
 def weld_slip_ceiling(cfg: SceneConfig) -> float:
-    """Load [N] the stock jaws' friction grip can hold before it slips, for `weld_slip_force`.
+    """Weld slip ceiling from the stock jaws [N].
 
     Two contacts (fixed jaw, moving jaw), each pressed at the arm's measured grip force
-    (`ARM_GRIP_FORCE_N`, docs/guide/02c) and carrying `cfg.brick_friction` -- the same ABS-on-ABS
-    number that pair uses everywhere else in this scene: ``2 * grip_force * friction``, about
-    11.9 N at the defaults (17 N x 0.35 x 2).
+    (`ARM_GRIP_FORCE_N`, docs/guide/02c) and carrying `cfg.brick_friction`: ``2 * grip_force *
+    friction``, about 11.9 N at the defaults (17 N x 0.35 x 2).  `cfg.brick_friction`'s default of
+    0.35 is the ABS-on-ABS coefficient docs/guide/02c records as having no source (0.2 to 0.5 is
+    the randomization range given instead), so this ceiling is only as grounded as that number:
+    2.4 to 6.0 N at the range's ends.
     """
 
     return 2.0 * ARM_GRIP_FORCE_N * cfg.brick_friction
@@ -1139,8 +1153,13 @@ def _release_overloaded_weld(scene: Scene) -> bool:
 
     A no-op whenever that ceiling is `None` (the default), the weld is absent, or it is already
     inactive (``friction`` grasp mode).  Mimics the stock jaws' friction grip slipping -- the one
-    failure mode a MuJoCo weld equality does not have on its own.  Returns whether it just
-    released, so a caller can report it.
+    failure mode a MuJoCo weld equality does not have on its own.  Called from `Scene.step` and
+    `push_held_brick` only; see `SceneConfig.weld_slip_force` for the loops that step a scene
+    without going through either and so never reach this check.  Compares the full 3-D
+    translational weld force against the ceiling, which is an approximation of jaw-face friction,
+    not a model of it: a real friction limit only bounds load along the jaw faces (load along the
+    squeeze axis is carried by jaw normal force instead), and this check does not limit the
+    torque rows at all.  Returns whether it just released, so a caller can report it.
     """
 
     limit = scene.cfg.weld_slip_force
@@ -1366,12 +1385,16 @@ def push_held_brick(
     In ``weld`` grasp mode with ``cfg.weld_slip_force`` set, this also checks the weld against
     that ceiling every step (:func:`_release_overloaded_weld`), so a pull past it releases the
     weld the same way it would during any other stepping of the scene, and the report says so.
+    ``report["weld_released"]`` is ``True`` only when this call is the one that turned the weld
+    off; in ``friction`` grasp mode, or with no weld at all, it is ``False`` -- ``eq_active`` is
+    already ``0`` before the pull starts, so nothing here released it.
     """
 
     model, data = scene.model, scene.data
     bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, scene.held_name)
     vec = np.asarray(direction, dtype=float)
     vec = vec / np.linalg.norm(vec) * force
+    weld_was_active = bool(scene.weld_eq >= 0 and scene.data.eq_active[scene.weld_eq])
 
     def in_hand() -> np.ndarray:
         tcp_pos, tcp_rot = scene.tcp_pose()
@@ -1396,7 +1419,7 @@ def push_held_brick(
         "peak_slip_m": peak,
         "warnings": scene.warnings(),
         "grasp_mode": _grasp_mode(scene.cfg),
-        "weld_released": bool(scene.weld_eq >= 0 and not scene.data.eq_active[scene.weld_eq]),
+        "weld_released": bool(weld_was_active and not scene.data.eq_active[scene.weld_eq]),
     }
 
 
