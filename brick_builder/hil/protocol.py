@@ -32,12 +32,13 @@ MSG_STATUS = 0x08
 MSG_ERROR = 0x09
 MSG_TICK_BEGIN = 0x0A
 MSG_RESET = 0x0B
+MSG_START = 0x0C
 
 NAMES = {
     MSG_HELLO: "HELLO", MSG_TARGET_BUNDLE: "TARGET_BUNDLE", MSG_BUNDLE_ACK: "BUNDLE_ACK",
     MSG_SCENE_STATE: "SCENE_STATE", MSG_BUS_READINGS: "BUS_READINGS", MSG_TARGETS: "TARGETS",
     MSG_TICK_LOG: "TICK_LOG", MSG_STATUS: "STATUS", MSG_ERROR: "ERROR",
-    MSG_TICK_BEGIN: "TICK_BEGIN", MSG_RESET: "RESET",
+    MSG_TICK_BEGIN: "TICK_BEGIN", MSG_RESET: "RESET", MSG_START: "START",
 }
 
 ERRORS = {1: "bad CRC", 2: "bad length", 3: "bad sequence", 4: "bundle too large",
@@ -143,6 +144,14 @@ def scene_state(frame_id: int, host_t: float, slots, depth, slot_ids) -> bytes:
     return body
 
 
+def start(q_home) -> bytes:
+    """START: the five joint angles the arm starts at, the inverse kinematics' first seed."""
+    q = np.ascontiguousarray(q_home, dtype="<f8")
+    if q.shape != (5,):
+        raise ProtocolError(f"START carries five joint angles, got {q.shape}")
+    return q.tobytes()
+
+
 def bus_readings(position, speed, load) -> bytes:
     return (np.ascontiguousarray(position, dtype="<f8").tobytes()
             + np.ascontiguousarray(speed, dtype="<f8").tobytes()
@@ -222,15 +231,21 @@ class Status:
     ik_failures: int
     tick_us_mean: float
     tick_us_max: float
+    bus_writes: int = 0
+    bus_dropped: int = 0
+    bus_period_us_max: int = 0
+    """The 50 Hz bus writer's counters; zero where nothing paces a bus."""
 
 
 def parse_status(payload: bytes) -> Status:
     version, n_frames, ticks, bad_crc, resyncs = struct.unpack_from("<5I", payload, 0)
     (ik_failures,) = struct.unpack_from("<i", payload, 20)
     mean, worst = struct.unpack_from("<2d", payload, 24)
+    bus = struct.unpack_from("<3I", payload, 40) if len(payload) >= 52 else (0, 0, 0)
     return Status(version=version, n_frames=n_frames, ticks=ticks, bad_crc=bad_crc,
                   resyncs=resyncs, ik_failures=ik_failures, tick_us_mean=mean,
-                  tick_us_max=worst)
+                  tick_us_max=worst, bus_writes=bus[0], bus_dropped=bus[1],
+                  bus_period_us_max=bus[2])
 
 
 def parse_error(payload: bytes) -> tuple[int, int]:

@@ -13,6 +13,8 @@ TICK_LOG. Nothing advances on the controller's own clock.
 from __future__ import annotations
 
 import ctypes
+import os
+import select
 import subprocess
 import time
 from pathlib import Path
@@ -44,6 +46,7 @@ class SilController:
         self.ticks = 0
         self.tick_seconds = 0.0
         self.worst_seconds = 0.0
+        self._begin_seconds = 0.0
 
     def start(self, blob: bytes, q_home) -> None:
         self._blob = ctypes.create_string_buffer(blob, len(blob))
@@ -57,7 +60,7 @@ class SilController:
         t0 = time.perf_counter()
         n = self.lib._lib.bb_tick_begin(ctypes.cast(self._ctrl, ctypes.c_void_p),
                                         ctypes.byref(self._out))
-        self._account(time.perf_counter() - t0)
+        self._begin_seconds = time.perf_counter() - t0
         out = self._out
         commands = [
             P.TickCommand(pos=np.array(out.cmd[i].pos), spin=out.cmd[i].spin,
@@ -84,7 +87,8 @@ class SilController:
         self.lib._lib.bb_tick_end(ctypes.cast(self._ctrl, ctypes.c_void_p),
                                   ctypes.byref(self._slots), ctypes.byref(self._bus),
                                   ctypes.byref(self._out))
-        self._account(time.perf_counter() - t0)
+        self._account(time.perf_counter() - t0 + self._begin_seconds)
+        self._begin_seconds = 0.0
         out = self._out
         return P.TickLog(
             k=out.k, step_index=out.step_index, step_id=out.step_id, holds=out.holds,
@@ -94,6 +98,7 @@ class SilController:
             absolute_mm=out.absolute_mm, predict_mm=out.predict_mm, yaw_err=out.yaw_err)
 
     def _account(self, dt: float) -> None:
+        """One vision tick: `bb_tick_begin` plus `bb_tick_end`, as the session counts it."""
         self.ticks += 1
         self.tick_seconds += dt
         self.worst_seconds = max(self.worst_seconds, dt)
@@ -118,6 +123,7 @@ class _WireController:
         self.timeout = timeout
         self.pending: list[P.Frame] = []
         self.corruptions = 0
+        self._damage: tuple[int, str] | None = None
 
     # -- transport, provided by the subclass -------------------------------------------------
 
@@ -131,7 +137,17 @@ class _WireController:
 
     def _write(self, msg_type: int, payload: bytes = b"") -> None:
         self.seq = (self.seq + 1) & 0xFFFF
-        self._send(P.encode(msg_type, payload, seq=self.seq))
+        frame = P.encode(msg_type, payload, seq=self.seq)
+        if self._damage is not None and self._damage[0] == msg_type:
+            kind = self._damage[1]
+            self._damage = None
+            self.corruptions += 1
+            if kind == "lose":
+                return
+            frame = bytearray(frame)
+            frame[len(frame) // 2] ^= 0xFF
+            frame = bytes(frame)
+        self._send(frame)
 
     def _await(self, want: int, *, deadline: float | None = None) -> P.Frame:
         end = time.monotonic() + self.timeout if deadline is None else deadline
@@ -160,6 +176,12 @@ class _WireController:
                 raise ControllerError(f"controller refused the bundle (code {status})")
         if received != len(blob):
             raise ControllerError(f"controller took {received} of {len(blob)} bundle bytes")
+        # The same seed `SilController` hands `bb_control_init`: the arm's own starting joint
+        # angles, so the first inverse-kinematics solve starts where the arm is.
+        self._write(P.MSG_START, P.start(q_home))
+        status, received = P.parse_bundle_ack(self._await(P.MSG_BUNDLE_ACK).payload)
+        if status != 0:
+            raise ControllerError(f"controller refused to start (code {status})")
 
     def tick_begin(self) -> P.Targets:
         self._write(P.MSG_TICK_BEGIN)
@@ -175,6 +197,13 @@ class _WireController:
     def status(self) -> P.Status:
         self._write(P.MSG_STATUS)
         return P.parse_status(self._await(P.MSG_STATUS).payload)
+
+    def damage_next(self, msg_type: int, kind: str = "crc") -> None:
+        """Damage the next outgoing frame of `msg_type`: `crc` flips a byte in its middle,
+        `lose` never sends it. What a lock-step host sees next is a timeout, as it should."""
+        if kind not in ("crc", "lose"):
+            raise ValueError(f"unknown damage {kind!r}")
+        self._damage = (msg_type, kind)
 
     def inject_corruption(self, kind: str = "crc") -> None:
         """Send a deliberately damaged frame. `crc` flips a payload byte after the CRC is
@@ -214,6 +243,9 @@ class ProcessController(_WireController):
                     if time.monotonic() > deadline:
                         raise ControllerError("the runner never accepted a connection")
                     time.sleep(0.05)
+            # Lock step sends two small frames back to back; without this the second waits
+            # for the first one's delayed acknowledgement, about 40 ms a tick.
+            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.socket.settimeout(0.5)
         else:
             self.proc = subprocess.Popen([str(self.runner), "--stdio"],
@@ -233,7 +265,12 @@ class ProcessController(_WireController):
                 return self.socket.recv(65536)
             except OSError:
                 return b""
-        data = self.proc.stdout.read(65536)
+        # Wait with a bound, so a reply that never comes ends in the timeout `_await` reports
+        # rather than in a read that blocks for ever.
+        ready, _, _ = select.select([self.proc.stdout], [], [], 0.5)
+        if not ready:
+            return b""
+        data = os.read(self.proc.stdout.fileno(), 65536)
         if not data:
             raise ControllerError("the runner closed its output stream")
         return data
@@ -273,6 +310,11 @@ class SerialController(_WireController):
         # The board reboots when the bridge asserts DTR; give it a moment and drop the banner.
         time.sleep(0.5)
         self.port.reset_input_buffer()
+
+    def start(self, blob: bytes, q_home) -> None:
+        # The greeting the board sent at boot went out with the banner; ask for it again.
+        self._write(P.MSG_HELLO)
+        super().start(blob, q_home)
 
     def _send(self, data: bytes) -> None:
         self.port.write(data)

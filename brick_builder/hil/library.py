@@ -100,6 +100,19 @@ class CStepHdr(ctypes.Structure):
                 ("spin_star_im", _D), ("pad", _D)]
 
 
+FRAME_MAX = 8 + 2048 + 4
+
+
+class CDecoder(ctypes.Structure):
+    """`bb_decoder`, so the C frame decoder can be fed the same bytes as `protocol.Decoder`."""
+
+    _fields_ = [("buf", ctypes.c_uint8 * FRAME_MAX), ("have", ctypes.c_uint32),
+                ("consumed", ctypes.c_uint32), ("bad_crc", ctypes.c_uint32),
+                ("resyncs", ctypes.c_uint32), ("type", ctypes.c_uint8),
+                ("flags", ctypes.c_uint8), ("seq", ctypes.c_uint16), ("len", ctypes.c_uint16),
+                ("payload", ctypes.c_void_p)]
+
+
 class CBusReadings(ctypes.Structure):
     _fields_ = [("position", _D * NJOINT), ("speed", _D * NJOINT), ("load", _D * NJOINT)]
 
@@ -121,13 +134,13 @@ class CTickOut(ctypes.Structure):
 #: Struct indices `bb_struct_size` answers to, in its own order.
 _SIZE_NAMES = ("bb_cfg", "bb_arm", "bb_frame_rec", "bb_command_rec", "bb_state_rec",
                "bb_ref_rec", "bb_step_hdr", "bb_controller", "bb_tick_out", "bb_command",
-               "bb_bus_readings", "bb_slots", "bb_joint_correction")
+               "bb_bus_readings", "bb_slots", "bb_joint_correction", "bb_decoder")
 
 _PY_SIZES = {
     "bb_cfg": CCfg, "bb_arm": CArm, "bb_frame_rec": CFrameRec, "bb_command_rec": CCommandRec,
     "bb_state_rec": CSlots, "bb_ref_rec": CRefRec, "bb_step_hdr": CStepHdr,
     "bb_tick_out": CTickOut, "bb_command": CCommand, "bb_bus_readings": CBusReadings,
-    "bb_slots": CSlots,
+    "bb_slots": CSlots, "bb_decoder": CDecoder,
 }
 
 FAILURES = {0: None, 1: "stalled: nothing to line up on", 2: "stalled: error not coming down",
@@ -212,6 +225,12 @@ class ControlLib:
         lib.bb_jc_update.argtypes = [ctypes.c_void_p, ctypes.POINTER(_D), ctypes.POINTER(_D),
                                      ctypes.c_int]
         lib.bb_jc_update.restype = None
+        lib.bb_decoder_init.argtypes = [ctypes.POINTER(CDecoder)]
+        lib.bb_decoder_init.restype = None
+        lib.bb_decoder_feed.argtypes = [ctypes.POINTER(CDecoder), ctypes.c_uint8]
+        lib.bb_decoder_feed.restype = ctypes.c_int
+        lib.bb_decoder_next.argtypes = [ctypes.POINTER(CDecoder)]
+        lib.bb_decoder_next.restype = ctypes.c_int
         self.check_layout()
 
     def sizeof(self, name: str) -> int:
@@ -227,6 +246,20 @@ class ControlLib:
                 bad.append(f"{name}: C {want} B, Python {got} B")
         if bad:
             raise RuntimeError("control_lib struct layout does not match: " + "; ".join(bad))
+
+    def decode(self, data: bytes) -> tuple[list[tuple[int, int, bytes]], int, int]:
+        """Feed `data` to the C decoder a byte at a time, as `bb_session_run` does. Returns the
+        frames as (type, seq, payload) and the bad-CRC and resynchronisation counts."""
+        dec = CDecoder()
+        self._lib.bb_decoder_init(ctypes.byref(dec))
+        frames = []
+        for byte in data:
+            ready = self._lib.bb_decoder_feed(ctypes.byref(dec), byte)
+            while ready:
+                frames.append((int(dec.type), int(dec.seq),
+                               ctypes.string_at(dec.payload, dec.len) if dec.len else b""))
+                ready = self._lib.bb_decoder_next(ctypes.byref(dec))
+        return frames, int(dec.bad_crc), int(dec.resyncs)
 
     def crc32(self, data: bytes) -> int:
         return int(self._lib.bb_crc32(data, len(data)))

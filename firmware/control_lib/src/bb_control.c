@@ -1,4 +1,5 @@
 #include "bb_control.h"
+#include "bb_proto.h"
 #include "bb_math.h"
 
 #include <math.h>
@@ -579,6 +580,7 @@ int32_t bb_struct_size(int which)
     case 10: return (int32_t)sizeof(bb_bus_readings);
     case 11: return (int32_t)sizeof(bb_slots);
     case 12: return (int32_t)sizeof(bb_joint_correction);
+    case 13: return (int32_t)sizeof(bb_decoder);
     default: return 0;
     }
 }
