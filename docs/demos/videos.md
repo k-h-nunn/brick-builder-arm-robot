@@ -290,15 +290,15 @@ Reproduction writes it to `media_out/hd/brick_builder_arm_robot_two_brick_build_
 
 As the placement video, with these changes:
 
-| Element | This video |
+| Element | Script (`make_campaign_video.py`) |
 |---|---|
 | Title card | In the data strip's box, opaque, for the first 2.0 s; the strip takes the box back after it. The top left of the main view holds the upper arm and the wrist in this shot |
 | Spec line | "Control input: ground truth" and "Display: convolutional scene model", then controller, inverse, bricks and baseplate offset; no checkpoint hash |
 | Bottom-row panels | "Scene model segmentation" (the convolutional scene model's output, display only) beside "Ground truth segmentation" |
 | Command | Title line under the panels |
 | Press force [N] | Live value; a dash when the arm is not pushing down on the brick |
-| Scene-state error [mm] | A dash in a step that has returned no measurement; a gap in the trace over that step |
-| Prediction error [mm] | A dash in a step that has returned no prediction |
+| Scene-state error [mm] | A dash in a step that has returned no measurement; a gap in the trace over that step (the gap is not in the file on disk; see Results) |
+| Prediction error [mm] | A dash in a step that has returned no prediction (not in the file on disk; see Results) |
 
 ## Results
 
@@ -334,8 +334,8 @@ both bricks. Task `stack_2` with `--source cnn` was not evaluated.
 
 Two perception failures, read off the panels at the second cycle: at Lift the white 2x4 on the
 table is not segmented, so the step has no reference blob; at Align the held blue brick and the
-blue brick under it are one blue region, not two, Align has no measurement, and the press starts
-from a scene-state error of 14.6 mm.
+blue brick under it are one blue region, not two, and Align has no measurement (seed 0: Transport
+ends at 10.34 mm scene-state error, the press step logs 14.42 mm).
 
 Re-probed on seeds 0-2 (`--cnn-drives --probe`, target sequences recorded through the
 convolutional model -- the campaign's own `--source cnn` convention) after the fixes in

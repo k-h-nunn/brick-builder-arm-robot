@@ -251,8 +251,9 @@ Three parameters were measured, not chosen:
   10 N the arm deflects about 2 mm (gearbox and backlash), invisible to forward kinematics of the
   read positions. Over 24 presses, 0-6 mm of error, while pressing: jammed reads -1.5 to +3.2 mm
   above the seated height, successful -1.5 to +1.7 mm — full overlap. Releasing separates them:
-  seated height commanded with no overshoot, 250 ms wait → seated 2×4 holds 2.0-2.3 mm high
-  (mostly weld stretch) versus 4.6-6.5 mm resting on the stud tops.
+  seated height commanded with no overshoot, 250 ms wait → a real seat settles -0.44 to +0.34 mm
+  from the seated height versus 3.87-4.40 mm resting on the stud tops (seed 7, 40 trials, after
+  the servo encoder correction; before it: 2.0-2.3 mm and 4.6-6.5 mm).
 - **`spiral_pitch` = 2.5 mm** (spec: 0.5 mm). Measured capture basin: about 3 mm (2×4), 2 mm
   (2×2). A 0.5 mm pitch covers the same disc six times over — 100 mm of path, 6.7 s — exceeding
   the 200-tick episode. `docs/media/control/spiral_search.png`.
@@ -275,23 +276,24 @@ grip. Over 20 trials at a 4 mm tug: correct 6-8 times out of 20, seated and loos
 overlapping in reverse. An 8 mm tug beats the stiction but pulls a seated 2×4 back off the plate.
 
 The settled tool height after the press releases (`SkillFSM.seated_by_height`) works better, not
-perfectly: a seated 2×4 leaves the tool 2.0-2.3 mm above the seated height, one resting on the
-stud tops 4.6-6.5 mm, marginal cases between. Correct 37 out of 40 on held-out seeds (seed 7;
+perfectly: a real seat leaves the tool -0.44 to +0.34 mm from the seated height, one resting on
+the stud tops 3.87-4.40 mm (seed 7, 40 trials). Correct 37 out of 40 on held-out seeds (seed 7;
 Wilson [0.801, 0.974]) — short of the spec's 95 % bar, from two traced failure modes. Two of the
 three misses are the snap model's own connection gate, not a height problem: every stud reads a
 fully seated 4.70-4.74 mm of raw insertion depth, but the brick sits 0.47-0.53 mm laterally off
 the stud axis — just outside `SnapParams.capture_lateral` (0.30 mm) — so the model reports zero
 depth and forms no connection, while the tool still settles at the height a centred seat would
 produce, indistinguishable by height alone. The third is an ordinary shallow press, a stud
-0.15 mm short of the seated-depth threshold. Most of the 2 mm baseline is weld stretch, so the
-threshold needs recalibration for the friction grasp, and again on hardware. Both verdicts are
+0.15 mm short of the seated-depth threshold. The threshold needs recalibration for the friction
+grasp, and again on hardware. Both verdicts are
 reported; `SkillFSM.verified` still reports the spec's load-rise result. A third, independent
 cross-check (`seated_by_occupancy`) is available whenever a caller binds `occupancy_check` to a
 scene model or, for a sim-only caller, `ground_truth_occupancy` — never overriding the height
 verdict, since it deliberately reads raw (ungated) insertion depth and so answers a coarser
 question ("is anything there") than either the height verdict or the snap model's own connection
-state: a brick resting on the stud tops, and a brick pressed to depth but rejected by the
-connection gate, both read occupied.
+state. A brick pressed to depth but rejected by the connection gate reads occupied. Known defect:
+the threshold (0.45 mm, 0.1 × stud height) sits inside a resting brick's raw depth (0.11-0.55 mm),
+so a brick resting on the stud tops reads empty in 24 of 27 measured runs (seed 7).
 
 ## `BrickBuilder/PressFromHeld-v0`
 

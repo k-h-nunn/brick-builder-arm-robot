@@ -412,7 +412,7 @@ The model previously placed the encoder on the motor side. Effect:
 | | encoder on the motor side (wrong) | encoder on the output shaft (hardware) |
 |---|---|---|
 | Steady-state placement error at the tool, nominal servo | 3.6 mm (2.5–4.5) | 0.43 mm (0.07–0.96) |
-| ditto, randomized servos | 6.0 mm (2.9–8.1) | 0.42 mm (0.05–1.3) |
+| ditto, randomized servos | 6.0 mm (2.9–8.1) | 1.82 mm (about 0.9–3.3; firmware dead band randomized) |
 | How much of that error the robot can see | none: the encoder gap is 4.0 mm of a 3.6 mm error | all but 0.16 mm |
 | Loaded clockwise-vs-counter-clockwise deviation | 2·τ/kp, play invisible | 2·τ/kp, and the play shows up inside the dead band |
 

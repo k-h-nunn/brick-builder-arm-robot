@@ -373,10 +373,10 @@ the neighbouring cell (16.33 mm, 4.29 deg). The brick is pressed between two flu
 and stops tilted. The campaign's round-0 evaluation, on the tree before the flush-neighbour hover
 and aim, had the same count for the second brick, 1/10, on seed 1.
 
-Reproduction, 20 episodes in one process, 44.7 min at nice 19 and two threads:
+Reproduction, 20 episodes in one process, 44.7 min at nice 19:
 
 ```bash
-CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl OMP_NUM_THREADS=2 \
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl \
   python -m brick_builder.campaign.runner --tasks stack_2 build_2 --seeds 0-9 --no-replan \
     --out results/campaign/stacked_builds_rerun/evaluate.jsonl
 ```
@@ -413,10 +413,11 @@ ground-truth target sequences:
 | Step | Scene model output | Effect |
 |---|---|---|
 | Lift | White 2x4 on the table not segmented | No reference blob: no estimate of the brick in the jaws; with target sequences recorded through the model, the twin has nothing to line up on and the run stops |
-| Align | Held blue brick and the blue brick under it one blue region, not two | No Align measurement for 40 ticks; the press starts from a scene-state error of 14.6 mm and the brick does not seat |
+| Align | Held blue brick and the blue brick under it one blue region, not two | No Align measurement for 40 ticks; Transport ends at a scene-state error of 10.34 mm, the press step logs 14.42 mm, and the brick does not seat |
 
-In the recording, the Scene-state error [mm] and Prediction error [mm] readouts show a dash in a
-step that has returned no measurement, and the Scene-state error trace has a gap over it.
+`make_campaign_video.py` draws a dash in the Scene-state error [mm] and Prediction error [mm]
+readouts for a step that has returned no measurement, and a gap in the Scene-state error trace
+over it.
 Release, Retract and Verify are measured in relative mode (the placed brick against the
 baseplate and the bricks already placed) and returned none on the recorded run. Each cycle has
 two Press the brick down steps: the press with the brick in the jaws, then, after Release, a

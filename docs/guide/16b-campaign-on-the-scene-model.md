@@ -51,15 +51,14 @@ cp results/campaign/closed_loop/weights/{inverse.npz,predictor.npz,deployed.json
   --name closed_loop_cnn --root results/campaign
 ```
 
-`--no-baseline-learned` drops the repository-shipped pair's own column so the budget goes to the
-analytic baseline and the round-5 pair, the two this page compares; `--processes 1` throughout,
-the machine-wide limit while other work is also running. `build_2` was left out of both calls: it
-needs its own recorded target sequence per cycle under `--source cnn` (see The pickling fix), and
-the two single-cycle tasks already used most of the time budget this step had.
+`--no-baseline-learned` drops the repository-shipped pair's own column; the page compares the
+analytic baseline and the round-5 pair. `--processes 1` throughout. `build_2` is not in either
+call: it needs its own recorded target sequence per cycle under `--source cnn` (see The pickling
+fix), and it was not run.
 
-These commands did not reproduce the numbers below on a fresh checkout by themselves when they
-were first measured -- see The pickling fix, and Re-evaluation after the fixes for the numbers
-measured after it landed.
+Before the pickling fix these commands did not run on a fresh checkout without a cache
+workaround (see The pickling fix); Re-evaluation after the fixes gives the numbers measured with
+the fix in place.
 
 ## Training campaign
 
@@ -77,9 +76,9 @@ with `--source cnn` the only substantive difference.
   --name closed_loop_cnn_train --root results/campaign
 ```
 
-Two rounds and three episodes per task, not five and three like the ground-truth campaign: this
-size was set from the time this step had and the throughput the evaluate-only step measured. It
-did not run out of budget; round 1's train phase raised (see Results).
+Two rounds and three episodes per task (the ground-truth campaign: five and three), sized from
+the evaluate-only throughput. The run stopped when round 1's train phase raised (see Results), not
+on the time limit.
 
 ## Results
 
@@ -129,26 +128,25 @@ place's two scene-model bars are the same one-episode measurement described abov
 
 Total heavy time for this step: 68.1 min inside `run_campaign.py` (both rounds, cumulative, the
 figure the campaign itself reports) plus roughly 10 min of one-off recording outside it, seeds 0-9
-for both tasks (see The pickling workaround) -- about 78 min against the 60-minute target.
+for both tasks (see The pickling workaround) -- about 78 min.
 
 Placement's per-episode wall time spans widely and does not move the same way between rounds, or
 even between two rows of the same round. Round 0 scores placement twenty times (ten seeds against
 each of two `predictor` columns, the analytic inverse throughout): 27-63 s. Round 5 scores it forty
 times (ten seeds times two inverses times two `predictor` columns), 17-232 s, but the two halves
-do not behave alike: the twenty rows using the round-5 learned inverse run 17-56 s, inside round
-0's own span; every row above 150 s uses the analytic inverse that `recheck_analytic`
+do not behave alike: the twenty rows using the round-5 learned inverse run 17-56 s; every row above 150 s uses the analytic inverse that `recheck_analytic`
 (`campaign.py:402`) reruns at the final round for comparison -- its five slowest are 151.6, 162.8,
 205.6, 220.8 and 231.8 s. The 49.3 min in the table above includes this recheck; it is not the cost
 of the learned pair.
 
 `evaluate.csv`'s `replanned` and `vision_ticks` columns separate replanning from machine load for
-these analytic-inverse rows. The same seed carries the same `vision_ticks` and the same `replanned`
-flag in round 0 and round 5 (seed 0: 163 ticks, replanned, in both), and within round 5 itself the
-two `predictor` columns for the same seed and inverse also carry identical `vision_ticks`/`replanned`
-values yet differ in wall time by up to 4x -- seed 0: 54.0 s against 205.6 s; seed 9: 71.6 s against
-220.8 s, the slower column swapping sides between the two seeds. The recorded work is identical and
-the wall time is not, so machine load from the other work running on the machine at the same time,
-not replanning, accounts for the spread.
+these analytic-inverse rows. On seeds 0, 1, 2, 4, 5, 7, 8 and 9 the same seed carries the same
+`vision_ticks` and `replanned` flag in round 0 and round 5 (seed 0: 163 ticks, replanned, in both),
+and within round 5 the two `predictor` columns for the same seed and inverse carry identical values
+yet differ in wall time by up to 4x -- seed 0: 54.0 s against 205.6 s; seed 9: 71.6 s against
+220.8 s. On those seeds machine load, not replanning, explains the spread. Seed 3 is the
+exception and the slowest row: in round 5 its analytic/analytic row replanned (239 ticks, 231.8 s)
+while its sibling did not (239 ticks, 37.7 s); seed 6's tick counts differ by one (184 / 185).
 
 ### Mislabeled reference bodies
 
@@ -374,8 +372,7 @@ cp results/campaign/closed_loop/weights/{inverse.npz,predictor.npz,deployed.json
 - Ten seeds per task per round, same as `docs/guide/16-closed-loop-campaign.md`; the Wilson
   interval on ten trials is wide and its limits apply here unchanged.
 - `build_2` was not measured under `--source cnn`: it needs its own recorded target sequence per
-  cycle, and two single-cycle tasks across two campaigns already used most of the step's time
-  budget.
+  cycle, and it was not run.
 - `--processes 1` throughout (the machine-wide limit while other work is running), so the
   performing rounds' recorded-sequence pool (`ideal_pool_seed`) is one recording, not the two a
   `--processes 2` run would keep; every performing episode of a task in `closed_loop_cnn_train`

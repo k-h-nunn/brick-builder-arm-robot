@@ -1192,11 +1192,11 @@ def set_brick_pose(scene: Scene, name: str, pos, quat) -> None:
 
     Only ``qpos`` changes here; forward kinematics is not recomputed, so ``data.xpos`` and
     ``data.site_xpos`` stay at the old pose until something calls `mujoco.mj_forward`.  Stepping
-    or updating the snap model before that call reads the stale site position -- for a brick that
-    was already captured, this reads as its stud pulling out of the old socket and can yank the
-    brick back towards it (see the resting-rider test in `tests/scene/test_compose.py` for a
-    measured example).  Call `mujoco.mj_forward(scene.model, scene.data)` right after this before
-    doing either.
+    or updating the snap model before that call reads the stale site positions: a connection the
+    brick already had still reads as fully seated, so the snap model keeps it engaged and its
+    equality constraint pulls the brick back towards the old place (see the resting-rider test in
+    `tests/scene/test_compose.py` for a measured example).  Call
+    `mujoco.mj_forward(scene.model, scene.data)` right after this before doing either.
     """
 
     data = scene.data

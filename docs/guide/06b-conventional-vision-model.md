@@ -256,7 +256,7 @@ the candidate, and 2 different bricks the shipped checkpoint finds are missed by
 that group the candidate's IoU total is 0.56 higher (+0.0099 mean-IoU on its own), and the four
 bricks that swapped from found to missed or back pull the observed shift down to +0.008. The
 mechanism in "Fix" above (forced bricks land mostly on the baseplate, not the table at distance)
-is consistent with a fix that churns which bricks are found without moving the recall count: the
+is consistent with a fix that changes which bricks are found without moving the recall count: the
 targeted data does not put much weight on the specific case it was meant to cover.
 
 Closed-loop placement, brick starts held in the jaws (`scripts/run_placement.py --cnn`, without
@@ -275,48 +275,40 @@ has no white brick (the held brick is blue, the two references already on the pl
 and red -- `brick_builder/action/worlds.py`), so this result is not a direct test of the
 white-brick fix; it is a general closed-loop placement measurement, run because it is the
 closed-loop harness already in place for this checkpoint pair. The seed-by-seed rows are in
-`results/vision_model_whitefix/loop_baseline.json` and `loop_candidate.json`. Independently
-reproduced on seeds 0-2 with both weights loaded explicitly by hash (`3e07a382` / `373f51c3`)
-through `scripts/run_placement.py --cnn` unchanged: every outcome (seated/not-seated, lateral and
-depth error) matched the stored rows exactly.
+`results/vision_model_whitefix/loop_baseline.json` and `loop_candidate.json`.
 
-A separate attempt to measure the fix in a world that does contain a white brick --
-`scripts/run_placement.py --pick --cnn`, which starts the brick on the table next to a white
-distractor brick (`build_pick_world` in `brick_builder/action/worlds.py`) -- did not produce
-usable data. On seeds 0-1, both checkpoints failed to place (0/2 each). On seed 0 the shipped
-checkpoint raises `RuntimeError: step 'Press the brick down': the twin only shows 0 of the 0
-reference blobs` in `brick_builder/action/twin.py:214` (`place.py:837` -> `_prepare_step:763` ->
-`_build:773`); "Press the brick down" is well after Approach, Grasp, Lift, Transport and Align in
-the step sequence, so the scene model has already been consulted for those earlier steps, and the
-candidate checkpoint on the same seed 0 does not raise it at all -- it runs further, to a stall at
-Align with 1.82 mm left to close. Both claims are checked directly against the traceback and the
-paired run; the error is a pre-existing bug in the twin's step planning
-(`brick_builder/action/twin.py`), not in a file this fix changes, but it is not shown to be
-checkpoint-independent, and seed 0 is the only seed it was seen on. Seed 1 does not raise it for
-either checkpoint: the shipped checkpoint does not seat (lateral 19.68 mm), and the candidate
-stalls at Align (1.77 mm left to close, lateral 3.01 mm). This task is not usable as a gate on
-the time available; it is reported here so the gap is visible rather than silent.
+Reruns on seeds 0, 1, 2, 4, 6 and 7, both weights loaded by sha256 (`3e07a382` / `373f51c3`):
+the shipped checkpoint reproduces the stored rows bit for bit on every rerun (1 of the 6 seeds
+placed). The candidate does not reproduce bit for bit: between runs lateral error moves by up to
+0.7 mm and depth error by up to 0.8 mm, and seed 7 was not placed on one of two reruns (lateral 0.33 mm, depth error
+0.85 mm; stored: placed, 0.05 / 0.03 mm). Outcome level: the candidate placed 5 of the 6 seeds on
+every rerun except that one.
+
+A second comparison in a world that contains a white brick -- `scripts/run_placement.py --pick
+--cnn`, brick on the table next to a white distractor (`build_pick_world` in
+`brick_builder/action/worlds.py`) -- gives no usable data. Seeds 0-1: 0/2 placed for each
+checkpoint. On seed 0 the shipped checkpoint reaches "Press the brick down" and the digital twin
+raises `BlindStep` ("the twin only shows 0 of the 0 reference blobs"; `brick_builder/action/twin.py`,
+caught in `place.py`); the twin renders its own nominal scene and reads it with the ground-truth
+scene model, so the checkpoint only decides whether the episode reaches that step. The candidate
+stops earlier, a stall at Align with 1.82 mm left. Seed 1: shipped not seated (lateral 19.68 mm),
+candidate stalls at Align (1.77 mm left, lateral 3.01 mm).
 
 ### Decision
 
-The white-subset pixel gate fails, and the specific cell this fix targets has the same recall
-count before and after, with the found bricks churned rather than expanded; the likely reason is
-in "Fix" above. The closed-loop placement result is large (3/10 to 9/10) but does not involve a
-white brick and is not statistically decisive on its own at n=10 (Wilson intervals overlap;
-paired sign test p=0.07); the real pick-and-place task, which does involve a white brick,
-produced no usable comparison in the time available.
+| Gate | Result |
+| --- | --- |
+| No colour IoU drop over 1 point | pass |
+| White subset >= +5 points | fail (+2.5) |
+| Closed-loop placement not worse | pass (3/10 -> 9/10, seeds 0-9; sign test p = 0.07; candidate runs not bit-reproducible) |
 
-The ship rule this fix was measured against is an AND of three conditions: no colour IoU drop
-over a point, white subset >= +5 points, closed loop not worse. The white-subset condition fails.
-Weighing the closed-loop placement result as the deciding measurement instead, seeds 0-2 of it
-were independently reproduced (both weights loaded explicitly by hash, seed-by-seed outcomes
-matched exactly), and it favours the candidate by a large margin even though it does not itself
-involve a white brick: ship `373f51c3`.
+The AND rule fails on the white-subset gate. The recall count on the targeted cell is unchanged
+(35 of 57), with found bricks exchanged rather than added. The closed-loop placement world has
+no white brick, so it does not test the white-brick fix directly.
 
-**The shipped checkpoint is unchanged: `brick_builder/perception/weights/vision_model.pt` is
-still `3e07a382`.** The swap -- replacing that file, keeping `3e07a382` under a versioned name,
-recording both hashes -- did not go through: the write was blocked before it ran, twice, on
-separate attempts. The exact commands:
+Status: `brick_builder/perception/weights/vision_model.pt` is `3e07a382` (shipped). The candidate
+`373f51c3` is at `results/vision_model_whitefix/best.pt` and is not shipped; the swap is a pending
+decision. Swap commands, keeping the previous checkpoint under a versioned name:
 
 ```bash
 cp brick_builder/perception/weights/vision_model.pt \
@@ -329,8 +321,9 @@ sha256sum brick_builder/perception/weights/vision_model.pt \
 #        3e07a382f963145318479f81b61dbe273ffd421ea2e772dd2c0df1bbe40bcafb  vision_model_3e07a382.pt
 ```
 
-The data-generation code, the extra-split/fine-tune infrastructure, and every number on this page
-are committed regardless of the swap.
+A swap changes every consumer of `DEFAULT_WEIGHTS`: `CnnSceneModel()`, the campaign runner, the
+hardware real-world loop, the GUI session, the vision-control policy's encoder initialisation
+(guide 15), and the frozen hashes in `docs/demos/videos.md` and `scripts/make_demo_video.py`.
 
 ## Retraining
 

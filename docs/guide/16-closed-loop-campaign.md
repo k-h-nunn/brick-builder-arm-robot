@@ -259,14 +259,14 @@ matching the fixed analytic baseline (9/10, 60-98 %). Placement goes 10/10 to 5/
 24-76 %), then 9/10, 6/10, 9/10, and back to 10/10 at round 5. `build_2`, scored only at round 0
 and round 5, goes from 1/10 (2-40 %) to 2/10 (6-51 %) seated, bricks on target 9/20 to 12/20.
 
-Two-sided Fisher exact tests against the fixed analytic baseline (10/10 on `placement`, 9/10 on
-`pick_and_place`) find round 1 the only round that differs from it at the uncorrected 5 % level on
-either task: `placement` 5/10 against 10/10, p = 0.033; `pick_and_place` 3/10 against 9/10,
-p = 0.020. No other round reaches p < 0.05 on either task; `placement` round 3 (6/10 against
-10/10) comes closest, at p = 0.087. These are twelve round-versus-baseline tests (rounds 0-5 on
-both tasks), none corrected for running more than one: at a Bonferroni threshold of
-0.05 / 12 = 0.0042, neither round-1 result clears it, so nothing on this page is significant once
-that correction is applied. Overlapping Wilson intervals at n = 10 do not by themselves rule out a
+Exact two-sided McNemar tests against the fixed analytic baseline on the same seeds (10/10 on
+`placement`, 9/10 on `pick_and_place`; each round is paired with the baseline seed by seed) find
+one round that differs from it at the uncorrected 5 % level: `pick_and_place` round 1, 3/10 against
+9/10, 6 seeds lost and none gained, p = 0.031. `placement` round 1 (5/10 against 10/10, 5 lost,
+0 gained) gives p = 0.063 and round 3 (6/10) p = 0.125; every other round gives p >= 0.125 on
+either task. These are twelve round-versus-baseline tests (rounds 0-5 on both tasks), none
+corrected for running more than one: at a Bonferroni threshold of 0.05 / 12 = 0.0042 no result
+clears it, so nothing on this page is significant once that correction is applied. Overlapping Wilson intervals at n = 10 do not by themselves rule out a
 significant difference and are not evidence of one.
 
 Median one-step prediction error does not move the same way on the two tasks. On `placement` it

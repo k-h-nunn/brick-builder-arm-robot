@@ -422,11 +422,12 @@ not appear in the step-response, sag or settling-error figures
 compiles a default `ArmConfig`, not one built from a parameter file.
 
 A value entered here does not survive `brick_builder/scene/randomize.py`'s `dynamics` group being
-applied at a randomization level above 0: `apply()` then writes `dof_frictionloss` from a draw
-between `NOMINAL["dynamics.frictionloss"]` (the shipped default, used exactly at level 0) and
+applied, at any randomization level: `apply()` writes `dof_frictionloss` from a draw between
+`NOMINAL["dynamics.frictionloss"]` (the shipped default, written exactly at level 0) and
 `RANGES["dynamics.frictionloss"]` (0.03-0.10 N·m), replacing whatever the scene was built with.
-`pick-and-place` calls `bench` at `dr_level=0.0`, so it keeps a measured value; an `ArmEnv`/
-`PressEnv` reset at `dr_level > 0` does not. `backlash_deg` and `kp` have the same property.
+`pick-and-place` calls `bench` at `dr_level=0.0`, where `bench` skips `apply()`, so it keeps a
+measured value. `ArmEnv`/`PressEnv` call `apply()` on every reset, level 0 included, and do not
+read the parameter file at all. `backlash_deg` and `kp` have the same property.
 
 ---
 
@@ -542,7 +543,7 @@ be filled in before and after, not just after.
 | `arm.torque_limit_Nm` | not a kitchen-scale measurement — see step 4 | `seating-feasibility`, `force-map` |
 | `arm.backlash_total_deg` | ruler at the tool, by feel (total play, not half) | `pick-and-place` |
 | `arm.servo_dead_band_counts` | servo tool, registers 26/27 | `params` (no run consumes it yet) |
-| `arm.joint_friction_Nm` | not a kitchen-scale measurement — system identification, see guide 03 | `pick-and-place` (no dedicated report section); overwritten by domain randomization's `dynamics` group above level 0 |
+| `arm.joint_friction_Nm` | not a kitchen-scale measurement — system identification, see guide 03 | `pick-and-place` (no dedicated report section); overwritten wherever domain randomization's `dynamics` group is applied, level 0 included (every `ArmEnv`/`PressEnv` reset) |
 | `arm.print_color_r`/`_g`/`_b` | look at the printed arm — not a physics measurement | `params` (render only) |
 | `camera.diagonal_fov_deg`, resolution | printed checkerboard or a sheet of paper | `params` |
 | `camera.fx_px`/`fy_px`/`cx_px`/`cy_px`/`opencv_*`, `mount_*_mm`/`_deg` | `scripts/calibrate_camera.py` against checkerboard photos | `params` |

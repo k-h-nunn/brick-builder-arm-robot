@@ -234,9 +234,10 @@ def test_a_brick_resting_on_stud_tops_without_capture_is_not_counted_connected()
     # `set_brick_pose` only writes `qpos`; it does not recompute forward kinematics, so
     # `data.xpos`/`data.site_xpos` stay at the rider's *old*, seated place until something calls
     # `mj_forward`. Skip this and the first `snap.update()` inside `settle()`'s `scene.step()`
-    # reads the stale site position, mistakes the move for the rider's stud pulling out of its old
-    # socket, and yanks it back towards that socket instead of letting it simply rest where it was
-    # put (measured: dx 15.2 mm, dz -0.7 mm, quat_w 0.981 -- tipped, not resting). `snap.bind()`
+    # reads the stale site positions: the rider's connection to the plate's studs still reads as
+    # fully seated, stays engaged, and its equality constraint pulls the rider back towards its old
+    # place (measured for this setup: dx 13.4 mm, dz -1.5 mm, quat_w 0.986 -- tipped, not
+    # resting). With `mj_forward` the first update sees the separation and releases it. `snap.bind()`
     # clears captured anchors but does not touch any body's kinematics and changes nothing here
     # (measured with and without it, `mj_forward` present both times: same dx/dz to within 0.05
     # mm), so it is not called.

@@ -61,13 +61,13 @@ Two seams keep this from becoming one large, brittle system:
 | Area | State |
 |---|---|
 | Brick physics | Built and measured. All eight bench tests pass with the `detent` force curve; the default `ramp` curve still fails two, diagnosed and kept as `xfail`. |
-| Robot and servo model | Built and measured. The encoder is on the output shaft, so the tool settles within about 0.4 mm of its commanded pose. |
+| Robot and servo model | Built and measured. The encoder is on the output shaft; mean tool settling error 0.43 mm with the nominal servo, 1.82 mm with randomized servos (firmware dead band included). |
 | Scripted pick-and-place | Built. Blind, and that is its limit: it seats a 2x4 in 0-17 % of runs and a 2x2 in about 83 %. See [Brick seating with the stock gripper](guide/02-simulator-and-bricks.md#brick-seating-with-the-stock-gripper). |
 | Closed-loop placement | Built. Target-sequence tracking seats a 2x2 against a baseplate offset the controller is not told about. |
 | Perception | Built. The convolutional scene model ships trained; accuracy, latency and failure modes are in [its own page](guide/06b-conventional-vision-model.md). |
 | RL loop | Built and tested for all three environments. `Reach-v0` is trained to target (200/200 held out, Wilson [0.981, 1.0]); `PressFromHeld-v0` and `AlignFromTokens-v0` need hours-scale budgets not yet spent. |
 | Export | Built. A trained actor exports to C and reproduces the torch actor's episode outcomes under the same seed. |
-| Hardware | Not started. Every number on this site is from simulation. |
+| Hardware | Arm not yet in hand. The bring-up kit (self-test, system identification, settling-error map) runs against the virtual STS3215 bus; the ESP32-P4 control application builds and has not been flashed. Every number on this site is from simulation. |
 
 ## Conventions
 

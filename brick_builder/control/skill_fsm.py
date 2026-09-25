@@ -24,9 +24,9 @@ Tugging hard enough to beat the stiction (8 mm) reverses the problem -- it pulls
 seated 2x4 straight back off the plate, which makes the test destroy what it is testing.
 
 **What does work** is the height the tool settles at once the press has let go
-(:attr:`SkillFSM.seated_by_height`): a seated 2x4 leaves it 2.0-2.3 mm above the seated height
-(almost all of that the soft weld's own stretch), a brick resting on the stud tops 4.6-6.5 mm,
-and the marginal cases in between.  It is not perfect: measured on this rig (2026-09-25, seed 7,
+(:attr:`SkillFSM.seated_by_height`): measured on this rig (2026-09-25, seed 7, 40 trials), a
+real seat leaves it -0.44 to +0.34 mm from the seated height and a brick resting on the stud
+tops 3.87-4.40 mm, against ``verify_height_tol`` = 2.5 mm.  It is not perfect: measured (seed 7,
 20 seated-group trials, single attempt each, no case rejection -- of which 9/20 actually landed a
 real seat, see :func:`verify_trials`), the verdict was right 37 times out of 40 overall -- Wilson
 interval [0.801, 0.974].  Every disagreement was inspected, and they are not one shape but two.
@@ -36,9 +36,9 @@ accordingly, but the brick sits 0.47-0.53 mm laterally off the stud axis -- just
 ``SnapParams.capture_lateral`` (0.30 mm, ``bricks/snap_api.py``), the gate the snap model itself
 requires before it will report that depth as engaged or form a connection at all
 (``bricks/snap_detent.py``).  Below that gate the model reports zero depth and welds nothing, so
-both the "really seated" ground truth this module's tests use and :func:`ground_truth_occupancy`
-(below) call it not seated; the tool, which only ever feels where the brick physically stopped it,
-cannot tell the two cases apart by height, because a brick 0.5 mm off the stud axis stops the tool
+the "really seated" ground truth this module's tests use calls it not seated
+(:func:`ground_truth_occupancy`, below, reads it occupied); the tool, which only ever feels where
+the brick physically stopped it, cannot tell the two cases apart by height, because a brick 0.5 mm off the stud axis stops the tool
 at the same height a centred one would.  The third disagreement is an ordinary shallow press, not
 a gate rejection: every stud engaged well inside the gate (lateral <= 0.08 mm) but stopped at
 3.90 mm, 0.15 mm short of the 4.05 mm ``really_seated`` threshold (0.6 mm short of the full 4.5 mm
@@ -63,11 +63,12 @@ insertion depth of whichever stud sits nearest the held brick's own sockets -- t
 pairing the snap model itself uses, but without that model's ``capture_lateral``/tilt connection
 gates -- so that it answers a coarser question than seating on purpose: "is anything resting in
 the cell at all," not "is it seated" or "is it connected," because that is the question a real
-occupancy sensor could answer too.  The two can disagree in both directions: a brick resting
-shallowly on the stud tops is occupied but not seated (the ordinary case this cross-check is for),
-and a brick pressed to a seating depth but rejected by the connection gate (the two-of-three false
-positives traced above) reads occupied here too -- unlike the connection model's own gated depth,
-which reports zero for that case and would call it empty.
+occupancy sensor could answer too.  A brick pressed to a seating depth but rejected by the
+connection gate (the two-of-three false positives traced above) reads occupied here -- unlike the
+connection model's own gated depth, which reports zero for that case.  Known defect: the
+threshold (0.1 x stud height, 0.45 mm) falls inside a resting brick's own raw depth (0.11-0.55 mm
+measured, seed 7), so a brick resting on the stud tops reads empty in 24 of 27 measured runs; the
+"anything in the cell" reading is not achieved yet.
 
 Everything here obeys the same two rules as ``primitives.py``: deployable signals only, and
 arithmetic simple enough to port to C.
@@ -130,12 +131,10 @@ class FsmConfig:
     verify_load_rise: float = 0.010
     verify_height_tol: float = 0.0025
     """How far above the seated height the tool may stand, once the press has let go, and still
-    count as having seated the brick.  It is not 0 because the soft weld that stands in for the
-    grip stretches: measured on the nominal weld, a genuinely seated 2x4 leaves the tool 2.0-2.3
-    mm high and a brick resting on the stud tops leaves it 4.6-6.5 mm high, with the marginal
-    cases (some studs in, not all to 90 %) in between at 2.6-3.7 mm.  Most of that 2 mm is the
-    weld, not the brick, so this number needs recalibrating for the friction grasp and again on
-    hardware."""
+    count as having seated the brick.  Measured after the servo encoder correction (2026-09-25,
+    seed 7, 40 trials): a real seat settles -0.44 to +0.34 mm from the seated height, a brick
+    resting on the stud tops 3.87-4.40 mm.  (Before the correction: 2.0-2.3 mm and 4.6-6.5 mm.)
+    Needs recalibrating for the friction grasp and again on hardware."""
 
     timeouts: dict[str, float] = field(
         default_factory=lambda: {"look": 2.0, "align": 4.0, "press": 8.0, "verify": 1.5}

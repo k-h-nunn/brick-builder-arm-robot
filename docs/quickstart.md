@@ -78,7 +78,7 @@ A few seconds, and writes an mp4 of a 2x4 brick being pressed onto an 8x8 basepl
 whether the brick seated: blind, at the default 1 mm of unknown misalignment, usually it does not.
 That is the limit this simulator is built to measure, and the reason the closed loop above exists.
 
-Every demo records to a file rather than opening a window: `scene`, `teleop`, `press`, `rocking`,
+Every demo records to a file rather than opening a window: `scene`, `teleop`, `press`, `tilted-press`,
 `force-map`, `policy`, `tokens`. See [the demo gallery](demos/README.md).
 
 ## Render the video
