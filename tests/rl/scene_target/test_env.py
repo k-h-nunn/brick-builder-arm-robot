@@ -87,18 +87,23 @@ def test_spaces_and_first_observation(tmp_path, level, n_act):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("level", ["viewing_pose", "viewing_pose_displaced"])
-def test_env_checker_with_bit_exact_renders(tmp_path, level):
+@pytest.mark.parametrize("level,source", [("viewing_pose", "ideal"),
+                                          ("viewing_pose_displaced", "ideal"),
+                                          ("viewing_pose", "learned")])
+def test_env_checker_with_bit_exact_renders(tmp_path, level, source):
     """`check_env` with every determinism check on.
 
-    Two settings make a run bit-reproducible: `render_samples=0` (the GPU's 4x multisample
-    resolve changes about 50 of 65,536 output pixels between two renders of one state)
-    and `timings_in_info=False` (wall-clock timings are the one non-deterministic `info`
-    entry). `test_default_rendering_differs_only_in_colour_fields` measures what the default
-    rendering changes."""
+    Two settings make a run bit-reproducible on either source: `render_samples=0` (the GPU's
+    4x multisample resolve changes about 50 of 65,536 output pixels between two renders of one
+    state) and `timings_in_info=False` (wall-clock timings are then the one non-deterministic
+    `info` entry). `test_default_rendering_differs_only_in_colour_fields` measures what the
+    default rendering changes on `ideal`; on `learned` it changes every slot field, the reward
+    and `d_mm`."""
     from gymnasium.utils.env_checker import check_env
 
-    env = make(tmp_path, level=level, render_samples=0, timings_in_info=False)
+    kw = {"source_kwargs": {"threads": 1}} if source == "learned" else {}
+    env = make(tmp_path, level=level, source=source, render_samples=0, timings_in_info=False,
+               **kw)
     try:
         assert env.unwrapped.spec is not None and not env.unwrapped.spec.nondeterministic
         check_env(env.unwrapped, skip_render_check=True)
@@ -107,7 +112,33 @@ def test_env_checker_with_bit_exact_renders(tmp_path, level):
 
 
 @pytest.mark.slow
+def test_convolutional_source_repeats_exactly_with_bit_exact_renders(tmp_path):
+    """With `render_samples=0` two fresh `learned` environments given one seed and one action
+    sequence return identical observations, rewards and `info` (timings off)."""
+    from gymnasium.utils.env_checker import data_equivalence
+
+    def run():
+        env = make(tmp_path, source="learned", source_kwargs={"threads": 1}, render_samples=0,
+                   timings_in_info=False)
+        rng = np.random.default_rng(99)
+        try:
+            out = [env.reset(seed=1, options={"world_seed": 2})]
+            for _ in range(4):
+                out.append(env.step(rng.uniform(-1, 1, env.action_space.shape).astype(np.float32)))
+        finally:
+            env.close()
+        return out
+
+    a, b = run(), run()
+    for x, y in zip(a, b):
+        assert data_equivalence(x, y, exact=True)
+
+
+@pytest.mark.slow
 def test_default_rendering_differs_only_in_colour_fields(tmp_path):
+    """Default 4x multisampling on the `ideal` source: only the colour fields change between
+    runs, the reward and `d_mm` repeat exactly. Not true on `learned` (see
+    `test_env_checker_with_bit_exact_renders`)."""
     from brick_builder.perception.scene_model import PLACEHOLDER_SLOT_SCHEMA as S
 
     env = make(tmp_path, timings_in_info=False)

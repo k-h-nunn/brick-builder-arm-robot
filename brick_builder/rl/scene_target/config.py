@@ -192,15 +192,18 @@ class SceneTargetConfig:
     """Compute the ground-truth rows `gt_z` of every frame (free on `ideal`, one extra
     ground-truth pass on other sources)."""
     timings_in_info: bool = True
-    """Per-tick wall-clock timings in `info`. The only non-deterministic `info` entry."""
+    """Per-tick wall-clock timings in `info`. With bit-exact renders (`render_samples=0`) the
+    only non-deterministic `info` entry."""
     cache_dir: str | None = None
     """Root of the target cache; `None` = `data_cache/scene_target` in the repository."""
     calib_dir: str | None = None
     """Root of the calibration files; `None` = `<cache_dir>/calib`."""
     render_samples: int | None = None
     """Multisample count of the offscreen render; `None` = the model's own (4). With 4 samples
-    two renders of one state differ on about 50 of 65,536 output pixels (slot rows by up to
-    4e-5); 0 gives bit-exact renders."""
+    two renders of one state differ on about 50 of 65,536 output pixels. On `ideal` only the
+    colour fields of the slot rows change (by up to 4e-5); on `learned` the CNN reads the RGB, so
+    every slot field, the reward and `d_mm` change (measured up to 5e-2 and 0.15 mm-eq). 0 gives
+    bit-exact renders and exact repeats on both sources."""
     K: int = 8
 
     def __post_init__(self) -> None:

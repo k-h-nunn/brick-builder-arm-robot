@@ -224,17 +224,30 @@ target pose) and `gt_final_xy_mm`, `gt_final_z_mm`, `gt_final_yaw_deg`.
 
 The GPU's 4x multisample resolve is not bit-reproducible: two renders of one state differ on
 44-72 of 65,536 output pixels (256 x 256; five twin poses, seeds 0, 1, 2, 5, 6). Instance and
-depth maps are exact. The slot rows then differ by 1.1e-5 to 4.2e-5 at most, above the env
-checker's 1e-5 tolerance.
+depth maps are exact. On the ground-truth source the slot rows then differ by 1.1e-5 to 4.2e-5
+at most, above the env checker's 1e-5 tolerance.
 
 | Setting | `gymnasium.utils.env_checker.check_env` |
 |---|---|
 | default (`render_samples=None`, 4 samples), with or without `timings_in_info` | fails: `env.reset(seed=123)` observations not equivalent |
-| `render_samples=0`, `timings_in_info=False` | passes, L0a and L0b (`test_env_checker_with_bit_exact_renders`) |
+| `render_samples=0`, `timings_in_info=False` | passes: L0a and L0b on ground truth, L0a on the CNN (`test_env_checker_with_bit_exact_renders`) |
 
-With the default rendering, two runs of one seed agree exactly in every field except colour and
-colour spread (within 1e-3), and in reward and distance. `timings_in_info=False` removes the
-wall-clock timings, the only non-deterministic `info` entry.
+Repeat runs with the default rendering, one seed and one action sequence:
+
+| Source | Slot fields that differ | Reward and `d_mm` | Evidence |
+|---|---|---|---|
+| Ground truth | colour and colour spread only, within 1e-3; the other fields come from the exact instance and depth maps | equal | `test_default_rendering_differs_only_in_colour_fields` (seed 4) |
+| CNN | every field, because the CNN reads the multisampled RGB. Non-colour fields: up to 4.2e-4 (seed 4, world seed 0) and 5.1e-2 (seed 1, world seed 2) | differ: `d_mm` by up to 7.6e-4 mm-eq (seed 4) and 0.148 mm-eq (seed 1) | reset plus 5 random steps, 3 runs in one instance and 1 in a fresh instance, 1 thread |
+
+With `render_samples=0` the CNN source repeats exactly: observations, reward, `d_mm` and every
+`info` entry match across two fresh instances
+(`test_convolutional_source_repeats_exactly_with_bit_exact_renders`; the measurement above also
+showed zero difference on both seeds). Seeded or paired evaluations on the CNN therefore need
+`render_samples=0`. With the default rendering, the progress clock, the success test and any
+closed-loop policy act on these differences, so two runs of one seed can take different paths.
+The calibration of the CNN (scale, `sigma_obs`, `tol_mm`) was fitted on default renders; the
+effect of aliased renders on the CNN's accuracy was not measured. With bit-exact renders,
+`timings_in_info=False` removes the wall-clock timings, the only non-deterministic `info` entry.
 
 ## Import guard
 
@@ -304,7 +317,8 @@ at the start and 14.9 at the end on 16 hardware threads (other jobs running). Ou
   writes pause, and the episode times out part-way along the path.
 - **Convolutional source.** Seed 3 settles in the representation at 1.53 mm-eq with 1.56 mm of
   tool error (`tol_mm = 2.36`); seed 1 ends with 83.85 mm-eq after a slot-matching failure on the
-  last frame while the tool is 0.66 mm from the target.
+  last frame while the tool is 0.66 mm from the target. These CNN rows ran with the default
+  rendering, so a repeat of one seed can differ (see Determinism).
 
 ### L0b, `u = 0`
 
