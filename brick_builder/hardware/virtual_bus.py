@@ -72,6 +72,13 @@ class ServoDefaults:
     status_return_level: int = 1
     """0 answers PING only; 1 answers every addressed instruction.  Broadcast frames are never
     answered at any level, which is what makes a sync-write silent and a sync-read the exception."""
+    firmware_version: tuple[int, int] = (1, 0)
+    servo_model: tuple[int, int] = (1, 0)
+    """(major, minor) for registers 0/1 and 3/4.  Placeholder identity bytes, not read from a real
+    STS3215 unit -- this project has not logged one -- chosen only so the self-test's identity read
+    has a non-zero, self-consistent answer to check instead of the memory table's own zero-fill.
+    Replace with the real unit's own EPROM-programmed bytes once hardware is in hand; do not read
+    these as a datasheet fact."""
 
 
 class RegisterServos:
@@ -96,6 +103,10 @@ class RegisterServos:
         mem = bytearray(MEM_SIZE)
         d = self.defaults
         put = self._put
+        put(mem, "firmware_major", d.firmware_version[0])
+        put(mem, "firmware_minor", d.firmware_version[1])
+        put(mem, "servo_major", d.servo_model[0])
+        put(mem, "servo_minor", d.servo_model[1])
         put(mem, "id", servo_id)
         put(mem, "baud_rate", proto.BAUD_CODES[1_000_000])
         put(mem, "return_delay", 0)

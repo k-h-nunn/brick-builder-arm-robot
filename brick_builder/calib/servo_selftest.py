@@ -7,6 +7,12 @@ the bus at all; it does not go around :meth:`~brick_builder.hardware.bus.Bus.ena
 gate (voltage window, temperature, a missing or unhealthy servo) -- it calls that gate, and reports
 what it found alongside everything else.
 
+``Bus.disable_torque()`` is bus-wide: every call (before the first range read, and after each
+joint's own commanded move) drops holding torque on all six servos at once, not just the one under
+test. Against the virtual bus this costs at most one 20 ms free-fall tick, because nothing here
+steps physics except a written goal; on the real arm every one of those calls leaves the whole arm
+limp. Support it for the whole run, not only during the range reads.
+
 Five checks per joint
 ---------------------
 ``ping``
@@ -44,7 +50,11 @@ Five checks per joint
     :attr:`SelfTestConfig.move_max_fraction` of the commanded delta, settle there (the last few
     ticks' spread under :attr:`SelfTestConfig.move_settle_tol_rad`), and never trip the servo
     model's overload latch. This is "does the loop respond, settle and stay within its rating", not
-    a settling-accuracy measurement; that is ``servo_workspace_map.py``'s job.
+    a settling-accuracy measurement; that is ``servo_workspace_map.py``'s job. Afterward (not
+    scored) the joint is driven the rest of the way to the centre of its own travel before the next
+    joint's range read starts, so a joint already checked is not still sitting near its own
+    mechanical stop while a neighbour is swept through its full range -- see ``run_self_test``'s
+    docstring.
 """
 
 from __future__ import annotations
@@ -271,14 +281,25 @@ def _commanded_move(bus: Bus, index: int, row: JointSelfTest, cfg: SelfTestConfi
 
     Torque is bus-wide (one sync-write moves whatever the goal vector says for all six), so every
     other joint's goal is its own current reading, unchanged, for the whole call -- this is one
-    joint's check, not a synchronized whole-arm move. That matters because this runs right after
-    that one joint's own torque-off range read, while every joint still to be range-read is still
-    wherever the scene reset left it (its own moderate rest pose) and every joint already checked
-    has already settled near its own moderate pose too: at most one joint is ever away from a
-    moderate pose when this runs, which is what keeps the load on it inside what its own P gain and
-    torque budget can serve. Running the whole arm's range read first and only then trying to bring
-    six simultaneously-extended joints back at once is not safe -- it can leave more than one joint
-    unable to hold anywhere near its target, saturated at the torque limit indefinitely.
+    joint's check, not a synchronized whole-arm move.
+
+    The range read leaves this joint at the last point of its own sweep, close to one mechanical
+    stop, not at a moderate pose -- so *this* check always starts a gravity-loaded joint
+    (``shoulder_lift``, ``elbow_flex``, ``wrist_flex``) from wherever its own travel is hardest to
+    hold with no gravity feed-forward, with the rest of the arm still wherever it was left. That is
+    by design (a range-off-the-extreme check is the point), and it means this check can genuinely
+    FAIL here, honestly, on those three joints when the arm's own weight at that particular extreme
+    is close to what a proportional-only loop can serve: against the virtual bus at seed 0,
+    ``shoulder_lift`` and ``elbow_flex`` both do (see guide 08's table); ``wrist_flex`` passes but
+    close to the check's own upper bound. :func:`_park_after_check`, right after this, keeps that
+    from compounding onto the *next* joint's check: it drives this joint back toward the centre of
+    its own travel (when it still can) before joint ``k + 1``'s range read starts, so a joint
+    already checked is not left sitting near its own extreme while a neighbour is swept through its
+    full range right next to it -- without that step, one joint saturated near its own stop could
+    drag a downstream joint past its own calibrated limit through the kinematic chain during what
+    was meant to be someone else's small, isolated step. Parking does not, and cannot, rescue a
+    joint that is already saturated at its own extreme by the arm's own weight; it only stops that
+    joint from also poisoning the check after it.
 
     The range read can leave a joint somewhere torque was never applied to hold it (a pose set
     directly on the virtual bus, or wherever a person's hand left it on real hardware), so the
@@ -337,6 +358,32 @@ def _commanded_move(bus: Bus, index: int, row: JointSelfTest, cfg: SelfTestConfi
     row.commanded_move_detail = detail
 
 
+def _park_after_check(bus: Bus, index: int, cfg: SelfTestConfig) -> None:
+    """Drive joint ``index`` toward the centre of its own travel, every other joint's goal held at
+    its own current reading -- the same one-joint-moves shape as :func:`_commanded_move`, just
+    aimed at the middle of the range instead of a small step off wherever the range read left it.
+
+    Not one of the five checks (nothing here is scored, and a joint that has not reached the centre
+    by ``move_settle_ticks`` is not reported as a problem): the goal is only to leave a joint that
+    can hold it somewhere moderate before the next joint's range read starts, not to guarantee every
+    joint gets there. A joint whose own commanded-move check already found it saturated at its own
+    extreme (:func:`_commanded_move`'s docstring) generally stays saturated here too -- this does
+    not rescue that joint, it only stops asking it to travel further once the servo model's own
+    overload latch trips, the same protection every other move in this module respects.
+    """
+    ticks, _, _, valid = bus.read_ticks()
+    if not valid[index]:
+        return
+    goal = np.array([bus.calibration[k].to_rad(t) for k, t in enumerate(ticks)])
+    cal = bus.calibration[index]
+    lo, hi = min(cal.lo, cal.hi), max(cal.lo, cal.hi)
+    goal[index] = 0.5 * (lo + hi)
+    for _ in range(cfg.move_settle_ticks):
+        state = bus.cycle(goal)
+        if bool(state.tripped[index]):
+            return
+
+
 # ------------------------------------------------------------------------------------- the run ---
 
 
@@ -351,11 +398,26 @@ def run_self_test(bus: Bus, *, vbus=None, scene=None,
     joint to move and how long. Torque is written off before anything else runs, so a servo left
     energized from a previous session does not fight the range read.
 
-    The range read and the commanded move run **one joint at a time**, interleaved (`_commanded_
-    move`'s docstring says why): joint ``k``'s range read, then -- through
-    :meth:`~brick_builder.hardware.bus.Bus.enable_torque`'s own gate, exactly the way every other
-    caller goes through it, not around it -- its commanded move, before joint ``k + 1``'s range
-    read starts. At most one joint is ever away from a moderate pose at a time.
+    The range read and the commanded move run **one joint at a time**, interleaved: joint ``k``'s
+    range read, then -- through :meth:`~brick_builder.hardware.bus.Bus.enable_torque`'s own gate,
+    exactly the way every other caller goes through it, not around it -- its commanded move, then
+    :func:`_park_after_check` drives it back toward the centre of its own travel, before joint
+    ``k + 1``'s range read starts.
+
+    That park step stops an already-checked joint from *also* sitting near its own extreme while a
+    later joint is swept through its full range next to it, which used to let one joint's control
+    loop saturate, drag a neighbour through the kinematic chain, and drive it past its own
+    calibrated limit during what was meant to be a small, isolated step. It does not, and cannot,
+    make every joint's own check pass: a gravity-loaded joint (``shoulder_lift``, ``elbow_flex``,
+    ``wrist_flex``) is tested at its own range extreme *before* it has been parked, with whatever
+    weight the rest of the arm hangs on it there, and no gravity feed-forward is applied anywhere in
+    this check (:func:`_commanded_move`'s docstring) -- so that joint's own commanded-move check can
+    genuinely fail, honestly, on the arm's own weight at that particular extreme, independent of
+    joint order. Against the virtual bus at seed 0 this happens on two of the three gravity-loaded
+    joints (guide 08's table has the numbers); it is not a bug in the check, and on real hardware it
+    means that joint sagging or driving toward its own stop under load it cannot hold -- support the
+    arm through each gravity-loaded joint's range read and commanded move rather than treating a
+    FAIL there as routine.
     """
     rows: list[JointSelfTest] = []
     for k, (servo_id, joint) in enumerate(zip(bus.ids, JOINT_NAMES)):
@@ -399,6 +461,7 @@ def run_self_test(bus: Bus, *, vbus=None, scene=None,
             return SelfTestReport(rows, config)
         try:
             _commanded_move(bus, k, row, config)
+            _park_after_check(bus, k, config)
         finally:
             bus.disable_torque()
 
