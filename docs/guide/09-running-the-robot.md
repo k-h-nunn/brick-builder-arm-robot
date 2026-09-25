@@ -12,24 +12,36 @@ Running Brick Builder Arm Robot on the real arm, from power-on to a finished LEG
 ## Pre-flight checklist
 
 The bring-up kit ([Hardware, wiring, calibration](08-hardware-wiring-calibration.md)), run in
-order, before anything else touches the bus. Every command below takes `--virtual` today (a
-simulated arm behind a pseudo-terminal) and `--port /dev/ttyACM0` (or whatever the adapter board
-enumerates as) the day the arm arrives -- same commands, same order, same pass criteria.
+order, before anything else touches the bus. Steps 1-3 take `--virtual` today (a simulated arm
+behind a pseudo-terminal) and `--port /dev/ttyACM0` (or whatever the adapter board enumerates as)
+the day the arm arrives -- same commands, same order, same pass criteria; step 4 takes neither
+(it reads the JSON steps 1-2 wrote with `--out`).
 
 1. **Self-test.** `scripts/hardware/arm_selftest.py` -- ping, identity and safety registers, a
-   torque-off range read, one small commanded move per joint. Nothing past this step runs until
-   every joint's row reads `PASS`.
-2. **System identification.** `scripts/hardware/servo_sysid.py --joint <name>`, once per arm
-   joint (`shoulder_pan`, `shoulder_lift`, `elbow_flex`, `wrist_flex`, `wrist_roll`), one joint at
-   a time with the others holding. Confirms `kp` against the P register read in step 1 and gives
-   the friction and free-play figures guide 08 explains how to read.
+   torque-off range read, one small commanded move per joint. Pass: every present joint's ping,
+   registers and gate (voltage/temperature/status) read `PASS`, and the commanded-move column
+   reads `PASS` for every joint except one whose own downstream chain was still drooped from the
+   range read when its turn came (a known shape, not a fault -- see guide 08's self-test section).
+   A commanded-move `FAIL` from a missing servo, the gate, or an overload trip is a real fault:
+   stop and fix it before continuing.
+2. **System identification.** `scripts/hardware/servo_sysid.py --joint <name>`, on
+   `shoulder_lift`, `elbow_flex` and `wrist_flex`, one joint at a time with the others holding.
+   `shoulder_pan` and `wrist_roll` raise (their own axis carries too little gravity torque to fit
+   this way -- guide 08); their `kp` comes from step 1's P-register read instead. Pass: the three
+   joints above each print a finite `kp`/friction/lost-motion row with no exception; there is no
+   virtual-bus known value to check against on real hardware, so there is no numeric bar here
+   beyond "it ran" -- guide 08's per-joint table is what those three numbers looked like against
+   the virtual bus's own known values.
 3. **Settling-error map.** `scripts/hardware/servo_workspace_map.py` -- commanded vs settled tool
-   position over a workspace grid, tool down. This is the frame-rate/settling-accuracy check: a
-   bus that cannot hold a 50 Hz cycle (guide 08's round-trip measurement) or a servo law far off
-   the simulator's shows up here as a large or uneven error across the grid, before any brick is
-   involved.
+   position over a workspace grid, tool down. Diagnostic, not a parameter fill: pass is a per-point
+   error the same order of magnitude as guide 08's virtual-bus map (single-digit to low-teens mm);
+   an error much larger, or many more unreachable points than the virtual bus's own map shows, is
+   the sign to stop and debug before anything else. This does not check the bus's own cycle rate --
+   guide 08's round-trip measurement (`Bus.measure_cycle_time`) is the timing check.
 4. **Parameter-file fragment.** `scripts/hardware/servo_params_fragment.py`, fed steps 1 and 2's
-   `--out` JSON, prints the `arm:` block to paste into `configs/params/default.yaml`.
+   `--out` JSON, prints the `arm:` block to paste into `configs/params/default.yaml`. Pass: the
+   printed block loads through `brick_builder.params.load_params` with no error (checked by
+   `tests/calib/test_servo_params.py` against the virtual-bus fragment).
 
 None of this is the physical safety checklist (supply polarity, seated servo leads, no joint
 against a stop) guide 08's "Before power" section already gives -- that runs first, by hand, and
