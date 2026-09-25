@@ -245,7 +245,7 @@ other side would watch the blow through the brick."""
 ELEVATION = -14.0
 
 
-def damage_film(out: Path, *, quality_name: str = "hd1080", stills: int = 6,
+def damage_video(out: Path, *, quality_name: str = "hd1080", stills: int = 6,
                 stills_dir: Path | None = None, lead_seconds: float = 3.0,
                 hold_seconds: float = 3.0):
     quality = quality_by_name(quality_name)
@@ -321,7 +321,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     out = Path(args.out)
     stills_dir = Path(args.stills_dir) if args.stills_dir else out.parent / "stills"
-    result, report, scene = damage_film(
+    result, report, scene = damage_video(
         out, quality_name=args.quality, stills=args.stills,
         stills_dir=stills_dir if args.stills else None,
         lead_seconds=args.lead, hold_seconds=args.hold,

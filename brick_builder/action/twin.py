@@ -51,7 +51,7 @@ class BlindStep(RuntimeError):
 
 @dataclass(frozen=True)
 class TwinStep:
-    """One step's intended state and the Jacobian measured at its goal pose."""
+    """One step's target state and the Jacobian measured at its goal pose."""
 
     name: str
     goal_tcp: np.ndarray
