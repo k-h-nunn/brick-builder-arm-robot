@@ -368,7 +368,7 @@ failures, read off the panels on seed 0:
 | Step | Scene model output | Effect |
 |---|---|---|
 | Lift | White 2x4 on the table not segmented | No reference blob: no estimate of the brick in the jaws; with target sequences recorded through the model, the twin has nothing to line up on and the run stops |
-| Align | Held blue brick and the blue brick under it segmented as one instance | No Align measurement for 40 ticks; the press starts from a scene-state error of 14.6 mm and the brick does not seat |
+| Align | Held blue brick and the blue brick under it one blue region, not two | No Align measurement for 40 ticks; the press starts from a scene-state error of 14.6 mm and the brick does not seat |
 
 The side-by-side build fails at the same Align step (seed 8: no Align measurement, brick not
 seated). The recording of the stacked build is driven by the ground-truth scene model and shows

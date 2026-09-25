@@ -316,8 +316,8 @@ brick did not seat on any seed tried:
 
 Two perception failures, read off the panels at the second cycle: at Lift the white 2x4 on the
 table is not segmented, so the step has no reference blob; at Align the held blue brick and the
-blue brick under it are one instance, so Align has no measurement and the press starts from a
-scene-state error of 14.6 mm.
+blue brick under it are one blue region, not two, Align has no measurement, and the press starts
+from a scene-state error of 14.6 mm.
 
 ## QA
 
