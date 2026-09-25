@@ -34,7 +34,7 @@ class WorkspaceGridConfig:
     table in the bare-arm scene this runs against, so nothing stops a lower value, but this is
     what the grid ships with."""
     settle_ticks: int = 100
-    """5 s at 50 Hz -- past the worst settling time this project has measured (guide 03's 0.5 s
+    """2 s at 50 Hz -- past the worst settling time this project has measured (guide 03's 0.5 s
     nominal, times a wide margin for a joint deep in friction plus gear play)."""
     settle_avg_ticks: int = 20
     """Ticks at the end of the hold the settled reading is averaged over, same idea as
@@ -168,10 +168,11 @@ def figure_workspace_map(wmap: WorkspaceMap, out_path) -> None:
     if missed:
         xy = np.array([p.target_xyz_m[:2] for p in missed]) * 1e3
         ax.scatter(xy[:, 0], xy[:, 1], marker="x", c="#b0413e", s=60, label="unreachable")
-        # Every grid target has x > 0 (the heading sweep is +-50 deg either side of +x, so
-        # cos(heading) never reaches 0), which leaves the left half of the axes clear of data for
-        # the legend -- "upper right" sat on top of a real point at one radius/heading.
-        ax.legend(loc="upper left", fontsize=9)
+        # A fixed corner is not reliably clear of data -- the axes autoscale to whatever the grid
+        # measured, and a fixed "upper left"/"upper right" has landed on top of a real point before
+        # (e.g. the r=200mm, +50deg point at seed 0). "best" places the legend where it overlaps
+        # the fewest plotted points instead of guessing a corner ahead of the data.
+        ax.legend(loc="best", fontsize=9)
     ax.set_xlabel("x [mm]")
     ax.set_ylabel("y [mm]")
     ax.set_title("Settling-error map, tool down")
