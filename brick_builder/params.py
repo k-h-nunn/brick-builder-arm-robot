@@ -264,9 +264,24 @@ SCHEMA: dict[str, FieldSpec] = {
             "counts. Sets ServoConfig.error_deadband_ticks."),
     "arm.joint_friction_Nm": FieldSpec(
         "arm", "N*m", float, 0.0, 1.0, default=0.0515,
-        doc="Dry friction in one servo's gear train. Recorded for reference only: ArmConfig has "
-            "no field for this today, so it does not reach the simulator. See the loader's "
-            "report for the hook this is missing."),
+        doc="Dry friction in one servo's gear train. Sets ArmConfig.joint_friction_nm, which "
+            "patch_so101._patch_joints applies to every actuated joint's frictionloss. The "
+            "default matches the BAM-identified value that used to be hard-coded there, so the "
+            "shipped file changes nothing until this is measured."),
+    "arm.print_color_r": FieldSpec(
+        "arm", "-", float, 0.0, 1.0, default=1.0,
+        doc="Printed-part colour, red channel (0-1). Sets ArmConfig.print_color_rgba (alpha "
+            "fixed at 1.0), which patch_so101._patch_print_color applies to every printed-part "
+            "material -- not the two black STS3215 servo-casing materials, which are the "
+            "manufacturer's plastic, not this team's own print. Default matches the upstream "
+            "mesh's colour; this team's real, printed arm may be a different colour, unmeasured "
+            "as yet."),
+    "arm.print_color_g": FieldSpec(
+        "arm", "-", float, 0.0, 1.0, default=0.82,
+        doc="Printed-part colour, green channel. See print_color_r."),
+    "arm.print_color_b": FieldSpec(
+        "arm", "-", float, 0.0, 1.0, default=0.12,
+        doc="Printed-part colour, blue channel. See print_color_r."),
     # -- camera -------------------------------------------------------------------------------
     "camera.diagonal_fov_deg": FieldSpec(
         "camera", "deg", float, 30.0, 170.0, default=115.0,
@@ -725,10 +740,10 @@ def to_arm_config(params: ParamFile, base: ArmConfig = ArmConfig()) -> ArmConfig
     ``arm.backlash_total_deg`` is the TOTAL free play a teammate measures at the tool;
     ``ArmConfig.backlash_deg`` is a half-range, so this halves it before setting the field.
 
-    ``arm.joint_friction_Nm`` is recorded in the parameter file but has no matching field on
-    ``ArmConfig`` today (``patch_so101._patch_joints`` hard-codes the BAM-identified dry
-    friction); :func:`filter_dataclass_kwargs` simply leaves it out, and it never reaches this
-    function's kwargs in the first place because there is nothing to put it in.
+    ``arm.joint_friction_Nm`` sets ``ArmConfig.joint_friction_nm``, which
+    ``patch_so101._patch_joints`` applies to every actuated joint's ``frictionloss``.
+    ``arm.print_color_r``/``_g``/``_b`` set ``ArmConfig.print_color_rgba`` (alpha fixed at 1.0),
+    which ``patch_so101._patch_print_color`` applies to every printed-part material.
     """
     kwargs = {
         "vin": float(params.value("arm.supply_voltage_V")),
@@ -736,6 +751,13 @@ def to_arm_config(params: ParamFile, base: ArmConfig = ArmConfig()) -> ArmConfig
         "torque_limit_nm": float(params.value("arm.torque_limit_Nm")),
         "backlash_deg": float(params.value("arm.backlash_total_deg")) / 2.0,
         "pad_friction": float(params.value("bricks.jaw_on_brick_friction")),
+        "joint_friction_nm": float(params.value("arm.joint_friction_Nm")),
+        "print_color_rgba": (
+            float(params.value("arm.print_color_r")),
+            float(params.value("arm.print_color_g")),
+            float(params.value("arm.print_color_b")),
+            1.0,
+        ),
     }
     kept, _ = filter_dataclass_kwargs(ArmConfig, kwargs)
     return dataclasses.replace(base, **kept)

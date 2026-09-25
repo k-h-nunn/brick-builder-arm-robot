@@ -148,6 +148,15 @@ class ArmConfig:
     real part misses the specification anyway.  See :func:`_add_backlash`.
     """
     pad_friction: float = 1.0
+    joint_friction_nm: float = BAM_FRICTION_BASE
+    """Dry friction in one servo's gear train [N*m] -> MuJoCo ``frictionloss`` on every actuated
+    joint (see :func:`_patch_joints`).  Defaults to the BAM-identified value that used to be
+    hard-coded there, so the compiled model is unchanged unless a caller sets this explicitly."""
+    print_color_rgba: tuple[float, float, float, float] = (1.0, 0.82, 0.12, 1.0)
+    """RGBA applied to every printed-part material (see :func:`_patch_print_color`); leaves the
+    two STS3215 servo-casing materials alone, since those are the manufacturer's black plastic,
+    not a part this team prints.  Default is the upstream mesh's own colour -- this team's real
+    printed arm may be a different colour (unmeasured; see ``docs/guide/10``)."""
     primitive_collision: bool = True
     timestep: float = 0.002
 
@@ -584,8 +593,28 @@ def _patch_joints(spec: mujoco.MjSpec, cfg: ArmConfig) -> None:
         if joint.name not in ARM_JOINTS:
             continue
         joint.damping = [servo_damping(), 0.0, 0.0]  # hinge uses element 0
-        joint.frictionloss = BAM_FRICTION_BASE
+        joint.frictionloss = cfg.joint_friction_nm
         joint.armature = BAM_ARMATURE
+
+
+_PRINTED_MATERIAL_EXCLUDE = frozenset({
+    "sts3215_03a_v1_material",
+    "sts3215_03a_no_horn_v1_material",
+})
+"""Vendored materials that are the STS3215 servo's own black plastic casing, not a part this team
+prints -- left out of :func:`_patch_print_color`."""
+
+
+def _patch_print_color(spec: mujoco.MjSpec, cfg: ArmConfig) -> None:
+    """Recolour every printed-part material to ``cfg.print_color_rgba``.
+
+    At the default config this reproduces the upstream materials' own rgba exactly, so a caller
+    that never sets ``print_color_rgba`` sees no change at all.
+    """
+    for material in spec.materials:
+        if material.name in _PRINTED_MATERIAL_EXCLUDE:
+            continue
+        material.rgba = list(cfg.print_color_rgba)
 
 
 def _add_backlash(spec: mujoco.MjSpec, cfg: ArmConfig) -> None:
@@ -775,14 +804,15 @@ def _add_sites_and_camera(spec: mujoco.MjSpec) -> None:
 def build_arm_spec(cfg: ArmConfig = ArmConfig()) -> mujoco.MjSpec:
     """Load the vendored MJCF and return a patched, uncompiled :class:`mujoco.MjSpec`.
 
-    Patches: solver options, BAM position actuators, BAM joint damping/friction/armature, optional
-    backlash joints, primitive collision geoms with fingertip pads, the TCP site and the wrist
-    camera.  The vendored file on disk is untouched.
+    Patches: solver options, BAM position actuators, BAM joint damping/friction/armature, printed-
+    part colour, optional backlash joints, primitive collision geoms with fingertip pads, the TCP
+    site and the wrist camera.  The vendored file on disk is untouched.
     """
     spec = mujoco.MjSpec.from_file(str(VENDOR_XML))
     _apply_options(spec, cfg)
     _patch_actuators(spec, cfg)
     _patch_joints(spec, cfg)
+    _patch_print_color(spec, cfg)
     _replace_collision(spec, cfg)
     _add_sites_and_camera(spec)
     _add_backlash(spec, cfg)

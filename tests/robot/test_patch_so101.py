@@ -108,6 +108,67 @@ def test_joint_dynamics_come_from_bam():
         assert model.dof_armature[dof] == pytest.approx(0.026, abs=0.001)
 
 
+def test_joint_friction_defaults_to_the_previously_hard_coded_bam_value():
+    """ArmConfig.joint_friction_nm is a new field; at its default the compiled model must be the
+    same as when patch_so101._patch_joints hard-coded P.BAM_FRICTION_BASE on every joint."""
+    assert ArmConfig().joint_friction_nm == pytest.approx(P.BAM_FRICTION_BASE)
+    model, _ = _compile(ArmConfig(backlash_deg=0.0))
+    for name in ARM_JOINTS:
+        dof = model.jnt_dofadr[_jid(model, name)]
+        assert model.dof_frictionloss[dof] == pytest.approx(P.BAM_FRICTION_BASE)
+
+
+def test_joint_friction_field_actually_reaches_the_compiled_model():
+    model, _ = _compile(ArmConfig(backlash_deg=0.0, joint_friction_nm=0.3))
+    for name in ARM_JOINTS:
+        dof = model.jnt_dofadr[_jid(model, name)]
+        assert model.dof_frictionloss[dof] == pytest.approx(0.3)
+
+
+def _drive_and_record(cfg: ArmConfig, ticks: int = 200) -> np.ndarray:
+    """A short driven trajectory: qpos of every arm joint, once per physics step."""
+    model, data = _compile(cfg)
+    bus = ServoBus(model, data, cfg=ServoConfig(action_delay_jitter_s=0.0))
+    bus.write(np.array([0.3, -0.4, 0.5, -0.2, 0.1, 0.0]))
+    traj = []
+    for k in range(ticks):
+        if k % 10 == 0:
+            bus.substep()
+        mujoco.mj_step(model, data)
+        traj.append(data.qpos.copy())
+    return np.array(traj)
+
+
+def test_joint_friction_leaves_the_default_trajectory_unchanged():
+    """Behaviour identical at defaults, checked against a reference that does not depend on
+    `ArmConfig.joint_friction_nm` at all: compile at plain `ArmConfig()` defaults (backlash
+    included, not switched off), then overwrite `dof_frictionloss` directly on the compiled
+    model with `P.BAM_FRICTION_BASE` -- the value `_patch_joints` used to hard-code before this
+    field existed -- bypassing the new field's plumbing entirely. If the field's default did not
+    reproduce the old hard-coded behaviour, these two trajectories would differ."""
+    default_traj = _drive_and_record(ArmConfig())
+
+    model, data = _compile(ArmConfig())
+    for name in ARM_JOINTS:
+        dof = model.jnt_dofadr[_jid(model, name)]
+        model.dof_frictionloss[dof] = P.BAM_FRICTION_BASE  # set by hand, not through the field
+    bus = ServoBus(model, data, cfg=ServoConfig(action_delay_jitter_s=0.0))
+    bus.write(np.array([0.3, -0.4, 0.5, -0.2, 0.1, 0.0]))
+    reference_traj = []
+    for k in range(200):
+        if k % 10 == 0:
+            bus.substep()
+        mujoco.mj_step(model, data)
+        reference_traj.append(data.qpos.copy())
+    reference_traj = np.array(reference_traj)
+
+    assert np.array_equal(default_traj, reference_traj)
+
+    # and a materially different value is not a no-op -- the field really drives the dynamics
+    high_friction_traj = _drive_and_record(ArmConfig(joint_friction_nm=0.3))
+    assert not np.allclose(default_traj, high_friction_traj, atol=1e-9)
+
+
 def test_solver_options_follow_the_design_report():
     model, _ = _compile(ArmConfig(timestep=0.002))
     assert model.opt.timestep == pytest.approx(0.002)
@@ -335,6 +396,41 @@ def test_compiled_camera_uses_the_documented_fovy():
     model, _ = _compile(ArmConfig())
     cam = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, WRIST_CAM)
     assert model.cam_fovy[cam] == pytest.approx(P.WRIST_CAM_FOVY_DEG)
+
+
+# ---------------------------------------------------------------------- printed-part colour ---
+
+
+def _material_rgba(model: mujoco.MjModel, name: str) -> np.ndarray:
+    mid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_MATERIAL, name)
+    assert mid >= 0, name
+    return model.mat_rgba[mid].copy()
+
+
+def test_print_color_defaults_to_the_upstream_mesh_colours():
+    """At the default config, every printed-part material must be exactly what the vendored file
+    already shipped -- 'default = the current upstream colours' is not just the shape of the
+    tuple, it has to reproduce the actual numbers."""
+    upstream = mujoco.MjSpec.from_file(str(P.VENDOR_XML))
+    upstream_rgba = {m.name: np.array(m.rgba, dtype=float) for m in upstream.materials}
+
+    model, _ = _compile(ArmConfig(backlash_deg=0.0))
+    for name, rgba in upstream_rgba.items():
+        assert _material_rgba(model, name) == pytest.approx(rgba), name
+
+
+def test_print_color_recolours_the_printed_parts_but_not_the_servo_casing():
+    colour = (0.85, 0.85, 0.85, 1.0)
+    model, _ = _compile(ArmConfig(backlash_deg=0.0, print_color_rgba=colour))
+
+    # a representative printed part changed...
+    assert _material_rgba(model, "upper_arm_so101_v1_material") == pytest.approx(colour)
+    assert _material_rgba(model, "moving_jaw_so101_v1_material") == pytest.approx(colour)
+    # ...but the servo's own black plastic casing did not
+    assert _material_rgba(model, "sts3215_03a_v1_material") == pytest.approx([0.1, 0.1, 0.1, 1.0])
+    assert _material_rgba(model, "sts3215_03a_no_horn_v1_material") == pytest.approx(
+        [0.1, 0.1, 0.1, 1.0]
+    )
 
 
 # ------------------------------------------------------------------- fixed-jaw share of the image ---

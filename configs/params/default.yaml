@@ -497,17 +497,39 @@ arm:
     notes: "Default 0 (nominal law, nothing added). Documented value is about 2 counts; the factory value is set per unit, so treat 2 as a bracket, not a measurement, until read off this team's own servos."
 
   joint_friction_Nm:
-    # What: dry friction in one servo's gear train.
+    # What: dry friction in one servo's gear train. Sets ArmConfig.joint_friction_nm, applied to
+    #   every actuated joint's frictionloss by patch_so101._patch_joints.
     # Measure: not practical with a kitchen scale; recorded here for completeness.
     value: 0.0515
     status: assumed
     measured_by:
     measured_on:
-    notes: >
-      RECORDED FOR REFERENCE ONLY. ArmConfig has no field for this today -- patch_so101.py hard-
-      codes the BAM-identified value on every joint, so changing this number here does not
-      currently reach the simulator. See the params loader's report for the hook this is
-      missing.
+    notes: "The BAM-identified value; the shipped default reproduces the model's previous hard-coded behaviour exactly."
+
+  print_color_r:
+    # What: the printed arm's colour, red channel (0-1). RGBA applied to every printed-part
+    #   material (not the two black STS3215 servo-casing materials) by
+    #   patch_so101._patch_print_color.
+    # Measure: not a kitchen-scale job -- read the print colour off the actual arm.
+    value: 1.0
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "Matches the upstream mesh's own colour (a golden yellow). The real, printed arm's colour has not been checked against the physical parts yet."
+
+  print_color_g:
+    value: 0.82
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See print_color_r."
+
+  print_color_b:
+    value: 0.12
+    status: assumed
+    measured_by:
+    measured_on:
+    notes: "See print_color_r."
 
 camera:
 

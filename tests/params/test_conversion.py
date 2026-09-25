@@ -187,13 +187,44 @@ def test_to_arm_config_pad_friction_comes_from_the_bricks_section(tmp_path):
     assert P.to_arm_config(pf).pad_friction == pytest.approx(0.9)
 
 
-def test_to_arm_config_joint_friction_has_no_field_to_land_in():
-    """The recorded-but-unreachable parameter: ArmConfig has no matching field today."""
+def test_to_arm_config_joint_friction_now_reaches_arm_config(tmp_path):
+    """Re-specified: ArmConfig.joint_friction_nm now exists and to_arm_config sets it, closing the
+    gap the previous version of this test pinned (arm.joint_friction_Nm used to be recorded but
+    unreachable)."""
     valid = {f.name for f in dataclasses.fields(ArmConfig)}
-    assert "joint_friction_nm" not in valid
-    assert "joint_friction_Nm" not in valid
-    # And building an ArmConfig from the params file must not raise over it.
-    P.to_arm_config(P.load_params())
+    assert "joint_friction_nm" in valid
+
+    default_ac = P.to_arm_config(P.load_params())
+    assert default_ac.joint_friction_nm == pytest.approx(0.0515)
+
+    pf = _override(tmp_path, """
+        arm:
+          joint_friction_Nm: 0.2
+    """)
+    ac = P.to_arm_config(pf)
+    assert ac.joint_friction_nm == pytest.approx(0.2)
+    for f in dataclasses.fields(ArmConfig):
+        if f.name == "joint_friction_nm":
+            continue
+        assert getattr(ac, f.name) == getattr(default_ac, f.name), f.name
+
+
+def test_to_arm_config_print_color_comes_from_the_three_rgb_channels(tmp_path):
+    default_ac = P.to_arm_config(P.load_params())
+    assert default_ac.print_color_rgba == pytest.approx((1.0, 0.82, 0.12, 1.0))
+
+    pf = _override(tmp_path, """
+        arm:
+          print_color_r: 0.85
+          print_color_g: 0.85
+          print_color_b: 0.85
+    """)
+    ac = P.to_arm_config(pf)
+    assert ac.print_color_rgba == pytest.approx((0.85, 0.85, 0.85, 1.0))
+    for f in dataclasses.fields(ArmConfig):
+        if f.name == "print_color_rgba":
+            continue
+        assert getattr(ac, f.name) == getattr(default_ac, f.name), f.name
 
 
 # ---------------------------------------------------------------------------
