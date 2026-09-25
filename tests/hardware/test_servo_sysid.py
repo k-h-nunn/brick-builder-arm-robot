@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -78,6 +80,26 @@ def test_known_values_match_the_default_arm_config():
         2.0 * ArmConfig().backlash_deg + 2.0 * 3.0 * DEG_PER_TICK)
 
 
+def _servo_fit(**overrides) -> "sysid.ServoFit":
+    fields = dict(
+        joint="wrist_flex", kp_nm_per_rad=9.0, friction_nm=0.02, peak_speed_rad_s=1.0,
+        lost_motion_deg=1.0, deadband_and_play_deg=1.0, dead_band_ticks=0.0, backlash_deg=1.0,
+        droop_points=6, droop_residual_deg=0.01,
+        registered_dead_band_ticks=0.0, min_droop_ticks=0.0,
+    )
+    fields.update(overrides)
+    return sysid.ServoFit(**fields)
+
+
+def test_dead_band_reachable_compares_the_registered_ticks_against_the_smallest_droop():
+    """A per-fit, per-unit comparison (guide 08), not a fixed joint list: the dead band is
+    "reachable" exactly when it is as wide as, or wider than, the smallest steady-state droop the
+    identify sweep measured anywhere -- this joint's own droop got that close to zero."""
+    assert _servo_fit(registered_dead_band_ticks=10.0, min_droop_ticks=5.0).dead_band_reachable is True
+    assert _servo_fit(registered_dead_band_ticks=5.0, min_droop_ticks=5.0).dead_band_reachable is True
+    assert _servo_fit(registered_dead_band_ticks=2.0, min_droop_ticks=5.0).dead_band_reachable is False
+
+
 def test_identify_refuses_a_joint_with_negligible_gravity_torque():
     """`shoulder_pan` (a vertical axis, zero gravity torque at every angle) has to raise, not
     return a number a near-zero-signal droop fit happened to produce."""
@@ -95,6 +117,27 @@ def test_identify_refuses_a_joint_with_negligible_gravity_torque():
     finally:
         bus.close()
         vbus.stop()
+
+
+def test_identify_reads_the_registered_dead_band_off_the_bus():
+    """Nominal `ArmConfig` ships dead band 0 (registers 26/27), so `identify`'s own bus-observed
+    `registered_dead_band_ticks` must read 0 too, and a gravity-loaded joint's droop never gets to
+    0 ticks (the gravity-torque guard above already refused any joint whose droop would), so
+    `dead_band_reachable` is False here -- the nominal case guide 08's per-joint table reports."""
+    scene, vbus = sysid.virtual_arm()
+    vbus.start()
+    from brick_builder.hardware.bus import Bus, BusSettings
+
+    bus = Bus(vbus.port, BusSettings(timeout_s=0.5))
+    try:
+        bus.enable_torque(check=False)
+        fit = sysid.identify(bus, "shoulder_lift", kin=scene.kin)
+    finally:
+        bus.close()
+        vbus.stop()
+    assert fit.registered_dead_band_ticks == 0.0
+    assert fit.min_droop_ticks > 0.0
+    assert fit.dead_band_reachable is False
 
 
 @pytest.mark.slow

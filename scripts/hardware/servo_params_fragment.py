@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--real", action="store_true",
                         help="mark the fragment as a real-hardware measurement, not a virtual-bus "
                              "self-consistency check")
-    parser.add_argument("--measured-by", default="servo-bringup kit")
+    parser.add_argument("--measured-by", default="arm bring-up kit")
     args = parser.parse_args(argv)
 
     report = _load_selftest(args.selftest)

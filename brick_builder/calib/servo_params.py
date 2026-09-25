@@ -19,8 +19,10 @@ _DEG_PER_TICK = 360.0 / 4096.0
 
 GRAVITY_LOADED_JOINTS = frozenset({"shoulder_lift", "elbow_flex", "wrist_flex"})
 """The three joints the droop line can identify at all (guide 08): their own axis carries enough
-gravity torque to fit ``kp``/friction from bus readings. Also the joints whose ramp never sees the
-firmware dead band at all -- see :func:`build_fields`."""
+gravity torque to fit ``kp``/friction from bus readings. Whether a *given* gravity-loaded joint's
+ramp also sees the firmware dead band is not fixed by this set -- it depends on how that droop
+compares to the registered dead band on this particular unit, computed per fit by
+``ServoFit.dead_band_reachable`` (see :func:`build_fields`)."""
 
 
 @dataclass(frozen=True)
@@ -85,16 +87,24 @@ def build_fields(report, fit=None) -> dict[str, Field]:
             dead_band.notes + " (the ramp's own hysteresis cannot fill this field on a "
             "gravity-loaded joint -- see guide 08 -- so this is the register read.)",
         )
-        if fit.joint in GRAVITY_LOADED_JOINTS:
-            # On a gravity-loaded joint the ramp never sees the dead band at all (just above), so
-            # nothing measured by the ramp needs the registered dead band subtracted back out: the
-            # raw combined figure already is the free-play estimate.
+        # Computed from the fit's own two numbers (not `ServoFit.dead_band_reachable`'s property
+        # directly), so this also works when `fit` is a namespace loaded back from a saved
+        # `servo_sysid.py --out` JSON file, which only round-trips dataclass fields.
+        dead_band_reachable = fit.registered_dead_band_ticks >= fit.min_droop_ticks
+        if not dead_band_reachable:
+            # This joint's own smallest droop (min_droop_ticks) stayed at or above the registered
+            # dead band everywhere it was swept, so nothing measured by the ramp needs the
+            # registered dead band subtracted back out: the raw combined figure already is the
+            # free-play estimate. Computed per fit (ServoFit.dead_band_reachable), not assumed from
+            # which joint this is.
             backlash_value = fit.deadband_and_play_deg
             backlash_note = (
                 f"system identification, joint {fit.joint}: ramp hysteresis "
                 f"({fit.deadband_and_play_deg:.3f} deg, the droop part already taken out) taken "
-                f"directly as free play -- {fit.joint} is gravity-loaded, so its ramp never sees "
-                f"the firmware dead band and nothing is subtracted (guide 08)."
+                f"directly as free play -- this joint's own droop ({fit.min_droop_ticks:.1f} "
+                f"ticks) never got as small as the registered dead band "
+                f"({fit.registered_dead_band_ticks:.1f} ticks), so its ramp never saw the dead "
+                f"band and nothing is subtracted (guide 08)."
             )
         else:
             backlash_value = max(
@@ -102,9 +112,12 @@ def build_fields(report, fit=None) -> dict[str, Field]:
             backlash_note = (
                 f"system identification, joint {fit.joint}: ramp hysteresis "
                 f"({fit.deadband_and_play_deg:.3f} deg, the droop part already taken out) minus "
-                f"this fragment's own servo_dead_band_counts above -- {fit.joint} is not one of "
-                f"the gravity-loaded joints the ramp-vs-dead-band reasoning in guide 08 covers, "
-                f"so this subtraction is unvalidated."
+                f"this fragment's own servo_dead_band_counts above -- this joint's own droop "
+                f"({fit.min_droop_ticks:.1f} ticks) got as small as the registered dead band "
+                f"({fit.registered_dead_band_ticks:.1f} ticks) somewhere in the swept range, so "
+                f"its ramp can see the dead band; the subtraction is only a partial correction "
+                f"(guide 08 -- the kp/friction fit above is itself biased in this case, not just "
+                f"this field)."
             )
         fields["backlash_total_deg"] = Field(round(backlash_value, 3), backlash_note)
         fields["joint_friction_Nm"] = Field(
@@ -118,7 +131,7 @@ def build_fields(report, fit=None) -> dict[str, Field]:
 
 
 def render_param_fragment(
-    fields: dict[str, Field], *, measured_by: str = "servo-bringup kit",
+    fields: dict[str, Field], *, measured_by: str = "arm bring-up kit",
     measured_on: str | None = None, virtual: bool = True,
 ) -> str:
     """The ``arm:`` YAML block, in ``configs/params/default.yaml``'s own field format."""

@@ -24,7 +24,10 @@ def _report(p_gains, dead_bands, voltages) -> SelfTestReport:
 def _fit(**kwargs):
     base = dict(joint="shoulder_lift", kp_nm_per_rad=9.3, friction_nm=0.015,
                peak_speed_rad_s=2.8, lost_motion_deg=1.4, deadband_and_play_deg=1.2,
-               dead_band_ticks=0.0, backlash_deg=1.2, droop_points=6, droop_residual_deg=0.1)
+               dead_band_ticks=0.0, backlash_deg=1.2, droop_points=6, droop_residual_deg=0.1,
+               # Default: the dead band is not reachable (registered ticks below the smallest
+               # droop measured) -- the ordinary case on a joint whose gravity droop dominates.
+               registered_dead_band_ticks=0.0, min_droop_ticks=5.0)
     base.update(kwargs)
     return types.SimpleNamespace(**base)
 
@@ -46,27 +49,32 @@ def test_disagreeing_registers_are_flagged_not_averaged():
     assert "disagree" in fields["servo_p_gain"].notes
 
 
-def test_backlash_on_a_gravity_loaded_joint_is_the_raw_combined_figure_not_subtracted():
-    """`shoulder_lift` is gravity-loaded (`GRAVITY_LOADED_JOINTS`): its ramp never sees the
-    firmware dead band (guide 08), so the registered dead band is not subtracted back out of the
-    combined ramp figure -- subtracting it would take out something the ramp never measured."""
+def test_backlash_is_the_raw_combined_figure_when_the_dead_band_is_not_reachable():
+    """When this fit's own smallest droop (`min_droop_ticks`) never got as small as the registered
+    dead band, the ramp never saw it (guide 08), so nothing is subtracted back out of the combined
+    ramp figure -- subtracting it would take out something the ramp never measured. Computed from
+    the fit's own two numbers, not assumed from which joint this is."""
     report = _report([16] * 6, [(4, 4)] * 6, [7.4] * 6)
     fit = _fit(joint="shoulder_lift", deadband_and_play_deg=1.2, dead_band_ticks=0.0,
-              backlash_deg=1.2)
+              backlash_deg=1.2, registered_dead_band_ticks=4.0, min_droop_ticks=40.0)
     fields = build_fields(report, fit)
     assert fields["backlash_total_deg"].value == pytest.approx(1.2, abs=1e-3)
     assert fields["servo_dead_band_counts"].value == 4
-    assert "gravity-loaded" in fields["backlash_total_deg"].notes
+    assert "never saw the dead band" in fields["backlash_total_deg"].notes
 
 
-def test_backlash_off_a_gravity_loaded_joint_does_subtract_the_registered_dead_band():
+def test_backlash_subtracts_the_registered_dead_band_when_it_is_reachable():
+    """When this fit's own smallest droop got as small as (or smaller than) the registered dead
+    band somewhere in the swept range, the ramp can see it, so the registered dead band is
+    subtracted back out as a partial correction."""
     report = _report([16] * 6, [(4, 4)] * 6, [7.4] * 6)
-    fit = _fit(joint="wrist_roll", deadband_and_play_deg=1.2, dead_band_ticks=0.0, backlash_deg=1.2)
+    fit = _fit(joint="wrist_flex", deadband_and_play_deg=1.2, dead_band_ticks=0.0, backlash_deg=1.2,
+              registered_dead_band_ticks=4.0, min_droop_ticks=3.0)
     fields = build_fields(report, fit)
     # 4 registered ticks each way -> 8 ticks total -> 8 * (360/4096) deg taken out of 1.2.
     expected = 1.2 - 8.0 * (360.0 / 4096.0)
     assert fields["backlash_total_deg"].value == pytest.approx(expected, abs=1e-3)
-    assert "unvalidated" in fields["backlash_total_deg"].notes
+    assert "partial correction" in fields["backlash_total_deg"].notes
 
 
 def test_joint_friction_is_always_derived_never_measured():

@@ -24,24 +24,33 @@ same three tests, the same fit.  What it identifies:
     Width of the hysteresis loop a slow triangular ramp traces out: gear free play, the firmware's
     dead band and twice the friction droop, together.  With ``kp`` and ``friction`` already fitted,
     the droop part is known and what is left is free play plus dead band.
-``dead_band`` [encoder ticks] and ``backlash`` [deg] -- attempted, validated to fail
+``dead_band`` [encoder ticks] and ``backlash`` [deg] -- attempted, validated to mostly fail
     ``fit_dead_band_ticks`` tries to split the ramp's hysteresis in two using ``Present_Load``:
     inside the firmware's dead band (registers 26/27) the firmware commands nothing at all, so the
     duty cycle should read exactly zero while the position does not move, which free play carries
-    no such tell for (duty stays driven the whole time the output lags the motor).  ``--validate``
-    shows this finds nothing on the three joints ``kp`` is identifiable on: their gravity droop
-    against a nonzero dead band is many times the dead band's own width at every point on the ramp
-    (``servo_model.py``'s ``_update_overload`` sets duty to exactly zero only while the position
-    error sits inside the dead band, and on a gravity-loaded joint the steady-state error never
-    does), so there is no zero-load pocket there to find -- not because the pocket is too brief to
-    sample, but because it does not exist on these joints. It exists (roughly 100 ticks wide) on a
-    joint with no gravity torque, which is exactly the joint set this method cannot fit ``kp`` on
-    either. Kept and reported rather than deleted, because a validated negative result is still the
-    answer to "which parameters are not identifiable from the bus and why" -- see the guide. Fill
-    the dead band from the self-test's direct register read (26/27) instead: on a gravity-loaded
-    joint the ramp's raw combined figure is free play alone (nothing to subtract, since the dead
-    band never contributed to it); off one, subtract the registered dead band from the combined
-    figure as before, unvalidated.
+    no such tell for (duty stays driven the whole time the output lags the motor).  Whether it finds
+    anything depends on whether this joint's own gravity droop ever gets close enough to zero for
+    the dead band to matter -- :attr:`ServoFit.dead_band_reachable` computes that per joint and per
+    unit, from the registered dead band (26/27) and the smallest steady-state droop the identify
+    sweep measured, rather than assuming it from a fixed joint list. On ``shoulder_lift`` and
+    ``elbow_flex`` the gravity droop stays many times the dead band's own width at every angle
+    swept (``servo_model.py``'s ``_update_overload`` sets duty to exactly zero only while the
+    position error sits inside the dead band, and there it never does), so there is no zero-load
+    pocket to find -- not because the pocket is too brief to sample, but because it does not exist
+    for these two joints. ``wrist_flex``'s own droop is smaller and can be comparable to a large
+    randomized dead band, so on that joint the dead band **can** reach the ramp -- which does not
+    just add a pocket to find, it also biases the droop-line ``kp``/``friction`` fit itself, since
+    inside the dead band the position stops tracking the proportional-control law the fit assumes
+    (``--validate`` on ``wrist_flex`` was not run; see the guide for what is and is not backed by a
+    randomized-draw recovery). A joint with negligible gravity torque (``shoulder_pan``,
+    ``wrist_roll``) does show a pocket (tens of ticks wide, easily sampled at 50 Hz) -- but that is
+    exactly the joint set this method cannot fit ``kp`` on either. Kept and reported rather than
+    deleted, because even a joint-by-joint negative result is still an answer to "which parameters
+    are not identifiable from the bus and why" -- see the guide. Fill the dead band from the
+    self-test's direct register read (26/27) instead: on a joint where the dead band is not
+    reachable the ramp's raw combined figure is free play alone (nothing to subtract); where it is
+    reachable, subtracting the registered dead band from the combined figure is the fallback, and
+    is itself only a partial correction given the ``kp``/``friction`` bias above.
 
 Against the virtual bus every one of these has a known answer, so the script prints the recovered
 value beside it and the error.  Guide 08 records what the recovery measured.
@@ -70,9 +79,9 @@ from pathlib import Path
 
 import numpy as np
 
-from brick_builder.hardware.bus import Bus, BusSettings
+from brick_builder.hardware.bus import Bus, BusError, BusSettings
 from brick_builder.hardware.real_world import kinematic_arm
-from brick_builder.hardware.sts3215 import DEG_PER_TICK, JOINT_NAMES, RAD_PER_TICK
+from brick_builder.hardware.sts3215 import DEG_PER_TICK, JOINT_NAMES, ProtocolError, RAD_PER_TICK
 from brick_builder.robot.patch_so101 import ArmConfig, BAM_FRICTION_BASE, servo_kp
 
 HOLD_TICKS = 60
@@ -109,6 +118,25 @@ class ServoFit:
     the TOTAL (not half-range) mechanical free play, clipped at 0."""
     droop_points: int
     droop_residual_deg: float
+    registered_dead_band_ticks: float
+    """Registers 26/27 (CW/CCW, the larger of the two), read directly off the bus -- the ground
+    truth :attr:`dead_band_reachable` compares the fitted droop against."""
+    min_droop_ticks: float
+    """Smallest ``|position error|`` seen anywhere over this joint's own droop sweep, in ticks --
+    how close the steady-state error driven by gravity alone ever gets to zero."""
+
+    @property
+    def dead_band_reachable(self) -> bool:
+        """Can this joint's own ramp plausibly enter the registered dead band anywhere it was
+        swept?  ``registered_dead_band_ticks >= min_droop_ticks`` -- computed per joint, per unit,
+        from bus readings, not a fixed joint list: on a joint whose gravity droop never gets close
+        to zero (``shoulder_lift``, ``elbow_flex`` -- see guide 08) this is reliably ``False``
+        whatever the dead band randomizes to, but ``wrist_flex``'s own droop is small enough
+        (guide 08) that a large randomized dead band can reach it, which corrupts not just the
+        backlash split but the droop-line ``kp``/``friction`` fit itself, since inside the dead
+        band the firmware commands no torque at all and the position simply does not track the
+        proportional-control law this fit assumes."""
+        return self.registered_dead_band_ticks >= self.min_droop_ticks
 
     def report(self, known: dict | None = None) -> str:
         rows = [
@@ -137,6 +165,10 @@ class ServoFit:
         lines.append("")
         lines.append(f"droop line: {self.droop_points} points, "
                      f"residual {self.droop_residual_deg:.3f} deg")
+        lines.append(
+            f"registered dead band {self.registered_dead_band_ticks:.1f} ticks vs smallest "
+            f"droop {self.min_droop_ticks:.1f} ticks -- dead band reachable from this joint's "
+            f"own ramp: {self.dead_band_reachable}")
         return "\n".join(lines)
 
 
@@ -338,6 +370,19 @@ def identify(bus: Bus, joint: str = "shoulder_lift", *, kin=None, amplitude: flo
     deadband_and_play = max(lost_motion - droop_part, 0.0)
     dead_band_ticks = fit_dead_band_ticks(command, load)
     backlash_deg = max(math.degrees(deadband_and_play) - 2.0 * dead_band_ticks * DEG_PER_TICK, 0.0)
+
+    # The registered dead band (26/27) versus the smallest steady-state droop this joint showed
+    # anywhere it was swept, both from bus readings: whether *this* joint's own ramp can plausibly
+    # enter the dead band at all, computed per joint and per unit instead of assumed from a fixed
+    # joint list -- see `ServoFit.dead_band_reachable`.
+    servo_id = bus.ids[index]
+    try:
+        registered_dead_band_ticks = float(max(bus.read_register(servo_id, "cw_dead_band"),
+                                               bus.read_register(servo_id, "ccw_dead_band")))
+    except (BusError, ProtocolError):
+        registered_dead_band_ticks = 0.0
+    min_droop_ticks = float(np.min(np.abs(errors))) / RAD_PER_TICK
+
     return ServoFit(
         joint=joint,
         kp_nm_per_rad=kp,
@@ -349,6 +394,8 @@ def identify(bus: Bus, joint: str = "shoulder_lift", *, kin=None, amplitude: flo
         backlash_deg=backlash_deg,
         droop_points=len(angles),
         droop_residual_deg=math.degrees(residual),
+        registered_dead_band_ticks=registered_dead_band_ticks,
+        min_droop_ticks=min_droop_ticks,
     )
 
 
@@ -475,11 +522,21 @@ def validate_recovery(joint: str = "shoulder_lift", n: int = 5, *, seed0: int = 
                              f"over {len(errs)} of {n} draws")
     lines.append(f"failed draws: {n - len(ok)} of {n}")
     lines.append("")
-    lines.append("Identifiability: kp and friction, yes, on a gravity-loaded joint. Dead band, "
-                 "no -- the split (fit_dead_band_ticks) finds no zero-load pocket on this joint, "
-                 "because gravity droop keeps its ramp's position error outside the dead band at "
-                 "every point (not a sampling-rate limit). Fill arm.servo_dead_band_counts from "
-                 "the self-test's register read instead; see guide 08.")
+    if joint in ("shoulder_lift", "elbow_flex"):
+        lines.append(
+            f"Identifiability on {joint}: kp and friction, yes -- this joint's own gravity droop "
+            "stays well clear of every draw's randomized dead band, so the fit is not biased by "
+            "it (guide 08). Dead band, no -- the split (fit_dead_band_ticks) finds no zero-load "
+            "pocket on this joint, because gravity droop keeps its ramp's position error outside "
+            "the dead band at every point (not a sampling-rate limit). Fill "
+            "arm.servo_dead_band_counts from the self-test's register read instead; see guide 08.")
+    else:
+        lines.append(
+            f"Identifiability on {joint}: not validated the way shoulder_lift and elbow_flex are "
+            "above -- this joint's own gravity droop is small enough that a large randomized dead "
+            "band can reach it, which biases the kp/friction fit itself, not just the backlash "
+            "split (see ServoFit.dead_band_reachable and guide 08); read each draw's own "
+            "dead_band_ticks column against its fitted kp/friction before trusting either.")
     return "\n".join(lines) + "\n", records
 
 
