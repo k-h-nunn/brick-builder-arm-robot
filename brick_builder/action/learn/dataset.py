@@ -27,7 +27,9 @@ from pathlib import Path
 
 import numpy as np
 
-from ..models.features import ACTION_W, N_SLATE, ROW_W, encode_inverse, encode_predictor
+from ..models.features import (
+    ACTION_W, INVERSE_IN, INVERSE_OUT, N_SLATE, ROW_W, encode_inverse, encode_predictor,
+)
 
 CENTRE = slice(1, 3)
 """Where the two centre coordinates sit inside one slate row's eight fields."""
@@ -116,12 +118,19 @@ def predictor_pairs(data: Episodes) -> dict:
 
 
 def hindsight_pairs(data: Episodes, rng: np.random.Generator, *, repeats: int = 2,
-                    max_j: int = MAX_HINDSIGHT, max_ff_mm: float | None = None) -> dict:
+                    max_j: int = MAX_HINDSIGHT, max_ff_mm: float | None = None,
+                    log=print) -> dict:
     """`x [m, INVERSE_IN]`, `y [m, 3]` -- the correction increment commanded at tick `i`.
 
     `max_ff_mm` keeps only windows over which the recorded target barely moves, which is what a
     dwell is: there the change of the scene between `i` and `i + j` is the correction's doing and
     not the feed-forward's. Leaving it `None` uses every acting tick.
+
+    Empty, not an error, when nothing in the log produces a usable window -- whether because
+    nothing passes the `trusted & ~frozen` gate, or because everything that does is then dropped
+    by the same-step or travel filter: `x`/`y` come back with zero rows and `log` gets one line
+    saying which case it was, so a round with nothing to learn from skips training instead of
+    failing on `np.stack([])`.
     """
     corr = data.corrections()
     obs, val, wgt = data["obs_rows"], data["obs_valid"], data["obs_weight"]
@@ -145,22 +154,41 @@ def hindsight_pairs(data: Episodes, rng: np.random.Generator, *, repeats: int = 
             ys.append(corr[a + 1] - corr[a])
         idx.append(i)
         js.append(j)
-    return {"x": np.stack(xs), "y": np.stack(ys).astype(np.float64),
-            "i": np.concatenate(idx), "j": np.concatenate(js)}
+    if not xs:
+        gate = int(acting.sum())
+        if gate == 0:
+            log(f"hindsight_pairs: 0 of {data.n} logged ticks pass the trusted-and-not-frozen "
+                f"gate; no hindsight pairs")
+        else:
+            log(f"hindsight_pairs: {gate} of {data.n} logged ticks pass the "
+                f"trusted-and-not-frozen gate, but same-step and travel filtering dropped every "
+                f"window; no hindsight pairs")
+        x = np.zeros((0, INVERSE_IN), dtype=np.float64)
+        y = np.zeros((0, INVERSE_OUT), dtype=np.float64)
+    else:
+        x = np.stack(xs)
+        y = np.stack(ys).astype(np.float64)
+    return {"x": x, "y": y, "i": np.concatenate(idx), "j": np.concatenate(js)}
 
 
-def teacher_pairs(data: Episodes) -> dict:
+def teacher_pairs(data: Episodes, *, log=print) -> dict:
     """`x [m, INVERSE_IN]`, `y [m, 3]` -- the analytic inverse's own answer at that tick.
 
     The target is the reference frame the controller was tracking, which is what the deployed
-    inverse is given, so this is the set the held-out action error is measured on.
+    inverse is given, so this is the set the held-out action error is measured on. Empty, not an
+    error, when nothing passes the gate -- see `hindsight_pairs`.
     """
     obs, val, wgt = data["obs_rows"], data["obs_valid"], data["obs_weight"]
     tgt, tval = data["tgt_rows"], data["tgt_valid"]
     keep = np.nonzero(data.flag("trusted") & ~data.flag("frozen"))[0]
-    x = np.stack([encode_inverse(obs[a], val[a], wgt[a], tgt[a], tval[a], data["mech"][a],
-                                 data["in_hand"][a], float(np.sum(val[a][:-1])))
-                  for a in keep])
+    if keep.size == 0:
+        log(f"teacher_pairs: 0 of {data.n} logged ticks pass the trusted-and-not-frozen gate; "
+            f"no teacher pairs")
+        x = np.zeros((0, INVERSE_IN), dtype=np.float64)
+    else:
+        x = np.stack([encode_inverse(obs[a], val[a], wgt[a], tgt[a], tval[a], data["mech"][a],
+                                     data["in_hand"][a], float(np.sum(val[a][:-1])))
+                      for a in keep])
     return {"x": x, "y": data["analytic"][keep].astype(np.float64), "i": keep}
 
 

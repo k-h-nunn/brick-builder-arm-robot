@@ -16,6 +16,7 @@ camera's own geometry at that pose, taken in a world the controller is allowed t
 from __future__ import annotations
 
 import math
+import sys
 from dataclasses import dataclass
 
 import mujoco
@@ -211,7 +212,14 @@ class DigitalTwin:
         base = reference_features(intended, references)
         names = tuple(n for n in base.order if base.centres[n] is not None)
         if len(names) < min_refs:
-            raise RuntimeError(
+            # Raised as `BlindStep`, not a bare `RuntimeError`: the caller (`place.py`'s
+            # `_prepare_step`) already catches `BlindStep` for the Jacobian-probing check below
+            # and treats the step as untrusted rather than losing the whole episode. The count is
+            # printed here because nothing downstream of the catch sees this message again.
+            print(f"twin: step {name!r} sees {len(names)} of {len(references)} reference "
+                  f"blob(s), needs {min_refs}; step marked untrusted, no correction applied",
+                  file=sys.stderr)
+            raise BlindStep(
                 f"step {name!r}: the twin only shows {len(names)} of the "
                 f"{len(references)} reference blobs, which is not enough to line up on"
             )
