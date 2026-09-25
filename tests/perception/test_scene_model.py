@@ -8,6 +8,7 @@ unconditionally (no skip).
 from __future__ import annotations
 
 import math
+import pickle
 
 import numpy as np
 import pytest
@@ -129,6 +130,38 @@ def test_decode_raises_when_absent_and_works_when_present():
     assert out.shape == (2, st2.K)
     with pytest.raises(ValueError):
         st2.decode(np.array([1, 2]))  # not [n,2]
+
+
+def test_cnn_source_state_round_trips_through_pickle():
+    # A closure decode function, the shape `slots_from_masks` builds under `--source cnn` and
+    # that plain `pickle.dumps` cannot serialize -- the failure this round trip guards against.
+    st = _state({0: [0.2, 0.1, -0.3, 0.04, 0.0, 0.09, 0.5, -0.5, 0.0, 0.02, 0.1, 0.6]},
+                depth={0: 0.3, 2: 0.7})
+    st.source = "cnn"
+
+    def local_decode_fn(px: np.ndarray) -> np.ndarray:
+        return np.zeros((px.shape[0], st.K), dtype=np.float32)
+
+    st._decode_fn = local_decode_fn
+    assert st.has_decode
+
+    restored = pickle.loads(pickle.dumps(st))
+
+    assert not restored.has_decode
+    with pytest.raises(RuntimeError):
+        restored.decode(np.array([[0, 0]]))
+
+    # Every control-path field is unchanged.
+    assert restored.source == st.source
+    assert restored.t == st.t
+    assert restored.schema == st.schema
+    np.testing.assert_array_equal(restored.slots, st.slots)
+    np.testing.assert_array_equal(restored.depth, st.depth)
+    np.testing.assert_array_equal(restored.slot_ids, st.slot_ids)
+    assert restored.frame_id == st.frame_id
+    assert restored.mass(0) == pytest.approx(st.mass(0))
+    assert restored.centre(0) == pytest.approx(st.centre(0))
+    assert restored.is_empty(1) == st.is_empty(1)
 
 
 def test_res_reads_window_output_size_or_raises():

@@ -252,6 +252,27 @@ class SceneState:
     def has_decode(self) -> bool:
         return self._decode_fn is not None
 
+    # -- pickling ---------------------------------------------------------------------------
+
+    def __getstate__(self) -> dict:
+        """Drop `_decode_fn` before pickling; restore every other field unchanged.
+
+        A source that builds a decode closure locally (`perception/cnn/postprocess.slots_from_
+        masks`'s `decode_fn`, for example) makes it unpicklable, and `record_for`
+        (`brick_builder/campaign/tasks.py`) caches the target sequence's `SceneState` rows to
+        disk under `--source cnn`. `decode` is viewer/evaluation-only and is never read on the
+        control path (see the class docstring and `decode`'s own), so a round-tripped state
+        answers every control-path query exactly as before; it just has no decode function any
+        more (`has_decode` is `False` and `decode` raises the same "no decode function"
+        `RuntimeError` it already raises for any producer that never built one).
+        """
+        state = self.__dict__.copy()
+        state["_decode_fn"] = None
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+
 
 @runtime_checkable
 class SceneModelSource(Protocol):
