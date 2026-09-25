@@ -58,7 +58,7 @@ losing on another.
 `build_2` is one English command, compiled by `brick_builder.language`:
 
 ```
-put a blue 2x2 at column 5 row 4 then put a blue 2x2 next to the blue brick
+put a blue 2x2 at column 5 row 4 then put a blue 2x2 left of the blue brick
 ```
 
 which becomes two placements, `2x2 (4,3,0) blue` and `2x2 (2,3,0) blue`, executed as consecutive
@@ -68,11 +68,10 @@ that cycle is run once more. Both bricks are on the bottom layer and both are bl
 the seat height the geometry places on is the plate's own top face and the supply row offers a
 blue 2x2. The compiler has no pronouns, so the second brick names the first by colour.
 
-Left rather than right, and the press decided it rather than the loop. The right-hand neighbour,
-column 7 row 4, is 218 mm from the arm's base, past the 100-200 mm band the gripper's downward
-force was characterised over. Measured there on five seeds, the second brick reached its cell to
-within 0.02-0.29 mm on four of them and full insertion depth on one; the shortfalls were
-0.43-4.50 mm. The left-hand neighbour is at 154 mm.
+The second brick goes to the left-hand neighbour (column 3, row 4; 154 mm from the base). The
+right-hand neighbour (column 7, row 4; 218 mm) lies outside the 100-200 mm band over which the
+gripper's downward force was characterised: on five seeds there, lateral placement was within
+0.02-0.29 mm on four of them, but the press stopped 0.43-4.50 mm short of full insertion depth.
 
 The second cycle's world carries the first brick on the plate; so does the nominal plate its
 target sequence is recorded against (`record_ideal(..., placed=...)`) and so do the twins its
@@ -135,7 +134,118 @@ it re-runs that phase.
 
 ## Results
 
-<!-- RESULTS -->
+Five rounds, ten held-out seeds per task per round, `--sparse-tasks build_2`. Tables and figures
+from `python -m brick_builder.campaign.tables --campaign results/campaign/closed_loop` and
+`python -m brick_builder.campaign.curves --campaign results/campaign/closed_loop`, with the
+`Would ship` column that command prints left out; see why below the failures table.
+
+### Placement, seeds 0-9
+
+| Round | Inverse | Version | Seated on target cell | Wilson 95 % | Bricks | Lateral error [mm] | Median tracking [mm] | Median prediction [mm] | Ticks at Align | Tuples trained on |
+|---|---|---|---|---|---|---|---|---|---|---|
+| fixed | analytic | -- | 10/10 | 72-100 % | 10/10 | 0.07 | 1.28 | 0.24 | 73 | -- |
+| published | ground truth | -- | 10/10 | -- | -- | -- | -- | -- | -- | -- |
+| 0 | learned | shipped | 10/10 | 72-100 % | 10/10 | 0.07 | 1.21 | 0.17 | 77 | -- |
+| 1 | learned | r5 | 5/10 | 24-76 % | 5/10 | 0.10 | 1.39 | 0.47 | 93 | 3448 |
+| 2 | learned | r5 | 9/10 | 60-98 % | 9/10 | 0.07 | 1.43 | 0.28 | 101 | 7845 |
+| 3 | learned | r5 | 6/10 | 31-83 % | 6/10 | 0.11 | 1.41 | 0.19 | 108 | 11869 |
+| 4 | learned | r5 | 9/10 | 60-98 % | 9/10 | 0.07 | 1.24 | 0.23 | 88 | 16334 |
+| 5 | learned | r5 | 10/10 | 72-100 % | 10/10 | 0.07 | 1.25 | 0.24 | 85 | 20444 |
+
+### Pick and place, seeds 0-9
+
+| Round | Inverse | Version | Seated on target cell | Wilson 95 % | Bricks | Lateral error [mm] | Median tracking [mm] | Median prediction [mm] | Ticks at Align | Tuples trained on |
+|---|---|---|---|---|---|---|---|---|---|---|
+| fixed | analytic | -- | 9/10 | 60-98 % | 9/10 | 0.10 | 4.12 | 0.70 | 69 | -- |
+| published | ground truth | -- | 8/10 | -- | -- | -- | -- | -- | -- | -- |
+| 0 | learned | shipped | 7/10 | 40-89 % | 7/10 | 0.07 | 3.48 | 0.50 | 84 | -- |
+| 1 | learned | r5 | 3/10 | 11-60 % | 3/10 | 0.05 | 4.20 | 0.46 | 106 | 3448 |
+| 2 | learned | r5 | 5/10 | 24-76 % | 5/10 | 0.10 | 4.11 | 0.27 | 86 | 7845 |
+| 3 | learned | r5 | 7/10 | 40-89 % | 7/10 | 0.13 | 4.27 | 0.46 | 83 | 11869 |
+| 4 | learned | r5 | 7/10 | 40-89 % | 7/10 | 0.11 | 4.41 | 0.48 | 74 | 16334 |
+| 5 | learned | r5 | 9/10 | 60-98 % | 9/10 | 0.07 | 3.78 | 0.38 | 70 | 20444 |
+
+### Build 2, seeds 0-9
+
+| Round | Inverse | Version | Seated on target cell | Wilson 95 % | Bricks | Lateral error [mm] | Median tracking [mm] | Median prediction [mm] | Ticks at Align | Tuples trained on |
+|---|---|---|---|---|---|---|---|---|---|---|
+| fixed | analytic | -- | 1/10 | 2-40 % | 10/20 | 0.10 | 4.19 | 0.73 | 138 | -- |
+| 0 | learned | shipped | 1/10 | 2-40 % | 9/20 | 0.07 | 3.67 | 0.55 | 185 | -- |
+| 5 | learned | r5 | 2/10 | 6-51 % | 12/20 | 0.07 | 4.17 | 0.45 | 162 | 20444 |
+
+### Cost per round
+
+| Round | Perform [min] | Train [min] | Evaluate [min] | Episodes logged | Tuples |
+|---|---|---|---|---|---|
+| 0 | 0.0 | 0.0 | 61.5 | 0 | 0 |
+| 1 | 11.1 | 0.1 | 14.4 | 17 | 3448 |
+| 2 | 9.8 | 0.2 | 12.2 | 35 | 7845 |
+| 3 | 7.8 | 0.3 | 9.9 | 52 | 11869 |
+| 4 | 8.5 | 0.4 | 10.2 | 69 | 16334 |
+| 5 | 7.5 | 0.5 | 38.9 | 85 | 20444 |
+
+### Failures
+
+| Round | Task | Seated on target cell | Failures |
+|---|---|---|---|
+| 0 | build 2 | 1/10 | partial seat=6; seated on the wrong cell=2; stalled with an error it can see=1 |
+| 0 | pick and place | 7/10 | partial seat=1; seated on the wrong cell=1; stalled with an error it can see=1 |
+| 0 | placement | 10/10 | none |
+| 1 | pick and place | 3/10 | partial seat=3; seated on the wrong cell=3; stalled with an error it can see=1 |
+| 1 | placement | 5/10 | stalled with an error it can see=5 |
+| 2 | pick and place | 5/10 | partial seat=2; seated on the wrong cell=2; stalled with an error it can see=1 |
+| 2 | placement | 9/10 | stalled with an error it can see=1 |
+| 3 | pick and place | 7/10 | partial seat=2; stalled with an error it can see=1 |
+| 3 | placement | 6/10 | stalled with an error it can see=4 |
+| 4 | pick and place | 7/10 | seated on the wrong cell=3 |
+| 4 | placement | 9/10 | partial seat=1 |
+| 5 | build 2 | 2/10 | partial seat=5; seated on the wrong cell=2; stalled with an error it can see=1 |
+| 5 | pick and place | 9/10 | stalled with an error it can see=1 |
+| 5 | placement | 10/10 | none |
+
+![Closed-loop success against training round, percent](../media/campaign/campaign_success.png)
+
+![One-step prediction error against training round, millimetres](../media/campaign/campaign_prediction_error.png)
+
+![Learned inverse against the analytic one, held-out ticks](../media/campaign/campaign_action_error.png)
+
+![Log accumulated by round](../media/campaign/campaign_data.png)
+
+Both tasks dip in round 1 and recover by round 5. Pick-and-place goes 7/10 (round 0) to 3/10
+(round 1, the campaign's low point, Wilson 11-60 %), then 5/10, 7/10, 7/10, and 9/10 at round 5,
+matching the fixed analytic baseline (9/10, 60-98 %). Placement goes 10/10 to 5/10 (round 1,
+24-76 %), then 9/10, 6/10, 9/10, and back to 10/10 at round 5. `build_2`, scored only at round 0
+and round 5, goes from 1/10 (2-40 %) to 2/10 (6-51 %) seated, bricks on target 9/20 to 12/20. On
+ten seeds a Wilson interval is wide: every round's interval on both tasks overlaps round 0's and
+the fixed analytic baseline's, so none of these round-to-round changes is a significant difference
+from either reference point. Round 1's is the tightest case: 5/10 (24-76 %) against round 0's
+10/10 (72-100 %) overlaps only at its own upper edge, and 3/10 (11-60 %) against the
+`pick_and_place` baseline's 9/10 (60-98 %) overlaps only at a single point.
+
+Median one-step prediction error on `placement` and `pick_and_place` is lowest at round 0 (F
+shipped, no DAgger data yet) and round 3 (0.19 mm, 0.46 mm), and highest at round 1 (0.47 mm,
+0.46 mm) while F is trained on the smallest, least-covered dataset (3448 ticks); it does not fall
+monotonically with more data. The learned inverse's disagreement with the analytic teacher on
+held-out ticks (`campaign_action_error.png`) falls on every axis, round 1 to round 5: x 0.30 to
+0.15 mm/tick, y 0.47 to 0.12 mm/tick, spin 0.35 to 0.20 deg/tick, all well under the analytic
+answer's own root-mean-square size in x (0.69 mm/tick, unchanged, the fixed baseline) throughout.
+More DAgger data makes the inverse track its analytic teacher more closely even in rounds where
+closed-loop success does not move the same way, because tracking the teacher off-policy on
+held-out ticks and succeeding closed-loop on ten held-out worlds are different measurements.
+
+Whether a round would ship, by the rule in [The loop](#the-loop) -- the learned inverse's seated
+fraction at least matching the fixed analytic baseline on every task the round measured -- only
+round 5 does: 10/10 against the baseline's 10/10 on `placement`, 9/10 against 9/10 on
+`pick_and_place`, 2/10 against 1/10 on `build_2`. Rounds 1-4 do not: `pick_and_place` stays below
+the baseline's 9/10 in all four (3/10, 5/10, 7/10, 7/10), and `placement` falls short in rounds 1
+and 3 (5/10, 6/10 against 10/10). `action.learn.rounds.deploy_if_better` is the function that
+decision belongs to, and it is not what produced the numbers above: `campaign.would_ship` compares
+each row's `seated_on_target` fraction through `rounds.seated_fraction`, which reads a
+`seated_on_target_cell` key that the campaign's own score rows do not have, so both sides of every
+comparison read 0/0 and the comparison is vacuously true. The tables this page used to print a
+`Would ship` column from that value; it is left out above because every round read `yes`
+regardless of the numbers beside it. The comparison in this paragraph is the one `deploy_if_better`
+specifies, done by hand from the `Seated on target cell` columns.
 
 ## Limits
 
