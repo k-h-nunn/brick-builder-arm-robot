@@ -72,6 +72,13 @@ class ServoDefaults:
     status_return_level: int = 1
     """0 answers PING only; 1 answers every addressed instruction.  Broadcast frames are never
     answered at any level, which is what makes a sync-write silent and a sync-read the exception."""
+    firmware_version: tuple[int, int] = (1, 0)
+    servo_model: tuple[int, int] = (1, 0)
+    """(major, minor) for registers 0/1 and 3/4.  Placeholder identity bytes, not read from a real
+    STS3215 unit -- this project has not logged one -- chosen only so the self-test's identity read
+    has a non-zero, self-consistent answer to check instead of the memory table's own zero-fill.
+    Replace with the real unit's own EPROM-programmed bytes once hardware is in hand; do not read
+    these as a datasheet fact."""
 
 
 class RegisterServos:
@@ -96,6 +103,10 @@ class RegisterServos:
         mem = bytearray(MEM_SIZE)
         d = self.defaults
         put = self._put
+        put(mem, "firmware_major", d.firmware_version[0])
+        put(mem, "firmware_minor", d.firmware_version[1])
+        put(mem, "servo_major", d.servo_model[0])
+        put(mem, "servo_minor", d.servo_model[1])
         put(mem, "id", servo_id)
         put(mem, "baud_rate", proto.BAUD_CODES[1_000_000])
         put(mem, "return_delay", 0)
@@ -231,6 +242,16 @@ class SimulatedServos(RegisterServos):
             self.set(servo_id, "goal_position", cal.to_ticks(reading.position[k]))
         self._refresh(reading)
 
+    def resync(self) -> None:
+        """Push the plant's *current* state into 56-70, without a control tick.
+
+        Nothing here writes ``data.ctrl`` or steps physics: this is for a caller that moved the
+        scene's joints directly (the self-test's torque-off range check pokes ``data.qpos`` the
+        way a technician backdrives a real joint by hand) and wants ``Present_Position`` -- what a
+        sync-read over the wire actually reports -- to reflect it, the way it would on hardware.
+        """
+        self._refresh(self.servo.read())
+
     # -- the control tick ----------------------------------------------------------------------
 
     def on_write(self, servo_id: int, address: int, data: bytes) -> None:
@@ -265,6 +286,8 @@ class SimulatedServos(RegisterServos):
 
     def _refresh(self, reading) -> None:
         for k, servo_id in enumerate(self.ids):
+            if not self.present(servo_id):
+                continue   # a test can delete an id from `mem` to simulate a servo never present
             cal = self.calibration[k]
             self.set(servo_id, "present_position", cal.to_ticks(reading.position[k]))
             self.set(servo_id, "present_speed", cal.speed_to_counts(reading.speed[k]))
