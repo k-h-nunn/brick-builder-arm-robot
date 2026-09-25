@@ -42,14 +42,15 @@ def test_a_hand_written_p_controller_closes_most_of_the_distance_to_goal():
     the arm reaches within a few millimetres of an arbitrary sampled target.
 
     This does not assert the literal 3 mm / 10-tick success flag, because a plain proportional
-    controller cannot beat this arm's own Coulomb-friction deadband (measured separately, see
-    ``docs/guide/04-environments.md``: about 4-5 mm at ``p_gain=16``, independent of direction or
-    target -- gravity feedforward removes the *gravity* component of the static-sag finding,
-    it cannot remove friction's). Reaching *inside* that deadband from an initial error an order
-    of magnitude larger is still a real, physically meaningful check that the loop, the IK
-    warm-start and the residual/clip-box machinery all work; whether a learned policy's own
-    dithering can beat the deadband and clear the literal success band is measured separately by
-    the PPO training run, not asserted here as a certainty of hand-tuned proportional control.
+    residual with no derivative term does not settle to a fixed point here -- tracked tick by
+    tick (see ``docs/guide/04-environments.md``'s scripted-Reach-baseline measurement), true TCP
+    error keeps swinging by several millimetres through the whole horizon instead of converging,
+    so a single seed's final-tick error is one sample of that oscillation, not a floor. Reaching
+    *inside* single-digit millimetres from an initial error an order of magnitude larger is still
+    a real, physically meaningful check that the loop, the IK warm-start and the residual/clip-box
+    machinery all work; whether a learned policy's own dithering (a de facto derivative term) can
+    damp the oscillation and clear the literal success band is measured separately by the PPO
+    training run, not asserted here as a certainty of hand-tuned proportional control.
     """
     env = ReachEnv(horizon=100, seed=3)
     obs, _ = env.reset(seed=3)

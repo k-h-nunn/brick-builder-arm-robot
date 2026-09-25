@@ -223,7 +223,7 @@ class PressConfig:
       which does not fit inside the 200-tick (4 s) horizon the spec gives the press environment,
       let alone leave time for the press that follows it.  2.5 mm still sweeps every point of the
       disc within 20 mm of path and 1.4 s (69 ticks) -- comfortably inside the basin through most
-      of the disc (worst gap 1.24 mm, about half the pitch, for radii up to one pitch short of
+      of the disc (worst gap 1.24 mm, about half the pitch, for radii up to half a pitch short of
       the edge), but the spiral ends mid-turn, so the outer band is not swept from both sides: the
       worst gap there is 2.23 mm, not 1.25 mm (measured by :func:`_spiral_path`, see
       ``test_the_default_spiral_covers_its_disc_inside_one_episode_and_the_specs_does_not``).
