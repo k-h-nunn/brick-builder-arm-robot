@@ -8,7 +8,7 @@ observation `z_t`); after the step it writes to `info`:
 | `pred_err_mm` | predicted vs observed centres, slots paired by slot id [mm-eq] |
 | `copy_last_err_mm` | `z_t` vs observed (the copy-last baseline) [mm-eq] |
 | `linear_err_mm` | `z_t + (z_t - z_{t-1})` vs observed (linear extrapolation) [mm-eq] |
-| `pred_err_vs_truth_mm` | predicted vs the ground-truth rows of the same next frame, paired by appearance (sources other than `ideal`) [mm-eq] |
+| `pred_err_vs_truth_mm` | predicted vs the ground-truth rows of the same next frame, paired by appearance (sources other than `ideal`; NaN when `info["gt_z_available"]` is false) [mm-eq] |
 
 Errors are the RMS centre difference of the slots present in both states, weighted by
 `1 - border`, times the environment's `mm_scale` (the calibrated value, else 87.4 mm per window
@@ -98,7 +98,10 @@ class PredictionScoring(gym.Wrapper):
         info["copy_last_err_mm"] = centre_error_mm(z_t, ids_t, z_next, ids_next, mm_scale=sc)
         info["linear_err_mm"] = (float("nan") if linear is None
                                  else centre_error_mm(linear, ids_t, z_next, ids_next, mm_scale=sc))
-        if info.get("source", "ideal") != "ideal":
+        other_source = info.get("source", "ideal") != "ideal"
+        if other_source and not info.get("gt_z_available", False):
+            info["pred_err_vs_truth_mm"] = float("nan")  # no ground-truth pass this run
+        elif other_source:
             gt = np.asarray(obs["privileged"]["gt_z"], dtype=np.float64)
             gt_ids = np.asarray(info["gt_slot_ids"])
             depth = np.asarray(self._obs["actor"]["z_depth"])

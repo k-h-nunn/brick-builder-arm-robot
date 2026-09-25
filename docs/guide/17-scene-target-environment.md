@@ -156,11 +156,21 @@ samples) were unreachable and skipped.
 | `actor/feedforward` | [H, 5] | recorded change (dx, dy, dz, dyaw, dgrip); zeros with the feed-forward off |
 | `actor/progress` | [12] | k/(T-1), step/(n_steps-1), holds/max_hold, step one-hot (9) |
 | `actor/image` | [256, 256, 3] | with `include_image=True` |
-| `privileged/gt_z` | [8, 14] | ground-truth rows of the same frame |
+| `privileged/gt_z` | [8, 14] | ground-truth rows of the same frame; zeros when `gt_z_available` is false |
 | `privileged/critic` | [32] | plate displacement (3), held-brick error (3), in-hand offset (4), TCP pose (4), TCP error to the current target pose in the plate frame (4), contacts (2), joint loads (6), damage level (1), stage one-hot (5) |
 
 H = 5 by default. The actor half contains nothing from the simulator beyond what the bus and the
 wrist camera report; a test checks that the plate displacement does not appear in it.
+
+| Source | `privileged_gt_z` | `gt_z`, `transition["gt_z"]` | `gt_slot_ids` | `gt_z_available` |
+|---|---|---|---|---|
+| ground truth | either | the source's own rows | the source's slot ids | true |
+| CNN | `True` (default) | a second, ground-truth pass over the same frame (about 15 ms per tick) | from that pass | true |
+| CNN | `False` | zeros; NaN in `transition` | -1 | false |
+
+With no ground-truth pass the CNN's rows are never put in the ground-truth fields, and
+`PredictionScoring` reports `pred_err_vs_truth_mm` as NaN
+(`test_no_ground_truth_pass_leaves_the_ground_truth_fields_empty`).
 
 ## Action and execution
 

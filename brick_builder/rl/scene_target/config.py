@@ -190,7 +190,9 @@ class SceneTargetConfig:
     """Control ticks (20 ms each) of physics at the start pose before the first observation."""
     privileged_gt_z: bool = True
     """Compute the ground-truth rows `gt_z` of every frame (free on `ideal`, one extra
-    ground-truth pass on other sources)."""
+    ground-truth pass on other sources). No effect on `ideal`. `False` on another source skips
+    the pass and leaves no ground truth: `gt_z` zeros, `gt_slot_ids` -1, `transition["gt_z"]`
+    NaN, `info["gt_z_available"]` false, `pred_err_vs_truth_mm` NaN."""
     timings_in_info: bool = True
     """Per-tick wall-clock timings in `info`. With bit-exact renders (`render_samples=0`) the
     only non-deterministic `info` entry."""

@@ -393,6 +393,63 @@ def test_rgb_array_render_mode_keeps_the_frame_and_the_dense_decode(tmp_path, so
 
 
 @pytest.mark.slow
+def test_no_ground_truth_pass_leaves_the_ground_truth_fields_empty(tmp_path):
+    """`privileged_gt_z=False` on the CNN source skips the ground-truth pass, and the CNN's own
+    rows never appear in the ground-truth fields; `PredictionScoring` then reports no error
+    against truth. With the default the fields hold the ground-truth pass."""
+    from brick_builder.rl.scene_target.wrappers import PredictionScoring
+
+    kw = {"source": "learned", "source_kwargs": {"threads": 1}, "render_samples": 0}
+    env = PredictionScoring(make(tmp_path, privileged_gt_z=False, **kw))
+    try:
+        assert env.unwrapped._gt_source is None and not env.unwrapped.gt_available
+        obs, info = env.reset(seed=0, options={"world_seed": 0})
+        assert obs in env.observation_space and np.any(obs["actor"]["z_valid"])
+        assert not info["gt_z_available"]
+        assert not np.any(obs["privileged"]["gt_z"]) and np.all(info["gt_slot_ids"] == -1)
+        for _ in range(2):
+            obs, _, _, _, info = env.step(zero(env))
+            assert obs in env.observation_space
+            assert not info["gt_z_available"] and not info["transition"]["gt_z_available"]
+            assert not np.any(obs["privileged"]["gt_z"]) and np.all(info["gt_slot_ids"] == -1)
+            assert np.all(np.isnan(info["transition"]["gt_z"]))
+            assert math.isnan(info["pred_err_vs_truth_mm"])
+    finally:
+        env.close()
+
+    env = PredictionScoring(make(tmp_path, **kw))
+    try:
+        assert env.unwrapped._gt_source is not None and env.unwrapped.gt_available
+        obs, info = env.reset(seed=0, options={"world_seed": 0})
+        assert info["gt_z_available"]
+        obs, _, _, _, info = env.step(zero(env))
+        assert info["gt_z_available"] and info["transition"]["gt_z_available"]
+        gt = obs["privileged"]["gt_z"]
+        assert np.any(gt) and np.all(np.isfinite(info["transition"]["gt_z"]))
+        assert not np.array_equal(gt, obs["actor"]["z"])
+        assert np.any(info["gt_slot_ids"] >= 0)
+        assert "pred_err_vs_truth_mm" in info
+    finally:
+        env.close()
+
+
+@pytest.mark.slow
+def test_ground_truth_source_needs_no_second_pass(tmp_path):
+    """On `ideal` the source's rows are the ground truth; `privileged_gt_z` changes nothing."""
+    for flag in (True, False):
+        env = make(tmp_path, privileged_gt_z=flag, render_samples=0)
+        try:
+            assert env.unwrapped._gt_source is None and env.unwrapped.gt_available
+            obs, info = env.reset(seed=0, options={"world_seed": 0})
+            obs, _, _, _, info = env.step(zero(env))
+            assert info["gt_z_available"] and info["transition"]["gt_z_available"]
+            assert np.array_equal(obs["privileged"]["gt_z"], obs["actor"]["z"])
+            assert np.array_equal(info["gt_slot_ids"], info["slot_ids"])
+        finally:
+            env.close()
+
+
+@pytest.mark.slow
 def test_memory_stays_flat_over_50_episodes(tmp_path):
     def rss_mb():
         with open("/proc/self/statm") as fh:

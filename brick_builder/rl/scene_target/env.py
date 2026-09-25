@@ -18,11 +18,17 @@ Observation (`Dict`):
 | `actor/feedforward` | [H, 5] | recorded change `a*_{k..k+H-1}` (dx, dy, dz, dyaw, dgrip); zeros with the feed-forward off |
 | `actor/progress` | [12] | k/(T-1), step/(n_steps-1), holds/max_hold, step one-hot (9) |
 | `actor/image` | [256, 256, 3] | with `include_image` only |
-| `privileged/gt_z` | [K, 14] | ground-truth rows of the same frame |
+| `privileged/gt_z` | [K, 14] | ground-truth rows of the same frame; zeros when `info["gt_z_available"]` is false |
 | `privileged/critic` | [32] | plate displacement (3), held-brick error (3), in-hand offset (4), TCP pose (4), TCP error to the current target pose in the plate frame (4), contacts (2), joint loads (6), damage level (1), level one-hot (5) |
 
 The actor half is what the arm can measure; the privileged half is for a critic, evaluation and
 debugging and is dropped at export.
+
+Ground-truth rows: on `ideal` they are the source's own rows. On other sources they come from a
+second, ground-truth pass over the same frame (`privileged_gt_z=True`, the default). With
+`privileged_gt_z=False` on another source there are none: `gt_z` is zeros, `info["gt_slot_ids"]`
+is -1, `transition["gt_z"]` is NaN and `info["gt_z_available"]` is false. The scene model's own
+rows are never put in their place.
 
 Action: `Box(-1, 1, (n,))`, the change of the tool-target offset in units of the stage's
 per-tick scale (L0a: dx, dy, dz, dyaw at 3 mm, 3 mm, 2 mm, 2 deg; L0b: dx, dy, dyaw at 2 mm,
@@ -101,6 +107,8 @@ class SceneTargetEnv(gym.Env):
         self._gt_source = None
         if cfg.privileged_gt_z and cfg.source != "ideal":
             self._gt_source, _ = build_source("ideal", {}, K=cfg.K)
+        self.gt_available = cfg.source == "ideal" or self._gt_source is not None
+        """Whether `gt_z` and `gt_slot_ids` hold ground-truth rows (see the module docstring)."""
         self.schema = getattr(self._source, "schema", PLACEHOLDER_SLOT_SCHEMA)
         self.W = int(self.schema.W)
         self.K = int(cfg.K)
@@ -298,13 +306,13 @@ class SceneTargetEnv(gym.Env):
             "T": seq.T, "tol_mm": self.tol_mm, "tol_source": self.tol_source,
             "mm_scale": float(self.distance.mm_scale), "calibration_file": self.calibration_file,
             "feedforward": self._feedforward, "feedforward_clock": self.cfg.feedforward_clock,
-            "max_ticks": self.cfg.max_ticks(seq.T),
+            "max_ticks": self.cfg.max_ticks(seq.T), "gt_z_available": bool(self.gt_available),
         }
         res = self.distance(self._z, seq.frame(1))
         info = dict(self._episode_info)
         info.update(self._progress_info(res))
         info["slot_ids"] = self._z.slot_ids.copy()
-        info["gt_slot_ids"] = self._gt.slot_ids.copy()
+        info["gt_slot_ids"] = self._gt_slot_ids()
         if self.cfg.timings_in_info:
             info["timings"] = timings
         return self._observation(res), info
@@ -398,7 +406,7 @@ class SceneTargetEnv(gym.Env):
             "gt_final_yaw_deg": gt_final.yaw_deg,
             "exec_action": exec_action, "offset": self.offset.copy(),
             "failure": failure, "damage_state": DAMAGE_STATES[self.damage],
-            "slot_ids": self._z.slot_ids.copy(), "gt_slot_ids": self._gt.slot_ids.copy(),
+            "slot_ids": self._z.slot_ids.copy(), "gt_slot_ids": self._gt_slot_ids(),
         })
         if cfg.timings_in_info:
             info["timings"] = timings
@@ -426,12 +434,19 @@ class SceneTargetEnv(gym.Env):
         self._z = SlotFrame.from_state(state)
         if self._gt_source is not None:
             self._gt = SlotFrame.from_state(observe(self._gt_source, frame, t=world.t))
+        elif self.gt_available:
+            self._gt = self._z  # the `ideal` source's rows are the ground truth
         else:
-            self._gt = self._z
+            self._gt = None  # no ground-truth pass; never substitute the scene model's rows
         t3 = time.perf_counter()
         self._rgb = np.asarray(frame.rgb)
         return {"render_ms": 1e3 * (t1 - t0), "source_ms": 1e3 * (t2 - t1),
                 "gt_ms": 1e3 * (t3 - t2)}
+
+    def _gt_slot_ids(self) -> np.ndarray:
+        if self._gt is None:
+            return np.full(self.K, -1, dtype=np.int64)
+        return self._gt.slot_ids.copy()
 
     def _gt_errors(self, k: int):
         pos, yaw = self._world.tool_pose_truth()
@@ -533,7 +548,10 @@ class SceneTargetEnv(gym.Env):
             "grip": float(self._last_cmd[4]),
             "compliance": np.asarray(self._last_cmd[5:7], dtype=np.float64).copy(),
             "d_mm": float(res.d_mm),
-            "gt_z": self._gt.rows.copy(), "gt_tool_err_mm": float(gt_err_mm),
+            "gt_z": (self._gt.rows.copy() if self._gt is not None
+                     else np.full((self.K, GT_W), np.nan, dtype=np.float32)),
+            "gt_z_available": bool(self._gt is not None),
+            "gt_tool_err_mm": float(gt_err_mm),
         }
         if timings is not None:
             rec["timings"] = dict(timings)
