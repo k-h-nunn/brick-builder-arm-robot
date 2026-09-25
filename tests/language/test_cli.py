@@ -72,7 +72,7 @@ def test_main_inventory_option_reports_a_shortage(tmp_path, capsys):
     out = capsys.readouterr().out
 
     assert exit_code == 1
-    assert "only has 0 red 2x4" in out
+    assert "available bricks are 0 red 2x4" in out
 
 
 def test_main_inventory_option_allows_a_stocked_brick(tmp_path, capsys):
