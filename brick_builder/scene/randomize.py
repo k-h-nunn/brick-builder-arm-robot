@@ -207,6 +207,11 @@ _LOG_UNIFORM = ("snap.f_clutch",)
 SNAP_CURVES = ("ramp", "plateau", "detent")
 """The three force-curve shapes `bricks.snap` offers; sampled until a real measurement picks one."""
 
+ERROR_DEADBAND_KEY = "command.error_deadband_ticks"
+"""``RANGES``/``NOMINAL`` key for the firmware position dead band. Drawn separately in
+:func:`sample_command` (see its docstring) rather than through the plain ``_group`` sweep every
+other ``command.*`` field uses, so adding it did not renumber any pre-existing ``rng`` draw."""
+
 
 def _draw(key: str, rng: np.random.Generator, level: float) -> float:
     lo, hi = RANGES[key]
@@ -221,8 +226,12 @@ def _draw(key: str, rng: np.random.Generator, level: float) -> float:
     return float(np.clip(value, min(lo, nominal), max(hi, nominal)))
 
 
-def _group(prefix: str, rng: np.random.Generator, level: float) -> dict:
-    return {k: _draw(k, rng, level) for k in RANGES if k.startswith(prefix + ".")}
+def _group(prefix: str, rng: np.random.Generator, level: float, *, exclude: tuple[str, ...] = ()) -> dict:
+    return {
+        k: _draw(k, rng, level)
+        for k in RANGES
+        if k.startswith(prefix + ".") and k not in exclude
+    }
 
 
 # ------------------------------------------------------------------------------ the samplers ---
@@ -242,8 +251,20 @@ def sample_dynamics(rng: np.random.Generator, level: float = 1.0) -> dict:
 
 
 def sample_command(rng: np.random.Generator, level: float = 1.0) -> dict:
-    """Dead band, slew limit, command delay and jitter, read skew and noise, bus packet loss."""
-    return _group("command", rng, level)
+    """Dead band, slew limit, command delay and jitter, read skew and noise, bus packet loss.
+
+    ``command.error_deadband_ticks`` (the firmware position dead band, registers 26/27) is drawn
+    from ``rng.spawn(1)[0]``, a child generator, instead of from ``rng`` itself. ``Generator.spawn``
+    derives the child from ``rng``'s ``SeedSequence`` without drawing any numbers from ``rng``, so
+    ``rng``'s own state (and therefore every other ``command.*`` field above, and every field a
+    later group draws in the same :func:`sample` call) is exactly what it would be if this
+    parameter did not exist -- adding it does not shift any pre-existing draw for a fixed seed.
+    """
+    out = _group("command", rng, level, exclude=(ERROR_DEADBAND_KEY,))
+    if ERROR_DEADBAND_KEY in RANGES:
+        child = rng.spawn(1)[0]
+        out[ERROR_DEADBAND_KEY] = _draw(ERROR_DEADBAND_KEY, child, level)
+    return out
 
 
 def sample_snap(rng: np.random.Generator, level: float = 1.0) -> dict:
@@ -315,12 +336,12 @@ def sample(
 def servo_config(sample: dict, base: ServoConfig = ServoConfig()) -> ServoConfig:
     """Build the `ServoConfig` a sampled command path describes.
 
-    ``command.error_deadband_ticks`` (the firmware position dead band, registers 26/27) is
-    sampled and applied here like every other command-path field, but it is deliberately left out
-    of ``envs.base_env.DR_PARAM_KEYS`` -- the critic's ``dr_params`` observation entry is a fixed
-    17-wide vector, and growing it is an environment-owned decision (`brick_builder/envs/**`) this
-    package does not make. The episode still randomizes over it and `Scene.randomization` still
-    records the drawn value; only the critic's dedicated summary vector does not grow to show it.
+    ``command.error_deadband_ticks`` (the firmware position dead band, registers 26/27) is sampled
+    and applied here like every other command-path field. It is not one of
+    ``envs.base_env.DR_PARAM_KEYS``, the critic's fixed 17-wide ``dr_params`` observation entry --
+    that tuple stays 17 wide. The episode still randomizes over the dead band and
+    `Scene.randomization` still records the drawn value; only the critic's dedicated summary vector
+    does not carry it.
     """
     return dataclasses.replace(
         base,

@@ -550,25 +550,21 @@ other two are seconds.
   defaults to 0; the documented 2-count value brackets the bench report's "10 counts" against its
   own ±2-count repeatability — not a measurement.
 - `error_deadband_ticks` is now in the randomization ranges (`randomize.RANGES`/`NOMINAL`, key
-  `command.error_deadband_ticks`) and reaches `ServoConfig` through `randomize.servo_config`. It
-  is deliberately **not** one of `envs.base_env.DR_PARAM_KEYS`: that tuple is a fixed 17-wide
-  vector (the critic's `dr_params` observation entry), and growing it is a decision for whoever
-  owns `brick_builder/envs/**`, not this page's files. The episode still randomizes over the dead
-  band and `Scene.randomization` still records the value drawn; only the critic's dedicated
-  summary vector does not grow to show it, until that width change is made deliberately.
-- **Consequence of the above for seed-pinned tests**: every group's sampler shares one
-  `rng.Generator`, drawn group by group in a fixed order (`dynamics`, `command`, `snap`,
-  `contact`, `plate`, `in_hand`, `visual`), so a new `RANGES` key anywhere at or before a given
-  group consumes one more `rng` call before that group's own draws happen -- for a fixed seed,
-  every later group now draws different numbers than before, regardless of where in the dict the
-  new key physically sits. Adding `command.error_deadband_ticks` shifts `snap`/`contact`/
-  `plate`/`in_hand`/`visual` this way; the one test this was checked against,
-  `tests/scene/test_randomize.py::test_a_randomized_scene_still_settles_cleanly`, fails at
-  seed 1 (`max_speed` 0.0196 against its 0.005 s⁻¹ bound) as a result -- not because the dead
-  band reaches the physics model (`randomize.apply` has no `command.*` branch; only
-  `servo_config`/`ServoBus` read it), but because seed 1's *other* randomized fields (plate
-  pose, friction, snap parameters, ...) are now different draws. `tests/scene` is not owned by
-  this page; flagged here rather than fixed there.
+  `command.error_deadband_ticks`) and reaches `ServoConfig` through `randomize.servo_config`.
+  It is sampled and applied, not in `dr_params`: `envs.base_env.DR_PARAM_KEYS`, the critic's
+  fixed observation entry, stays 17 wide. The episode still randomizes over the dead band and
+  `Scene.randomization` still records the value drawn; only the critic's dedicated summary
+  vector does not carry it.
+- **Keeping seed-pinned tests unaffected.** Every group's sampler shares one `rng.Generator`,
+  drawn group by group in a fixed order (`dynamics`, `command`, `snap`, `contact`, `plate`,
+  `in_hand`, `visual`), so a new key anywhere in `RANGES` would normally consume one more `rng`
+  call before later groups draw, shifting every later group's numbers for a fixed seed.
+  `sample_command` avoids this for `command.error_deadband_ticks`: it draws the value from
+  `rng.spawn(1)[0]`, a child generator `Generator.spawn` derives from `rng`'s `SeedSequence`
+  without drawing any numbers from `rng` itself, so `rng`'s state after `sample()` is unchanged
+  from what it was before this parameter existed. `tests/robot/test_servo_model.py` pins this:
+  for seeds 0-4 and several `groups` values, every pre-existing draw and `rng`'s post-`sample()`
+  state match what they are with the key absent from `RANGES`/`NOMINAL`.
 
 ## Kinematics
 
