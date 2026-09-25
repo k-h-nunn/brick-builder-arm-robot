@@ -275,6 +275,8 @@ class SimulatedServos(RegisterServos):
 
     def _refresh(self, reading) -> None:
         for k, servo_id in enumerate(self.ids):
+            if not self.present(servo_id):
+                continue   # a test can delete an id from `mem` to simulate a servo never present
             cal = self.calibration[k]
             self.set(servo_id, "present_position", cal.to_ticks(reading.position[k]))
             self.set(servo_id, "present_speed", cal.speed_to_counts(reading.speed[k]))

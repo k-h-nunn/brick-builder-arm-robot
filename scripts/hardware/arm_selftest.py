@@ -41,8 +41,10 @@ def main(argv: list[str] | None = None) -> int:
         bus = Bus(vbus.port, BusSettings(timeout_s=0.5))
     else:
         bus = Bus(args.port, BusSettings(baud=args.baud))
+    announce = None if args.virtual else print
     try:
-        report = run_self_test(bus, vbus=vbus, scene=scene, config=SelfTestConfig())
+        report = run_self_test(bus, vbus=vbus, scene=scene, config=SelfTestConfig(),
+                               announce=announce)
     finally:
         bus.close()
         if vbus is not None:

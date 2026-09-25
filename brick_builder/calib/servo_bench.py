@@ -2,7 +2,7 @@
 map) drives against before real hardware exists, and the one place that builds it.
 
 No table, no bricks, no plate, no camera -- gravity on, nothing else, which is what a bus-only
-measurement of the arm itself wants: task 5's bring-up commands do not need a Scene, only a Bus.
+measurement of the arm itself wants: the bring-up commands do not need a Scene, only a Bus.
 """
 
 from __future__ import annotations
