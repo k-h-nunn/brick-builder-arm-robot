@@ -661,6 +661,11 @@ camera:
   # ---- extrinsics: where the camera sits on the gripper --------------------------------------
   # One measurement, cv2.calibrateHandEye over the same shots as the intrinsics, converted from
   # OpenCV's camera convention (+z forward, +y down) to MuJoCo's (-z forward, +y up).
+  #
+  # Like fx_px/etc. above, these six only switch the compiled wrist camera's pose onto this file's
+  # own numbers once at least one of them has status: measured -- below that, CameraConfig()'s own
+  # default pose is used directly rather than recomputing it from these (assumed, coarser) numbers,
+  # which do not reproduce patch_so101.WRIST_CAM_QUAT_IN_GRIPPER's own precision (see mount_roll_deg).
 
   mount_x_mm:
     # What: camera position in the gripper body frame, x.

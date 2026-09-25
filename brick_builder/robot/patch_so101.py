@@ -583,7 +583,9 @@ class CameraConfig:
     ``None`` (the default) compiles the camera from ``diagonal_fov_deg``; setting any one of them
     switches the compiled camera to MuJoCo's pixel-intrinsics camera model instead (see
     :func:`_add_sites_and_camera`), taking whichever of ``fx_px``/``fy_px`` is given (both default
-    to the other if only one is set, i.e. square pixels) and centring ``cx_px``/``cy_px`` on the
+    to the other if only one is set, i.e. square pixels, and to ``diagonal_fov_deg``'s implied
+    focal length if neither is set -- a principal point measured with no focal length yet is a
+    valid, if partial, calibration, not an error) and centring ``cx_px``/``cy_px`` on the
     resolution if either is left at ``None``.
 
     The pixel-intrinsics model is not a drop-in replacement for the ``fovy`` model at runtime: a
@@ -625,6 +627,20 @@ class CameraConfig:
         """True once any of ``fx_px``/``fy_px``/``cx_px``/``cy_px`` overrides the diagonal fov."""
         return any(v is not None for v in (self.fx_px, self.fy_px, self.cx_px, self.cy_px))
 
+    def _resolved_focal_px(self) -> tuple[float, float]:
+        """``(fx, fy)`` in pixels: whichever of ``fx_px``/``fy_px`` is set (the other defaults to
+        it, i.e. square pixels), or ``diagonal_fov_deg``'s implied focal length if neither is set
+        -- a config with only ``cx_px``/``cy_px`` measured (principal point known, focal length
+        not) still has a well-defined focal length rather than raising.
+        """
+        if self.fx_px is not None or self.fy_px is not None:
+            fx = self.fx_px if self.fx_px is not None else self.fy_px
+            fy = self.fy_px if self.fy_px is not None else self.fx_px
+            return float(fx), float(fy)
+        width, height = self.resolution
+        fy = 0.5 * height / math.tan(math.radians(fovy_from_diagonal_fov(self.diagonal_fov_deg, width, height)) / 2.0)
+        return float(fy), float(fy)
+
     def resolved_intrinsics_px(self) -> tuple[float, float, float, float]:
         """``(fx, fy, cx, cy)`` in pixels, filling in square-pixel/centred defaults.
 
@@ -634,12 +650,7 @@ class CameraConfig:
         implied focal length), which is what the simulated validation compares recovery against.
         """
         width, height = self.resolution
-        if self.uses_measured_intrinsics:
-            fx = self.fx_px if self.fx_px is not None else self.fy_px
-            fy = self.fy_px if self.fy_px is not None else self.fx_px
-        else:
-            fy = 0.5 * height / math.tan(math.radians(self.fovy_deg()) / 2.0)
-            fx = fy
+        fx, fy = self._resolved_focal_px()
         cx = self.cx_px if self.cx_px is not None else 0.5 * (width - 1)
         cy = self.cy_px if self.cy_px is not None else 0.5 * (height - 1)
         return float(fx), float(fy), float(cx), float(cy)
@@ -647,13 +658,15 @@ class CameraConfig:
     def fovy_deg(self) -> float:
         """Vertical fovy [deg] MuJoCo compiles for this config, at :attr:`resolution`.
 
-        From the measured focal length when :attr:`uses_measured_intrinsics`, else from
+        From the measured focal length when :attr:`fx_px`/:attr:`fy_px` is set, else from
         ``diagonal_fov_deg`` via :func:`fovy_from_diagonal_fov` -- the same formula
-        :data:`WRIST_CAM_FOVY_DEG` uses, so the default reproduces it exactly.
+        :data:`WRIST_CAM_FOVY_DEG` uses, so the default reproduces it exactly. A config with only
+        ``cx_px``/``cy_px`` measured takes this same diagonal-fov-derived value (see
+        :meth:`_resolved_focal_px`), not a crash.
         """
         width, height = self.resolution
-        if self.uses_measured_intrinsics:
-            fy = self.fy_px if self.fy_px is not None else self.fx_px
+        if self.fx_px is not None or self.fy_px is not None:
+            _, fy = self._resolved_focal_px()
             return math.degrees(2.0 * math.atan(0.5 * height / fy))
         return fovy_from_diagonal_fov(self.diagonal_fov_deg, width, height)
 
@@ -908,16 +921,19 @@ def _add_sites_and_camera(spec: mujoco.MjSpec, camera_cfg: CameraConfig) -> None
         # default (`cx_px` left at its centred value) must cancel to exactly zero offset, or
         # every "centred" measured calibration would compile a camera off-centre by construction.
         #
-        # MuJoCo's `principal_pixel` is defined against its own camera-frame convention (+x left,
-        # looking down -z), which is mirrored left-right relative to OpenCV's image-pixel-column
-        # convention (+x/cx increasing to the right) this module's `cx`/`cy` are given in: passing
-        # `cx - centre` straight through renders the principal point at `centre - (cx - centre)` ==
-        # `(width - 1) - cx`, the mirror image of the requested `cx` -- caught by rendering a
-        # checkerboard with an off-centre `cx` and comparing detected corners against the OpenCV
-        # pinhole projection of their known 3D positions (see
+        # MuJoCo's `principal_pixel` offsets the sensor, not the image: a positive offset shifts
+        # the physical sensor plane in that direction, which shifts the *rendered* image the other
+        # way -- the same lens-vs-sensor duality that makes a shift lens's rise move the image down
+        # -- on both axes equally, not a left-right-only mirror (MuJoCo's camera-frame convention
+        # is `+x right`, the same as OpenCV's -- see `calib.camera`'s module docstring; there is no
+        # axis flip between the two). Passing `cx - centre` straight through therefore rendered the
+        # principal point at `centre - (cx - centre)` == `(width - 1) - cx`, the mirror image of
+        # the requested `cx` on that axis (and likewise for `cy`) -- caught by rendering a
+        # checkerboard with an off-centre `cx`/`cy` and comparing detected corners against the
+        # OpenCV pinhole projection of their known 3D positions on both axes (see
         # `tests/calib/test_camera_sim.py::test_off_centre_principal_point_lands_on_the_requested_side`).
-        # Negating the offset (`centre - cx`) is what makes the compiled camera's principal point
-        # land at the requested `cx`/`cy`, not its mirror image.
+        # Negating the offset (`centre - cx`, `centre - cy`) is what makes the compiled camera's
+        # principal point land at the requested `cx`/`cy`, not its mirror image.
         fx, fy, cx, cy = camera_cfg.resolved_intrinsics_px()
         width, height = camera_cfg.resolution
         gripper.add_camera(

@@ -148,10 +148,8 @@ def _print_summary(intrinsics, hand_eye, flip) -> None:
           f"{flip.angle_to_expected_deg:.1f} deg, to expected-flipped {flip.angle_to_expected_flipped_deg:.1f} deg")
     if flip.likely_flipped:
         print(
-            "  ** LIKELY 180-DEGREE FLIP ** -- the calibrated orientation matches the expected "
-            "mount pose rotated 180 degrees about the camera's own optical axis far better than "
-            "it matches the expected pose directly. Rotate every input image 180 degrees "
-            "(brick_builder.calib.camera.rotated_180) and re-run rather than trusting this pose.",
+            "  ** LIKELY 180-DEGREE FLIP ** -- rotate every input image 180 degrees "
+            "(brick_builder.calib.camera.rotated_180) and re-run.",
             file=sys.stderr,
         )
 
@@ -260,7 +258,7 @@ def main(argv: list[str] | None = None) -> None:
                          help="--simulate: arm poses to render (default 90, with headroom above the "
                               "--min-corners default of 15: the tilted, close-hover views a real "
                               "hand-eye calibration needs typically only yield a usable checkerboard "
-                              "detection in roughly a quarter to a third of shots -- see "
+                              "detection in roughly a quarter to a half of shots -- see "
                               "brick_builder.calib.camera_sim.render_calibration_set)")
     parser.add_argument("--seed", type=int, default=0, help="--simulate: RNG seed for pose sampling")
     parser.add_argument("--fov-deg", type=float, default=115.0, help="--simulate: ground-truth diagonal fov")

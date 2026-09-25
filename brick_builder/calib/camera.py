@@ -122,6 +122,31 @@ class CheckerboardTarget:
         return pts
 
 
+def _corner_subpix_window(corners: np.ndarray, pattern: tuple[int, int]) -> tuple[int, int]:
+    """Half-window [px] for :func:`cv2.cornerSubPix`, capped below half this image's own closest
+    corner spacing.
+
+    OpenCV's own documentation for ``cornerSubPix`` warns against a window that reaches a
+    neighbouring corner -- it drags the fit toward that neighbour instead of refining the corner it
+    was given. A single fixed window sized for a comfortably large board (11 px half-window, i.e. a
+    23x23 search square) is too large on a foreshortened far row of a close, tilted shot, where
+    adjacent corners can be only 10-15 px apart: the search square then spans past the next corner
+    and the refinement is pulled off the true corner by several pixels (checked directly -- a
+    detected-corner-to-true-projection error of up to 9 px on such a view, against under 1 px on
+    the same image's near rows, and every far-row view sharing this problem is what drove the
+    perturbed-pose recovery error the guide 03/08 tables once mis-attributed to the distortion fit).
+    Sizing the window from the grid's own detected spacing removes that failure mode on the far rows
+    without giving up the wider, steadier window near rows that can support it.
+    """
+    cols, rows = pattern
+    pts = np.asarray(corners, dtype=float).reshape(rows, cols, 2)
+    horiz = np.linalg.norm(pts[:, 1:] - pts[:, :-1], axis=-1)
+    vert = np.linalg.norm(pts[1:, :] - pts[:-1, :], axis=-1)
+    min_spacing = float(min(horiz.min(), vert.min()))
+    half = max(2, min(11, int(min_spacing / 2.0) - 1))
+    return half, half
+
+
 def find_corners(image: np.ndarray, target: CheckerboardTarget = CheckerboardTarget()) -> np.ndarray | None:
     """Sub-pixel checkerboard corners, or ``None`` if the pattern was not found.
 
@@ -143,8 +168,9 @@ def find_corners(image: np.ndarray, target: CheckerboardTarget = CheckerboardTar
     )
     if not found:
         return None
+    win = _corner_subpix_window(corners, target.pattern)
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 60, 0.001)
-    corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+    corners = cv2.cornerSubPix(gray, corners, win, (-1, -1), criteria)
     return corners.reshape(-1, 2)
 
 
@@ -315,7 +341,9 @@ _HAND_EYE_METHODS = {
 }
 
 HAS_CV2_HAND_EYE_BINDING = hasattr(cv2, "calibrateHandEye")
-"""False on this project's OpenCV 5.0.0 build: the ``CALIB_HAND_EYE_*`` enum constants are
+"""``cv2.calibrateHandEye`` binding presence, this OpenCV build.
+
+False on this project's OpenCV 5.0.0 build: the ``CALIB_HAND_EYE_*`` enum constants are
 exposed but the ``cv2.calibrateHandEye`` Python function itself is not bound (checked directly:
 absent from ``dir(cv2)`` and from the installed ``cv2/__init__.pyi`` stub). :func:`calibrate_hand_eye`
 calls it when present and otherwise falls back to :func:`_solve_axb_axis_correspondence`, a from-scratch
@@ -415,7 +443,7 @@ def calibrate_hand_eye(
     :func:`solve_checkerboard_pose`, OpenCV convention). Solves the ``AX = XB`` hand-eye problem,
     through ``cv2.calibrateHandEye`` when the installed OpenCV build actually exposes it
     (:data:`HAS_CV2_HAND_EYE_BINDING`) and :func:`_solve_axb_axis_correspondence` otherwise. Needs at least
-    3 poses with enough rotational spread between them to be well conditioned, 8-10+ recommended.
+    3 poses with enough rotational spread between them to be well conditioned; target 8-10+.
     """
     if len(gripper_to_base) != len(target_to_cam):
         raise ValueError("gripper_to_base and target_to_cam must have the same length")
@@ -452,7 +480,9 @@ def calibrate_hand_eye(
 
 @dataclass(frozen=True)
 class FlipCheckResult:
-    """Whether a calibrated camera-to-gripper orientation looks like a sensor mounted rotated
+    """180-degree sensor-flip check result.
+
+    Whether a calibrated camera-to-gripper orientation looks like a sensor mounted rotated
     180 degrees in its socket, rather than a pose error.
 
     See the module and function docstrings: a sensor die soldered 180 degrees rotated on its
@@ -660,15 +690,26 @@ def camera_config_from_params(params) -> "CameraConfig":  # noqa: F821 -- see do
     """Build a :class:`brick_builder.robot.patch_so101.CameraConfig` from a loaded
     :class:`brick_builder.params.ParamFile`'s ``camera.*`` fields.
 
-    ``fx_px``/``fy_px``/``cx_px``/``cy_px`` only switch the built config onto
-    :attr:`CameraConfig.uses_measured_intrinsics` when at least one of them has
-    ``status: measured`` in the loaded file -- the shipped default file carries values for all
-    four (derived from ``diagonal_fov_deg`` and a centred principal point, ``status: assumed``) so
-    that a member reading the file sees a real number rather than a blank, not because that
-    number is an actual calibration; passing them through unconditionally would build a
-    measured-intrinsics config from the un-measured default file, which compiles a different
-    MuJoCo camera model than the ``diagonal_fov_deg`` path even though the numbers agree (see
-    :meth:`CameraConfig.fovy_deg`).
+    ``fx_px``/``fy_px``/``cx_px``/``cy_px`` each only reach the built ``CameraConfig`` when that
+    *individual* field has ``status: measured`` in the loaded file -- the shipped default file
+    carries plausible values for all four (derived from ``diagonal_fov_deg`` and a centred
+    principal point, ``status: assumed``) so that a member reading the file sees a real number
+    rather than a blank, not because that number is an actual calibration. Gating field by field,
+    not "any of the four measured therefore pass all four through", matters once a real
+    calibration measures less than all four: a file with only ``fx_px`` at ``status: measured``
+    must build a config whose ``fy_px`` is still ``None`` (square pixels, per
+    ``CameraConfig``'s own docstring), not the *default file's* unmeasured ``fy_px`` value, which
+    would silently claim non-square pixels nobody measured.
+
+    ``mount_x_mm``/``_y_mm``/``_z_mm``/``_roll_deg``/``_pitch_deg``/``_yaw_deg`` are gated the same
+    way, together (one hand-eye calibration measures the whole pose): the built config's
+    ``pos_in_gripper``/``quat_in_gripper`` come from the file's own numbers only when at least one
+    of those six has ``status: measured``, and are ``CameraConfig()``'s own defaults otherwise --
+    not the default file's ``assumed`` mount numbers round-tripped through degrees and
+    trigonometry, which do not reproduce ``WRIST_CAM_QUAT_IN_GRIPPER`` to full precision (the file
+    stores ``mount_roll_deg`` to 3 decimal places; the literal quaternion implies one six decimal
+    places longer) and would silently compile every default scene's wrist camera a few
+    hundred-thousandths of a degree off the module constants it is meant to reproduce exactly.
 
     Imported lazily (``patch_so101`` pulls in ``mujoco`` at module level) so nothing else in this
     module needs it -- the rest of ``brick_builder.calib.camera`` stays MuJoCo-free (module
@@ -676,21 +717,37 @@ def camera_config_from_params(params) -> "CameraConfig":  # noqa: F821 -- see do
     """
     from ..robot.patch_so101 import CameraConfig
 
+    default_cfg = CameraConfig()
     width = int(params.value("camera.resolution_width_px"))
     height = int(params.value("camera.resolution_height_px"))
-    rot = _euler_xyz_deg_to_matrix(
-        float(params.value("camera.mount_roll_deg")),
-        float(params.value("camera.mount_pitch_deg")),
-        float(params.value("camera.mount_yaw_deg")),
-    )
-    intrinsics_measured = any(
-        params.get(f"camera.{name}").status == "measured"
-        for name in ("fx_px", "fy_px", "cx_px", "cy_px")
-    )
-    fx = float(params.value("camera.fx_px")) if intrinsics_measured else None
-    fy = float(params.value("camera.fy_px")) if intrinsics_measured else None
-    cx = float(params.value("camera.cx_px")) if intrinsics_measured else None
-    cy = float(params.value("camera.cy_px")) if intrinsics_measured else None
+
+    def _measured_or_none(name: str) -> float | None:
+        entry = params.get(f"camera.{name}")
+        return float(entry.value) if entry.status == "measured" else None
+
+    fx = _measured_or_none("fx_px")
+    fy = _measured_or_none("fy_px")
+    cx = _measured_or_none("cx_px")
+    cy = _measured_or_none("cy_px")
+
+    mount_names = ("mount_x_mm", "mount_y_mm", "mount_z_mm", "mount_roll_deg", "mount_pitch_deg", "mount_yaw_deg")
+    mount_measured = any(params.get(f"camera.{name}").status == "measured" for name in mount_names)
+    if mount_measured:
+        rot = _euler_xyz_deg_to_matrix(
+            float(params.value("camera.mount_roll_deg")),
+            float(params.value("camera.mount_pitch_deg")),
+            float(params.value("camera.mount_yaw_deg")),
+        )
+        pos_in_gripper = (
+            float(params.value("camera.mount_x_mm")) / 1000.0,
+            float(params.value("camera.mount_y_mm")) / 1000.0,
+            float(params.value("camera.mount_z_mm")) / 1000.0,
+        )
+        quat_in_gripper = tuple(float(v) for v in matrix_to_quat_wxyz(rot))
+    else:
+        pos_in_gripper = default_cfg.pos_in_gripper
+        quat_in_gripper = default_cfg.quat_in_gripper
+
     return CameraConfig(
         resolution=(width, height),
         diagonal_fov_deg=float(params.value("camera.diagonal_fov_deg")),
@@ -700,12 +757,8 @@ def camera_config_from_params(params) -> "CameraConfig":  # noqa: F821 -- see do
         cy_px=cy,
         distortion_k1=float(params.value("camera.distortion_k1")),
         distortion_k2=float(params.value("camera.distortion_k2")),
-        pos_in_gripper=(
-            float(params.value("camera.mount_x_mm")) / 1000.0,
-            float(params.value("camera.mount_y_mm")) / 1000.0,
-            float(params.value("camera.mount_z_mm")) / 1000.0,
-        ),
-        quat_in_gripper=tuple(float(v) for v in matrix_to_quat_wxyz(rot)),
+        pos_in_gripper=pos_in_gripper,
+        quat_in_gripper=quat_in_gripper,
     )
 
 
@@ -721,7 +774,17 @@ def parameter_fragment(
     ``measured_by``/``measured_on``/``notes`` per leaf) so it can be pasted straight into a
     member's copy of the parameter file; ``brick_builder.params`` is the only thing that loads
     that file (this module does not import it -- see the module docstring).
+
+    ``status: measured`` is set on every key regardless of ``measured_by`` -- the numbers really
+    are what the calibration pipeline computed from whatever images it was given, real or
+    (``measured_by="simulate"``) rendered. When ``measured_by`` is ``"simulate"`` the leading
+    ``notes`` this fragment writes (what ``fy_px``/``cx_px``/``cy_px``/mount-orientation keys point
+    back to with "See ...") are prefixed ``SYNTHETIC (--simulate)`` so a reader who pastes this
+    fragment sees the numbers came from a rendered self-test even without cross-referencing
+    ``measured_by`` separately.
     """
+    synthetic = measured_by == "simulate"
+    tag = "SYNTHETIC (--simulate): " if synthetic else ""
     k1, k2, p1, p2, k3 = (list(intrinsics.dist_coeffs) + [0.0] * 5)[:5]
     text = _FRAGMENT_TEMPLATE.format(
         fx=intrinsics.fx, fy=intrinsics.fy, cx=intrinsics.cx, cy=intrinsics.cy,
@@ -730,7 +793,7 @@ def parameter_fragment(
         n_images=len(intrinsics.used_image_indices), rms=intrinsics.rms_reprojection_px,
         measured_by=measured_by, measured_on=measured_on,
         intrinsics_notes=(
-            f"cv2.calibrateCamera, {len(intrinsics.used_image_indices)} image(s), "
+            f"{tag}cv2.calibrateCamera, {len(intrinsics.used_image_indices)} image(s), "
             f"RMS reprojection {intrinsics.rms_reprojection_px:.4g} px."
         ),
     )
@@ -740,7 +803,7 @@ def parameter_fragment(
         text += _HAND_EYE_FRAGMENT.format(
             x_mm=t_mm[0], y_mm=t_mm[1], z_mm=t_mm[2],
             roll_deg=roll, pitch_deg=pitch, yaw_deg=yaw,
-            solver_description=hand_eye.solver_description, n_poses=hand_eye.n_poses,
+            solver_description=f"{tag}{hand_eye.solver_description}", n_poses=hand_eye.n_poses,
             measured_by=measured_by, measured_on=measured_on,
         )
     return text

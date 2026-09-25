@@ -246,15 +246,16 @@ def render_calibration_set(
     ``n_poses`` defaults to 90, not the 15+ the validation itself needs: at this close a hover (a
     few cm, the same distance the accepted `docs/media/robot/wrist_camera_baseplate_view.png`
     reference was shot at) with the tool tilted, not held straight down (`generate_tool_down_poses`
-    varies pitch and roll -- required for hand-eye conditioning, not cosmetic), somewhere around a
-    quarter to a third of poses have the gripper's own silhouette crossing the board's outermost
-    corner row or column tightly enough that `cv2.findChessboardCorners` drops the whole shot --
-    checked directly by probing smaller pattern sizes on a "clean-looking" rejected render, which
-    detects at ``(9, 5)``/``(9, 4)`` but not ``(9, 6)``. This is not a rendering bug to chase out; a
-    real calibration session drops unusable shots the same way, and a session that also needs
-    rotational spread (not just straight-down views) faces the same framing trade-off. Oversampling
-    here is what keeps `brick_builder.calib.camera.calibrate_intrinsics` supplied with 15+ usable
-    images without the caller having to retry.
+    varies pitch and roll -- required for hand-eye conditioning, not cosmetic), somewhere around
+    half to three quarters of poses have the gripper's own silhouette crossing the board's
+    outermost corner row or column tightly enough that `cv2.findChessboardCorners` drops the whole
+    shot -- measured 46-75% dropped across the default/perturbed-pose/perturbed-fov validation
+    cases, and checked directly by probing smaller pattern sizes on a "clean-looking" rejected
+    render, which detects at ``(9, 5)``/``(9, 4)`` but not ``(9, 6)``. This is not a rendering bug
+    to chase out; a real calibration session drops unusable shots the same way, and a session that
+    also needs rotational spread (not just straight-down views) faces the same framing trade-off.
+    Oversampling here is what keeps `brick_builder.calib.camera.calibrate_intrinsics` supplied with
+    15+ usable images without the caller having to retry.
     """
     rng = np.random.default_rng(seed)
     spec = build_checkerboard_spec(camera_cfg=camera_cfg, arm_cfg=arm_cfg, target=target, board_xy=board_xy)
@@ -325,7 +326,9 @@ def calibrate_from_calibration_set(
     hand_eye_method: str = "tsai",
     min_corners_found: int = 15,
 ) -> tuple[calib.IntrinsicsResult, calib.HandEyeResult]:
-    """Runs `brick_builder.calib.camera`'s intrinsics + hand-eye calibration against a rendered
+    """Intrinsics + hand-eye calibration from a rendered `CalibrationSet`.
+
+    Runs `brick_builder.calib.camera`'s intrinsics + hand-eye calibration against a rendered
     `CalibrationSet`'s images and known gripper poses -- the same two calls a real calibration run
     against photographs makes (see `scripts/calibrate_camera.py`), factored out so both that script's
     ``--simulate`` mode and :func:`validate_recovery` share one rendering pass.
@@ -358,7 +361,9 @@ def report_from_calibration(
     n_poses_requested: int,
     label: str = "default",
 ) -> RecoveryReport:
-    """Compares a calibration result against the ``CameraConfig`` ground truth that produced it --
+    """Recovery-error report from a calibration result.
+
+    Compares a calibration result against the ``CameraConfig`` ground truth that produced it --
     the "recovery error" half of the simulated validation; needs no rendering itself."""
     fx_true, fy_true, _, _ = camera_cfg.resolved_intrinsics_px()
     focal_error_pct = 100.0 * (
