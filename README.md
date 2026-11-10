@@ -34,7 +34,7 @@ loose bricks. A CS 6341 (Robotics) team project at UT Dallas.
 
 ## Download & Clone
 
-This is a private repository for the CS 6341 team. Make sure your GitHub account has been granted collaborator access by @k-h-nunn, and your environment is authenticated (via `gh auth login` or your SSH key).
+This is the shared simulation repository for CS 6341 Group 1. Anyone on the team can clone and run it directly without needing GitHub credentials or approvals upfront. If you want direct write access to push branches, ping @k-h-nunn with your GitHub username.
 
 ### Option A: Direct Clone (Recommended for teammates)
 
