@@ -117,7 +117,8 @@ def success_figure(rows: Sequence[dict], out_path: Path) -> Path:
         if task in PUBLISHED:
             ax.axhline(100.0 * PUBLISHED[task], color="#d9822b", linewidth=1.0,
                        linestyle=":", label="published")
-        ax.set_title(task.replace("_", " "), fontsize=10)
+        ax.set_title({"placement": "Placement", "pick_and_place": "Pick-and-Place",
+                      "build_2": "Side-by-Side Assembly"}[task], fontsize=10)
         ax.set_xlabel("Round")
         ax.set_ylim(-5, 105)
         ax.set_xticks(rounds)
@@ -125,7 +126,7 @@ def success_figure(rows: Sequence[dict], out_path: Path) -> Path:
         ax.legend(fontsize=6.5, loc="upper center", bbox_to_anchor=(0.5, -0.22),
                  borderaxespad=0.0, frameon=False)
     axes[0][0].set_ylabel("Seated on target cell [%]")
-    fig.suptitle("Closed-loop success against training round [%]", fontsize=11)
+    fig.suptitle("Assembly Success", fontsize=11)
     fig.tight_layout()
     return _save(fig, out_path)
 
@@ -161,7 +162,7 @@ def prediction_figure(rows: Sequence[dict], out_path: Path) -> Path:
             drawn = True
     ax.set_xlabel("Round")
     ax.set_ylabel("Median prediction error [mm]")
-    ax.set_title("One-step prediction error against training round [mm]", fontsize=11)
+    ax.set_title("Prediction Error", fontsize=11)
     ax.grid(alpha=0.25, linewidth=0.5)
     if drawn:
         ax.legend(fontsize=7, loc="upper left", bbox_to_anchor=(1.02, 1.0),
@@ -199,7 +200,7 @@ def action_figure(state: dict, out_path: Path) -> Path:
         ax.set_xticks(x)
     ax.set_xlabel("Round")
     ax.set_ylabel("RMS error [mm/tick, deg/tick]")
-    ax.set_title("Action error against the analytic inverse", fontsize=11)
+    ax.set_title("Inverse Model Error", fontsize=11)
     ax.grid(alpha=0.25, linewidth=0.5)
     fig.tight_layout()
     return _save(fig, out_path)
@@ -226,7 +227,7 @@ def data_figure(state: dict, out_path: Path) -> Path:
         ax.set_xticks(x)
     lines = ax.get_lines() + twin.get_lines()
     ax.legend(lines, [line.get_label() for line in lines], fontsize=7, loc="lower right")
-    ax.set_title("Training data by round [ticks, episodes]", fontsize=11)
+    ax.set_title("Training Data", fontsize=11)
     fig.tight_layout()
     return _save(fig, out_path)
 

@@ -1853,9 +1853,7 @@ def figure_wall_stress_map(
     ax.set_yticklabels([f"{f:.0f}" for f in forces], fontsize=11)
     ax.set_xlabel("lateral misalignment of the tool  [mm]", fontsize=12)
     ax.set_ylabel("commanded press force  [N]", fontsize=12)
-    ax.set_title("A.  Nothing in a misaligned press reaches an allowable\n"
-                 f"wall bending is 0.00 MPa in all {ratio.size} cells;\n"
-                 "the one hot cell is a tube, at 45 N", fontsize=13, color=_INK)
+    ax.set_title("A. Stress Ratio", fontsize=13, color=_INK)
     ax.grid(False)
 
     # -- B: the seating cliff --------------------------------------------------
@@ -1867,15 +1865,12 @@ def figure_wall_stress_map(
     ax.axhline(stud_h, color=_MUTED, ls="--", lw=1.5)
     ax.text(0.02, stud_h, " fully seated (4.5 mm)", va="bottom", fontsize=11, color=_MUTED)
     ax.axvline(0.086, color=_INK, ls=":", lw=1.5)
-    ax.text(0.092, 3.55, "86 um: the whole\nstud-tube interference", fontsize=11, color=_INK)
+    ax.text(0.092, 3.55, "Stud-Tube Interference\n86 um", fontsize=11, color=_INK)
     ax.set_xscale("symlog", linthresh=0.05, linscale=0.4)
     ax.set_xlim(0.0, float(-offsets.min()) * 1.15)
     ax.set_xlabel("lateral misalignment  [mm, log scale above 0.05 mm]", fontsize=12)
     ax.set_ylabel("depth the studs reach  [mm]", fontsize=12)
-    ax.set_title("B.  Why: the brick stops entering at 0.18 mm of misalignment\n"
-                 "past 0.2 mm it stands on the stud tips at any press force;\n"
-                 "at 0.18 mm only 45 N, three times the arm's, forces it through",
-                 fontsize=13, color=_INK)
+    ax.set_title("B. Insertion Depth", fontsize=13, color=_INK)
     ax.legend(fontsize=11, loc="upper right")
 
     # -- C: the convergence check ---------------------------------------------
@@ -1894,15 +1889,9 @@ def figure_wall_stress_map(
     ax.set_xscale("symlog", linthresh=0.05, linscale=0.4)
     ax.set_xlim(0.0, float(-offsets.min()) * 1.15)
     ax.set_ylim(0.0, float(stack.max()) * 1.45)
-    ax.text(float(-offsets.min()), float(stack.max()) * 1.36,
-            "note the axis: an allowable is a ratio of 1.0,\nabout fifty times the top of this "
-            "panel", fontsize=11, color=_MUTED, ha="right", va="top")
     ax.set_xlabel("lateral misalignment  [mm, log scale above 0.05 mm]", fontsize=12)
     ax.set_ylabel("peak stress ratio at a 20 N press", fontsize=12)
-    ax.set_title("C.  The same experiment at three time steps\n"
-                 f"worst disagreement {spread * 100:.1f} %; damage state "
-                 f"{'/'.join(sorted(states))} at every offset and every step",
-                 fontsize=13, color=_INK)
+    ax.set_title("C. Time Step Comparison", fontsize=13, color=_INK)
     ax.legend(fontsize=11, loc="upper left")
 
     # -- D: where damage does start -------------------------------------------
@@ -1911,8 +1900,8 @@ def figure_wall_stress_map(
     s_rod = np.array([r["peak_wall_stress_Pa"] for r in wall_rows]) / 1e6
     analytic = np.array([r["analytic_wall_stress_Pa"] for r in wall_rows]) / 1e6
     ax.plot(f_rod, analytic, "-", lw=2.0, color=_MUTED,
-            label=r"$\sigma = 6FL/(b_{eff} t^2)$, by hand")
-    ax.plot(f_rod, s_rod, "o", ms=9, color=_SERIES[0], label="what the damage model reads")
+            label=r"$\sigma = 6FL/(b_{eff} t^2)$")
+    ax.plot(f_rod, s_rod, "o", ms=9, color=_SERIES[0], label="Contact Stress Model")
     ax.set_ylim(0.0, 145.0)
     ax.set_xlim(0.0, float(f_rod.max()) * 1.08)
     for level, text, colour in ((44.0, "44 MPa: permanent set", _SERIES[4]),
@@ -1931,17 +1920,14 @@ def figure_wall_stress_map(
                     color=colour, ha="right")
     ax.axvspan(min(mat.ARM_PRESS_FORCE_N), mat.ARM_GRIP_FORCE_N, color=_SERIES[0], alpha=0.12)
     ax.text(mat.ARM_GRIP_FORCE_N + 1.5, 138.0,
-            "all this arm has: 10-14 N press, 17 N grip", fontsize=11, color=_SERIES[0],
+            "SO-101 Press: 10-14 N\nSO-101 Grip: 17 N", fontsize=11, color=_SERIES[0],
             va="top")
     ax.set_xlabel("force of a 4 mm rounded rod on the inside of the wall  [N]", fontsize=12)
     ax.set_ylabel("wall bending stress  [MPa]", fontsize=12)
-    ax.set_title("D.  Where damage does start: the guide's 7.7 test, simulated\n"
-                 "the mode a press cannot reach, loaded the way a bench would",
-                 fontsize=13, color=_INK)
+    ax.set_title("D. Wall Bending Stress", fontsize=13, color=_INK)
     ax.legend(fontsize=11, loc="lower right")
 
-    fig.suptitle("A misaligned press on a DUPLO 2x4: what it loads, and what it takes to hurt "
-                 "a wall", fontsize=16, color=_INK)
+    fig.suptitle("DUPLO Contact Stress", fontsize=16, color=_INK)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     fig.savefig(out_path, dpi=130, facecolor="white")
     plt.close(fig)

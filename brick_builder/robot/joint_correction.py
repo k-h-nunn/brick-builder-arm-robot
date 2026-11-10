@@ -426,7 +426,7 @@ def figure_settling_error(
         axes[0].annotate(f"mean\n{np.mean(values):.2f} mm", (k + 1, top),
                          textcoords="offset points", xytext=(0, 6), ha="center", fontsize=12)
     axes[0].set_ylabel("tool settling error [mm]", fontsize=13)
-    axes[0].set_title("Where the tool stops, against where it was sent", fontsize=14)
+    axes[0].set_title("Tool Position Error", fontsize=14)
     axes[0].grid(axis="y", alpha=0.3)
     axes[0].tick_params(labelsize=12)
     axes[0].set_ylim(0.0, top * 1.35)
@@ -437,12 +437,12 @@ def figure_settling_error(
                         s=30, color=colour, alpha=0.75, label=label)
     limit = max(top, max(s.encoder_gap_mm for k in labels for s in series[k])) * 1.1
     axes[1].plot([0.0, limit], [0.0, limit], color="0.6", lw=1.2, ls="--",
-                 label="the whole error is invisible")
+                 label="Equal Error")
     axes[1].set_xscale("log")
     axes[1].set_yscale("log")
     axes[1].set_xlabel("tool settling error [mm]", fontsize=13)
-    axes[1].set_ylabel("how much of it the encoders cannot see [mm]", fontsize=13)
-    axes[1].set_title("Forward kinematics of the readings against the true tool", fontsize=14)
+    axes[1].set_ylabel("Encoder Kinematics Error [mm]", fontsize=13)
+    axes[1].set_title("Encoder Kinematics Error", fontsize=14)
     axes[1].legend(fontsize=11, loc="lower right")
     axes[1].grid(alpha=0.3, which="both")
     axes[1].tick_params(labelsize=12)

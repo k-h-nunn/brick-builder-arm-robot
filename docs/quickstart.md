@@ -6,7 +6,7 @@ has the full requirements and the reasoning behind each step.
 ## Install
 
 ```bash
-git clone <repo-url> brick-builder-arm-robot
+git clone https://github.com/k-h-nunn/brick-builder-arm-robot.git
 cd brick-builder-arm-robot
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip

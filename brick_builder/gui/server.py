@@ -263,7 +263,7 @@ class Handler(BaseHTTPRequestHandler):
         compiled = compile_command(setup.instruction)
         target = (worldmod.target_cell(compiled.goal)
                   if compiled.goal is not None and compiled.goal.steps else (4, 3))
-        batch = Batch(setup, params, seeds=int(body.get("seeds", 5)), target=target,
+        batch = Batch(setup, params, seeds=int(body.get("seeds", 10)), target=target,
                       out_dir=session.out_dir)
         self.server.batch = batch
         batch.start()

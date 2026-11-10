@@ -27,29 +27,96 @@ loose bricks. A CS 6341 (Robotics) team project at UT Dallas.
 
 ## Requirements
 
-Python 3.12 on Linux. No GPU. MuJoCo renders off-screen through EGL or OSMesa; no display server
-is used. See [Install](docs/guide/01-install.md) for the full list.
+- **Linux or Windows with WSL 2**: Developed and tested on Ubuntu 24.04 LTS. If using Windows, WSL 2 (Windows Subsystem for Linux) with Ubuntu is required.
+- **Python**: 3.12 (versions `>=3.10` supported).
+- **GPU**: Not required. Physics simulation, vision models, and control run on CPU.
+- **Rendering**: Off-screen headless rendering via OSMesa (software rasterizer, works on any machine) or EGL (hardware accelerated if an NVIDIA GPU is available).
 
-## Install
+## Download & Clone
+
+This is a private repository for the CS 6341 team. Make sure your GitHub account has been granted collaborator access by @k-h-nunn, and your environment is authenticated (via `gh auth login` or your SSH key).
+
+### Option A: Direct Clone (Recommended for teammates)
 
 ```bash
-git clone <repo-url> brick-builder-arm-robot
+# Via HTTPS
+git clone https://github.com/k-h-nunn/brick-builder-arm-robot.git
 cd brick-builder-arm-robot
+
+# Or via SSH
+git clone git@github.com:k-h-nunn/brick-builder-arm-robot.git
+cd brick-builder-arm-robot
+```
+
+### Option B: Clone via Top-level Project Submodule
+
+If working within the broader `CS6341` course repository:
+
+```bash
+git clone https://github.com/k-h-nunn/CS6341.git
+cd CS6341
+git submodule update --init --recursive
+cd brick-builder-arm-robot
+```
+
+## Setup Instructions
+
+### 1. Windows & WSL 2 Notes (Important)
+
+If you are developing on Windows:
+1. **Install WSL 2** with Ubuntu 24.04 (from PowerShell as Administrator):
+   ```powershell
+   wsl --install -d Ubuntu-24.04
+   ```
+2. **Work inside the WSL filesystem**:
+   Clone the repository in your WSL Linux home directory (e.g. `~/brick-builder-arm-robot`), **NOT** on the Windows C: drive (`/mnt/c/...`). Accessing files across the Windows 9P filesystem bridge (`/mnt/c/`) causes major disk latency, breaks virtual environment permissions, and causes line-ending issues.
+3. **Configure Git line endings**:
+   Inside WSL, configure git to keep Linux line endings (LF):
+   ```bash
+   git config --global core.autocrlf input
+   ```
+4. **Install Linux system prerequisites**:
+   ```bash
+   sudo apt update
+   sudo apt install -y python3 python3-venv python3-pip git libosmesa6 libosmesa6-dev
+   ```
+
+### 2. Python Environment Setup
+
+Create a dedicated Python 3.12 virtual environment and install dependencies:
+
+```bash
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
 .venv/bin/pip install -e ".[dev,docs]"
 ```
 
-The CPU wheel of PyTorch first, so pip does not pull the multi-gigabyte CUDA build. Always
-`.venv/bin/python`, never a bare `python`.
+> **Note**: Installing the CPU wheel of PyTorch first prevents `pip` from downloading the multi-gigabyte CUDA build. Always invoke `.venv/bin/python` and `.venv/bin/pip` directly, or run `source .venv/bin/activate`.
+
+### 3. Off-Screen Rendering Configuration (`MUJOCO_GL`)
+
+MuJoCo performs off-screen rendering via OpenGL:
+- **`export MUJOCO_GL=osmesa`** *(Recommended default for WSL and CPU setups)*: Uses CPU software rendering via `libosmesa6`. Works universally without requiring graphics drivers.
+- **`export MUJOCO_GL=egl`**: Uses hardware-accelerated rendering. Recommended if running on native Linux with an NVIDIA GPU or WSL 2 with configured NVIDIA GPU passthrough.
+
+Verify your rendering environment:
+```bash
+MUJOCO_GL=osmesa .venv/bin/python -c "import mujoco; print('MuJoCo successfully loaded, version:', mujoco.__version__)"
+```
+
+To avoid typing the variable before every command, you can add it to your shell profile:
+```bash
+echo 'export MUJOCO_GL=osmesa' >> ~/.bashrc
+source ~/.bashrc
+```
 
 ## First run
 
 One closed-loop placement, headless, printing what happened:
 
 ```bash
-CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python scripts/run_placement.py --cnn
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=osmesa .venv/bin/python scripts/run_placement.py --cnn
 ```
 
 About forty seconds. `--cnn` drives the loop from the trained convolutional scene model, which is
@@ -62,7 +129,7 @@ inverse on the arm's own episodes and re-measuring the closed loop after each ro
 The video, at draft resolution:
 
 ```bash
-CUDA_VISIBLE_DEVICES="" MUJOCO_GL=egl .venv/bin/python scripts/make_demo_video.py \
+CUDA_VISIBLE_DEVICES="" MUJOCO_GL=osmesa .venv/bin/python scripts/make_demo_video.py \
     --quality draft --cnn-drives --stills 0 --out media_out/placement.mp4
 ```
 
@@ -71,8 +138,8 @@ shows; `--quality hd1080` is the 1920x1080 version and takes considerably longer
 for the whole job -- fetch the brick off the table, then place it -- which is the second
 [video](docs/demos/videos.md).
 
-`python -m brick_builder.gui` serves the same loop as a browser page -- scene setup, run and step,
-the live views, disturbances, recording and a seed sweep ([Simulator page](docs/guide/14-simulator-gui.md)).
+`CUDA_VISIBLE_DEVICES="" MUJOCO_GL=osmesa .venv/bin/python -m brick_builder.gui` serves the same loop as a browser page at `http://localhost:8765` -- scene setup, run and step,
+the live views, disturbances, recording and a seed sweep ([Simulator page](docs/guide/14-simulator-gui.md)). On Windows/WSL2, navigate to `http://localhost:8765` in any Windows web browser.
 
 The docs:
 

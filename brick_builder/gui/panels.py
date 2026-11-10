@@ -15,18 +15,18 @@ from ..demo.video import (
 )
 from ..demo.video_panels import Overlay, Readout
 
-PANEL_TITLES = ("Arm camera POV", "Observed scene state",
-                "Target scene state", "Ground truth segmentation")
+PANEL_TITLES = ("Wrist Camera", "Observed Segmentation",
+                "Target Segmentation", "Ground-Truth Segmentation")
 
 READOUTS = (
-    ReadoutSpec(key="err_mm", label="Scene-state error [mm]", unit="", lo=0.0, hi=None,
+    ReadoutSpec(key="err_mm", label="Tracking Error [mm]", unit="", lo=0.0, hi=None,
                 fmt="{:.2f}", reference=0.4, plot=True),
-    ReadoutSpec(key="miou", label="Segmentation mIoU [%]", unit="", lo=0.0, hi=100.0,
+    ReadoutSpec(key="miou", label="Mean IoU [%]", unit="", lo=0.0, hi=100.0,
                 fmt="{:.0f}"),
-    ReadoutSpec(key="predict_mm", label="Prediction error [mm]", unit="", lo=0.0, hi=5.0,
+    ReadoutSpec(key="predict_mm", label="Prediction Error [mm]", unit="", lo=0.0, hi=5.0,
                 fmt="{:.2f}"),
-    ReadoutSpec(key="press_n", label="Press force [N]", unit="", lo=0.0, hi=20.0, fmt="{:.1f}"),
-    ReadoutSpec(key="depth_mm", label="Insertion depth [mm]", unit="", lo=0.0, hi=5.0,
+    ReadoutSpec(key="press_n", label="Press Force [N]", unit="", lo=0.0, hi=20.0, fmt="{:.1f}"),
+    ReadoutSpec(key="depth_mm", label="Insertion Depth [mm]", unit="", lo=0.0, hi=5.0,
                 fmt="{:.2f}"),
 )
 """The five the strip holds. The page's own table carries these and the two the strip has no

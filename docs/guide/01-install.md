@@ -7,7 +7,7 @@ hardware needs the extra steps in [Hardware, wiring, calibration](08-hardware-wi
 
 | | |
 |---|---|
-| OS | Linux. Developed and tested on Ubuntu 24.04. |
+| OS | Linux (Ubuntu 24.04 recommended) or Windows via WSL2 (Ubuntu 24.04). |
 | Python | 3.12. The package declares `>=3.10`; 3.12 is what CI runs. |
 | GPU | Not required. Everything here runs on CPU. |
 | Disk | A few gigabytes: MuJoCo is small, PyTorch is not. |

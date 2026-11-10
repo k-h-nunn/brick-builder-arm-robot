@@ -8,6 +8,11 @@ const edits = {};
 let options = null;
 let lastStatus = "";
 
+function stageLabel(value) {
+  return ({"Press the brick down": "Pressing", "Align": "Alignment",
+           "Retract": "Retraction", "Verify": "Verification"})[value] || value;
+}
+
 async function get(url) {
   const r = await fetch(url, { cache: "no-store" });
   return r.json();
@@ -111,7 +116,7 @@ function rows(el, columns, data) {
     const tr = document.createElement("tr");
     for (const c of columns) {
       const td = document.createElement("td");
-      const v = r[c];
+      const v = c === "step" ? stageLabel(r[c]) : r[c];
       td.textContent = typeof v === "boolean" ? (v ? "yes" : "no")
         : (v === null || v === undefined ? "—" : String(v));
       if (typeof v === "boolean") td.className = v ? "ok" : "no";
@@ -202,8 +207,8 @@ async function poll() {
 
   const r = s.readouts || {};
   kv($("readouts"), [
-    ["Step", r.step],
-    ["Scene-state error [mm]", r.err_mm],
+    ["Stage", stageLabel(r.step)],
+    ["Tracking Error [mm]", r.err_mm],
     ["Tracking tolerance [mm]", r.tol_mm],
     ["Segmentation mIoU [%]", r.miou],
     ["Prediction error [mm]", r.predict_mm],
@@ -211,7 +216,7 @@ async function poll() {
     ["Insertion depth [mm]", r.depth_mm],
     ["Damage state", r.damage],
     ["Correction [mm]", r.correction_mm],
-    ["Reference blobs [-]", r.refs_seen],
+    ["Reference Objects [-]", r.refs_seen],
     ["Vision tick [-]", s.k],
     ["Control tick [-]", s.tick],
   ]);

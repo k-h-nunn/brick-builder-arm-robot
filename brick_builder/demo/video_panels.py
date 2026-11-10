@@ -17,9 +17,9 @@ The panels are square because what goes in them is square -- a camera view, a sc
 feature map -- and :meth:`Overlay.clear_rect` is the picture left over for the arm: everything
 left of the grid and above the strip.
 
-Every string drawn here is a title: a noun phrase, or a short imperative for a step, with units
-in square brackets.  No sentences, no captions, no commentary.  The strings are the caller's;
-this module supplies no wording of its own and refuses anything that does not fit its box.
+Titles are capitalized noun phrases naming the displayed component, stage, or quantity.
+Units appear in square brackets. The strings are supplied by the caller and checked against
+the available space.
 
 Sizes are fractions of the frame height, so they hold at any output size.  The panel column and
 the data strip are right-aligned and together leave the left :data:`MAIN_CLEAR_FRAC` of the frame
@@ -499,6 +499,8 @@ class Overlay:
         return rect
 
     def _draw_phase(self, draw, phase: str, *, limit_x: int) -> Rect:
+        phase = {"Press the brick down": "Pressing", "Align": "Alignment",
+                 "Retract": "Retraction", "Verify": "Verification"}.get(phase, phase)
         max_px = limit_x - self.margin_x - 2 * self.pad
         if self.f_phase.getlength(phase) > max_px:
             raise LayoutError(f"the phase label does not fit {max_px:.0f} px: {phase!r}")
